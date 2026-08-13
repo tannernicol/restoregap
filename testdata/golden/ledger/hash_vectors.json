@@ -1,0 +1,310 @@
+{
+  "hash_algorithm": "sha256 over json.dumps(payload, sort_keys=True, separators=(',', ':')) with entry_hash removed; prev_hash stays in the hashed payload",
+  "vectors": [
+    {
+      "ledger_line_index": 0,
+      "entry_type": "preflight_decision",
+      "entry_json_without_hash_fields": {
+        "actions": [
+          "delete"
+        ],
+        "actor": {
+          "id": "claude",
+          "type": "agent"
+        },
+        "adapter": "local",
+        "change_id": "chg_37a9b1b5e50c4bc1f173eab6",
+        "commit_sha": null,
+        "created_at": "2026-07-16T18:29:27.820758Z",
+        "decision": "block",
+        "decision_id": "dec_local_a3e524ad223e7e1fd0b1417b",
+        "entry_id": "df3581e4-a4cc-41c1-a75c-b82cdf676131",
+        "entry_type": "preflight_decision",
+        "environment": "local",
+        "evaluated_at": "2026-05-14T12:00:00Z",
+        "evidence_refs": [
+          {
+            "evidence_url": "/home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-block-lifeline-delete/intent.yml",
+            "observed_at": "2026-05-14T12:00:00Z",
+            "sha256": "sha256:843618f229406881b33ad2a6306a6158bc32087e55149f6bb64ac1dfc2abfb71",
+            "source": "local-action-intent"
+          },
+          {
+            "evidence_url": "/home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-block-lifeline-delete/restoregap.local.yml",
+            "observed_at": "2026-05-14T12:00:00Z",
+            "sha256": "sha256:42a4a8d3a0b2a4ad91a45e143779c7da4b1dd2269a60db030a6dba51ad2f5eb3",
+            "source": "restoregap-local-context"
+          }
+        ],
+        "finding_fingerprint": "fgp_9d1fb4ee44806c8290f67839",
+        "ledger_id": "local",
+        "observed_failure": [
+          "Required knowledge before proceeding: runtime owner and rollback path, affected services and credentials, out-of-band access path.",
+          "Required checks before proceeding: independent access path is still available, recovery kit or state backup is current, rollback command is documented outside the agent runtime.",
+          "Missing proof: agent-runtime-state-backup, portable-recovery-kit."
+        ],
+        "override": null,
+        "pr_url": null,
+        "prev_hash": null,
+        "proof": "Assurance contract `selfhosted-agent-recovery-assurance` is not satisfied for this declared action.",
+        "proof_status": "missing",
+        "relevant_attributes": {
+          "actor": "codex",
+          "alternate_paths": [
+            "local-console",
+            "second-machine"
+          ],
+          "assurance_contract_id": "selfhosted-agent-recovery-assurance",
+          "context_window": "local-shell",
+          "contradicted_facts": [],
+          "contradicted_proofs": [],
+          "declared_kind": "agent_runtime",
+          "declared_path": "~/.openclaw/credentials/**",
+          "expected_command": null,
+          "expected_host_identity": null,
+          "expected_verifier": null,
+          "intent_action": "delete_file",
+          "line": null,
+          "missing_facts": [],
+          "missing_proofs": [
+            "agent-runtime-state-backup",
+            "portable-recovery-kit"
+          ],
+          "path": "~/.openclaw/credentials/telegram/default/creds.json",
+          "recovery_copy": "customer-owned encrypted backup bundle",
+          "require_signed_proof": false,
+          "required_checks": [
+            "independent access path is still available",
+            "recovery kit or state backup is current",
+            "rollback command is documented outside the agent runtime"
+          ],
+          "required_facts": [],
+          "required_for": [
+            "openclaw-control-plane",
+            "agent-control-recovery"
+          ],
+          "required_knowledge": [
+            "runtime owner and rollback path",
+            "affected services and credentials",
+            "out-of-band access path"
+          ],
+          "required_proofs": [
+            "agent-runtime-state-backup",
+            "portable-recovery-kit"
+          ],
+          "satisfied_facts": [],
+          "satisfied_proofs": [],
+          "stale_facts": [],
+          "stale_proofs": [],
+          "untrusted_proofs": []
+        },
+        "required_next_step": "Refresh or supply proof for `agent-runtime-state-backup`; Refresh or supply proof for `portable-recovery-kit`; complete checks: independent access path is still available, recovery kit or state backup is current, rollback command is documented outside the agent runtime; load knowledge: runtime owner and rollback path, affected services and credentials, out-of-band access path, or record an owner override before proceeding.",
+        "resource_address": "~/.openclaw/credentials/telegram/default/creds.json",
+        "resource_id": "openclaw-runtime-state",
+        "resource_type": "local_lifeline_agent_runtime",
+        "risk_class": "cannot_prove_safe",
+        "rule_id": "local.lifeline_artifact.delete_or_modify",
+        "run_id": "c4c2bab2-89d3-42e3-a3d5-2255f256ecc3",
+        "run_url": null,
+        "schema_version": 1,
+        "supersedes_decision_id": null,
+        "title": "Restore Gap preflight could not prove the declared recovery path survives this change."
+      },
+      "prev_hash": null,
+      "expected_entry_hash": "b96aee1890c9b94fda52436d7aab5cf552c466b1e492dc1d825182b1e08fe41c",
+      "recomputed_matches": true
+    },
+    {
+      "ledger_line_index": 2,
+      "entry_type": "preflight_decision",
+      "entry_json_without_hash_fields": {
+        "actions": [
+          "update"
+        ],
+        "actor": {
+          "id": "claude",
+          "type": "agent"
+        },
+        "adapter": "local",
+        "change_id": "chg_a9e0bd50f80356ce09838e81",
+        "commit_sha": null,
+        "created_at": "2026-07-16T18:29:28.072083Z",
+        "decision": "warn",
+        "decision_id": "dec_local_5147678a01849f25e285c820",
+        "entry_id": "fbe10fb3-0b3c-44b0-9407-c3bb634fcf11",
+        "entry_type": "preflight_decision",
+        "environment": "local",
+        "evaluated_at": "2026-05-14T12:00:00Z",
+        "evidence_refs": [
+          {
+            "evidence_url": "/home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-warn-gpu-update/intent.yml",
+            "observed_at": "2026-05-14T12:00:00Z",
+            "sha256": "sha256:68f8664899ca6cfb157ba2481de0b904b2e9aa65fb648fc48c7a0154dc841d3b",
+            "source": "local-action-intent"
+          },
+          {
+            "evidence_url": "/home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-warn-gpu-update/restoregap.local.yml",
+            "observed_at": "2026-05-14T12:00:00Z",
+            "sha256": "sha256:09bfcc6a14b83e2192b8673677725c84883ee9cd0c70e45c9ec09daa8f2b2847",
+            "source": "restoregap-local-context"
+          }
+        ],
+        "finding_fingerprint": "fgp_fb3e04b20693d71c5dffef50",
+        "ledger_id": "local",
+        "observed_failure": [
+          "Package/system update appears to touch graphics, kernel, or boot stack packages, but no matching update_guards context was supplied."
+        ],
+        "override": null,
+        "pr_url": null,
+        "prev_hash": "6487d5d32b902b6eac49d2ed3697c387ad48ba260c952360009f5bcd5b4daa68",
+        "proof": "local.update_guard.package_or_system_update matched nvidia-driver. No declared update_guards context was supplied.",
+        "proof_status": "unknown",
+        "relevant_attributes": {
+          "intent_action": "package_update",
+          "line": null,
+          "packages": [
+            "nvidia-driver"
+          ],
+          "path": "nvidia-driver"
+        },
+        "required_next_step": "Declare update_guards in restoregap.local.yml before enforcing this surface, or review the update manually.",
+        "resource_address": "nvidia-driver",
+        "resource_id": "system-update",
+        "resource_type": "local_update_guard",
+        "risk_class": "cannot_prove_safe",
+        "rule_id": "local.update_guard.package_or_system_update",
+        "run_id": "ae8906ab-edbc-44d6-9567-206234e9df1a",
+        "run_url": null,
+        "schema_version": 1,
+        "supersedes_decision_id": null,
+        "title": "Restore Gap preflight could not prove the declared recovery path survives this change."
+      },
+      "prev_hash": "6487d5d32b902b6eac49d2ed3697c387ad48ba260c952360009f5bcd5b4daa68",
+      "expected_entry_hash": "48dbd2d2ce7aec38715b8678f2422f0552d52f877429f13ed91d4d418352f2d6",
+      "recomputed_matches": true
+    },
+    {
+      "ledger_line_index": 4,
+      "entry_type": "override",
+      "entry_json_without_hash_fields": {
+        "actions": [
+          "delete"
+        ],
+        "actor": {
+          "id": "tanner",
+          "type": "human"
+        },
+        "adapter": "local",
+        "change_id": "chg_37a9b1b5e50c4bc1f173eab6",
+        "commit_sha": null,
+        "created_at": "2026-07-16T18:29:28.576053Z",
+        "decision": "block",
+        "decision_id": "dec_local_a3e524ad223e7e1fd0b1417b",
+        "entry_id": "51fe4044-164d-4e85-ac2a-1ff870e666c5",
+        "entry_type": "override",
+        "environment": "local",
+        "evaluated_at": null,
+        "evidence_refs": [
+          {
+            "evidence_url": "/home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-block-lifeline-delete/intent.yml",
+            "observed_at": "2026-05-14T12:00:00Z",
+            "sha256": "sha256:843618f229406881b33ad2a6306a6158bc32087e55149f6bb64ac1dfc2abfb71",
+            "source": "local-action-intent"
+          },
+          {
+            "evidence_url": "/home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-block-lifeline-delete/restoregap.local.yml",
+            "observed_at": "2026-05-14T12:00:00Z",
+            "sha256": "sha256:42a4a8d3a0b2a4ad91a45e143779c7da4b1dd2269a60db030a6dba51ad2f5eb3",
+            "source": "restoregap-local-context"
+          }
+        ],
+        "finding_fingerprint": "fgp_9d1fb4ee44806c8290f67839",
+        "ledger_id": "local",
+        "observed_failure": [
+          "Required knowledge before proceeding: runtime owner and rollback path, affected services and credentials, out-of-band access path.",
+          "Required checks before proceeding: independent access path is still available, recovery kit or state backup is current, rollback command is documented outside the agent runtime.",
+          "Missing proof: agent-runtime-state-backup, portable-recovery-kit."
+        ],
+        "override": {
+          "acknowledged_at": "2026-07-16T18:29:28.576053Z",
+          "acknowledged_by": "tanner",
+          "acknowledgement": "I acknowledge this override disables a lifeline block for fixture capture only.",
+          "comment": "Golden-fixture override of a synthetic lifeline block.",
+          "evidence_url": null,
+          "expires_at": "2027-01-01T00:00:00Z",
+          "owner": "tanner",
+          "prior_checkpoint_hash": "fe7b60f59037390ab527a878586f7ddd3ef40d5bce3932218397efc3ab0dcbee",
+          "reason": "test-environment"
+        },
+        "pr_url": null,
+        "prev_hash": "053684fe764208610eedc44c6700dceac58b63320cb1241b0a8298e0e93a260e",
+        "proof": "Assurance contract `selfhosted-agent-recovery-assurance` is not satisfied for this declared action.",
+        "proof_status": "missing",
+        "relevant_attributes": {
+          "actor": "codex",
+          "alternate_paths": [
+            "local-console",
+            "second-machine"
+          ],
+          "assurance_contract_id": "selfhosted-agent-recovery-assurance",
+          "context_window": "local-shell",
+          "contradicted_facts": [],
+          "contradicted_proofs": [],
+          "declared_kind": "agent_runtime",
+          "declared_path": "~/.openclaw/credentials/**",
+          "expected_command": null,
+          "expected_host_identity": null,
+          "expected_verifier": null,
+          "intent_action": "delete_file",
+          "line": null,
+          "missing_facts": [],
+          "missing_proofs": [
+            "agent-runtime-state-backup",
+            "portable-recovery-kit"
+          ],
+          "path": "~/.openclaw/credentials/telegram/default/creds.json",
+          "recovery_copy": "customer-owned encrypted backup bundle",
+          "require_signed_proof": false,
+          "required_checks": [
+            "independent access path is still available",
+            "recovery kit or state backup is current",
+            "rollback command is documented outside the agent runtime"
+          ],
+          "required_facts": [],
+          "required_for": [
+            "openclaw-control-plane",
+            "agent-control-recovery"
+          ],
+          "required_knowledge": [
+            "runtime owner and rollback path",
+            "affected services and credentials",
+            "out-of-band access path"
+          ],
+          "required_proofs": [
+            "agent-runtime-state-backup",
+            "portable-recovery-kit"
+          ],
+          "satisfied_facts": [],
+          "satisfied_proofs": [],
+          "stale_facts": [],
+          "stale_proofs": [],
+          "untrusted_proofs": []
+        },
+        "required_next_step": "Refresh or supply proof for `agent-runtime-state-backup`; Refresh or supply proof for `portable-recovery-kit`; complete checks: independent access path is still available, recovery kit or state backup is current, rollback command is documented outside the agent runtime; load knowledge: runtime owner and rollback path, affected services and credentials, out-of-band access path, or record an owner override before proceeding.",
+        "resource_address": "~/.openclaw/credentials/telegram/default/creds.json",
+        "resource_id": "openclaw-runtime-state",
+        "resource_type": "local_lifeline_agent_runtime",
+        "risk_class": "cannot_prove_safe",
+        "rule_id": "local.lifeline_artifact.delete_or_modify",
+        "run_id": "adf55b18-669d-4202-846c-351a2985ed92",
+        "run_url": null,
+        "schema_version": 1,
+        "supersedes_decision_id": "dec_local_a3e524ad223e7e1fd0b1417b",
+        "title": "Restore Gap preflight could not prove the declared recovery path survives this change."
+      },
+      "prev_hash": "053684fe764208610eedc44c6700dceac58b63320cb1241b0a8298e0e93a260e",
+      "expected_entry_hash": "d0407f2795fd0853567048d2d532f2c48b7dcd92835bfbedcaea7d1a5df4983b",
+      "recomputed_matches": true
+    }
+  ]
+}

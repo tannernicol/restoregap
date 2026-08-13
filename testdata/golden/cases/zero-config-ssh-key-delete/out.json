@@ -1,0 +1,160 @@
+{
+  "adapter": "local",
+  "findings": [
+    {
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "adapter": "local",
+        "environment": "local",
+        "relevant_attributes": {
+          "actor": null,
+          "alternate_paths": [
+            "second-machine",
+            "local-console",
+            "second-repo-owner"
+          ],
+          "assurance_contract_id": "default-ssh-key-assurance",
+          "context_window": null,
+          "contradicted_facts": [],
+          "contradicted_proofs": [],
+          "declared_kind": "credential",
+          "declared_path": "~/.ssh/id_*",
+          "expected_command": null,
+          "expected_host_identity": null,
+          "expected_verifier": null,
+          "intent_action": "delete_file",
+          "line": null,
+          "missing_facts": [],
+          "missing_proofs": [
+            "ssh-key-recovery-copy",
+            "independent-access-path"
+          ],
+          "path": "~/.ssh/id_ed25519",
+          "recovery_copy": "customer-owned password manager, encrypted recovery bundle, or break-glass account\n",
+          "require_signed_proof": false,
+          "required_checks": [
+            "independent access path is reachable without the touched SSH key",
+            "key recovery copy or replacement path is current"
+          ],
+          "required_facts": [],
+          "required_for": [
+            "admin-access",
+            "repo-recovery",
+            "backup-recovery"
+          ],
+          "required_knowledge": [
+            "which alternate account or console can still administer the host",
+            "where the customer-owned key recovery copy lives"
+          ],
+          "required_proofs": [
+            "ssh-key-recovery-copy",
+            "independent-access-path"
+          ],
+          "satisfied_facts": [],
+          "satisfied_proofs": [],
+          "stale_facts": [],
+          "stale_proofs": [],
+          "untrusted_proofs": []
+        },
+        "resource_address": "~/.ssh/id_ed25519",
+        "resource_id": "default-ssh-private-keys",
+        "resource_type": "local_lifeline_credential"
+      },
+      "decision": "block",
+      "decision_id": "dec_local_2b2d917d9feeb70aea4db821",
+      "evidence_refs": [
+        {
+          "evidence_url": "/home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/zero-config-ssh-key-delete/intent.yml",
+          "observed_at": "2026-05-14T12:00:00Z",
+          "sha256": "sha256:d0663a4cf06573f4a4341a0e6d58da7a06fc91e47dadb886cecdb85e70f619df",
+          "source": "local-action-intent"
+        },
+        {
+          "evidence_url": "built-in default local lifeline policy",
+          "observed_at": "2026-05-14T12:00:00Z",
+          "sha256": "sha256:d6e81bf736c7900969bf4e6b3a928426555aee420290ad2f8b454967bae1b90a",
+          "source": "restoregap-local-context"
+        }
+      ],
+      "observed_failure": [
+        "Required knowledge before proceeding: which alternate account or console can still administer the host, where the customer-owned key recovery copy lives.",
+        "Required checks before proceeding: independent access path is reachable without the touched SSH key, key recovery copy or replacement path is current.",
+        "Missing proof: ssh-key-recovery-copy, independent-access-path."
+      ],
+      "proof": "Assurance contract `default-ssh-key-assurance` is not satisfied for this declared action.",
+      "proof_status": "missing",
+      "required_next_step": "Refresh or supply proof for `ssh-key-recovery-copy`; Refresh or supply proof for `independent-access-path`; complete checks: independent access path is reachable without the touched SSH key, key recovery copy or replacement path is current; load knowledge: which alternate account or console can still administer the host, where the customer-owned key recovery copy lives, or record an owner override before proceeding.",
+      "risk_class": "cannot_prove_safe",
+      "rule_id": "local.lifeline_artifact.delete_or_modify",
+      "title": "Restore Gap preflight could not prove the declared recovery path survives this change."
+    },
+    {
+      "change": {
+        "actions": [
+          "delete_file"
+        ],
+        "adapter": "local",
+        "environment": "local",
+        "relevant_attributes": {
+          "action": "delete_file",
+          "paths": [
+            "~/.ssh/id_ed25519"
+          ],
+          "undo_plan": {
+            "action": "delete_file",
+            "captured_at": "2026-05-14T12:00:00Z",
+            "commands": [
+              "install -D '/home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/zero-config-ssh-key-delete/undo-artifacts/sha256-eb015929a4d29672511dd9c3e01db3ae8f322e59c7ea6af680ac5541978c31fe.blob' '/home/user/.ssh/id_ed25519'",
+              "chmod 0600 '/home/user/.ssh/id_ed25519'"
+            ],
+            "depends_on": [
+              {
+                "artifact_path": "/home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/zero-config-ssh-key-delete/undo-artifacts/sha256-eb015929a4d29672511dd9c3e01db3ae8f322e59c7ea6af680ac5541978c31fe.blob",
+                "kind": "file_snapshot",
+                "mode_octal": "0600",
+                "path": "/home/user/.ssh/id_ed25519",
+                "sha256": "sha256:eb015929a4d29672511dd9c3e01db3ae8f322e59c7ea6af680ac5541978c31fe"
+              }
+            ],
+            "execution": "customer-run",
+            "plan_hash": "sha256:38807712046c2e3bc8afa049df07aa837f75188177282f6a275f20c37501f931",
+            "plan_id": "undo_38807712046c2e3bc8afa049",
+            "sandbox_sources": [
+              {
+                "kind": "file",
+                "path": "/home/user/.ssh/id_ed25519"
+              }
+            ],
+            "schema_version": 1,
+            "summary": "Restore pre-action bytes for `/home/user/.ssh/id_ed25519`."
+          },
+          "undo_plan_capture": "captured"
+        },
+        "resource_address": "~/.ssh/id_ed25519",
+        "resource_id": "local-undo-plan-delete-file",
+        "resource_type": "local_undo_plan"
+      },
+      "decision": "pass",
+      "decision_id": "dec_local_023c46b0a97dfe7215df965a",
+      "evidence_refs": [
+        {
+          "evidence_url": null,
+          "observed_at": "2026-05-14T12:00:00Z",
+          "sha256": "sha256:38807712046c2e3bc8afa049df07aa837f75188177282f6a275f20c37501f931",
+          "source": "local-undo-plan"
+        }
+      ],
+      "observed_failure": [],
+      "proof": "Undo plan undo_38807712046c2e3bc8afa049 is hash-bound as sha256:38807712046c2e3bc8afa049df07aa837f75188177282f6a275f20c37501f931.",
+      "proof_status": "present",
+      "required_next_step": "Keep the ledger entry; run `restoregap undo --id undo_38807712046c2e3bc8afa049 --ledger <path>` to print the customer-run plan. Restore Gap never restores.",
+      "risk_class": "none",
+      "rule_id": "local.undo_plan.captured",
+      "title": "Restore Gap captured a customer-run undo plan."
+    }
+  ],
+  "summary": "Blocked 1 recovery-critical change(s) (local.lifeline_artifact.delete_or_modify). Supply proof, change the plan, or record an acknowledged risk to proceed.",
+  "verdict": "block"
+}

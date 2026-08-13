@@ -1,0 +1,67 @@
+# Release build for the restoregap CLI.
+#
+# WHY THIS FILE EXISTS (added 2026-08-12):
+# The launch checklist recorded release tooling as done. It was not — there was
+# no goreleaser config, no workflow, and no tags, while internal/cli/root.go
+# declared "Version is stamped at build time via -ldflags" with nothing doing
+# the stamping. Cutting a tag would have produced no binaries and a CLI still
+# reporting 0.0.0-dev, discovered during launch week. The README promises
+# "or grab a release binary", so something has to actually build one.
+#
+# TOOLCHAIN PIN: this machine runs Go 1.25 with GOTOOLCHAIN=local, and
+# goreleaser v2.17+ requires Go >= 1.26.5. v2.5.1 is the pin that installs and
+# runs here; the workflow pins the same line. Raise both together, never one.
+version: 2
+project_name: restoregap
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: restoregap
+    main: ./cmd/restoregap
+    binary: restoregap
+    env:
+      - CGO_ENABLED=0
+    # Self-hosters run Linux boxes and drive them from a Mac. Windows is
+    # omitted until someone asks; an untested target in the release table is a
+    # support burden, not a feature.
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      # This is the whole point of the file: without -X the binary ships as
+      # 0.0.0-dev no matter what tag built it.
+      - -s -w -X github.com/tannernicol/restoregap/internal/cli.Version={{.Version}}
+
+archives:
+  - id: default
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  # Local proof builds are labelled so a snapshot can never be mistaken for a
+  # real release binary.
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  # The repo is private until Tanner flips it. Draft keeps the first tag from
+  # announcing itself the moment it lands.
+  draft: true
+  prerelease: auto

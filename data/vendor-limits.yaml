@@ -1,0 +1,729 @@
+schema_version: 2
+artifact_classes:
+  repo_contents:
+    key: repo_contents
+    label: Repository contents
+    description: Git objects and repository contents are the easiest class to recover, but native GitHub alone is not an independent disaster-recovery copy.
+    default_severity: info
+    incident_references:
+      - name: Salesloft Drift GitHub account compromise
+        date: 2025-09-08
+        url: https://techcrunch.com/2025/09/08/salesloft-says-drift-customer-data-thefts-linked-to-march-github-account-hack/
+        summary: A threat actor (UNC6395) held undetected access to Salesloft's GitHub account from March through June 2025, downloading repository content and adding a guest user. Recovery required proving which repository state was trustworthy across a months-long window — exactly the point-in-time independent-copy evidence this artifact class measures.
+  pull_requests:
+    key: pull_requests
+    label: Pull requests
+    description: Pull request semantics, review state, reviewer assignments, and merged/closed status may not round-trip through backup restore workflows.
+    default_severity: medium
+  pr_review_comments:
+    key: pr_review_comments
+    label: PR review comments
+    description: Review comments are operational evidence and may be omitted or flattened during restore.
+    default_severity: low
+  issue_comments:
+    key: issue_comments
+    label: Issue comments
+    description: Issue comment bodies and authorship metadata may not preserve cleanly across vendor restore paths.
+    default_severity: low
+  issue_authors_dates:
+    key: issue_authors_dates
+    label: Issue authors and dates
+    description: Authorship and original timestamps are audit-relevant metadata that can be rewritten during restore.
+    default_severity: low
+  wikis:
+    key: wikis
+    label: Wikis
+    description: Wiki content is often stored and restored separately from primary repo data.
+    default_severity: medium
+  release_assets:
+    key: release_assets
+    label: Release assets
+    description: Release assets are binaries or archives that may be URL-backed or omitted even when release metadata exists.
+    default_severity: medium
+  branch_protection:
+    key: branch_protection
+    label: Branch protection
+    description: Branch protection is operational policy metadata; losing it can reopen direct-push or unreviewed-change paths after restore.
+    default_severity: high
+  rulesets:
+    key: rulesets
+    label: Rulesets
+    description: Repository and org rulesets are policy metadata that may not be covered consistently by backup tools.
+    default_severity: medium
+  actions_workflows:
+    key: actions_workflows
+    label: Actions workflows
+    description: Workflow files may restore, but workflow trust depends on pinned actions, secrets, environments, and external integrations.
+    default_severity: high
+    incident_references:
+      - name: tj-actions/changed-files compromise (CVE-2025-30066)
+        date: 2025-03-14
+        url: https://www.cisa.gov/news-events/alerts/2025/03/18/supply-chain-compromise-third-party-tj-actionschanged-files-cve-2025-30066-and-reviewdogaction
+        summary: Mutable version tags v1 through v45.0.7 were rewritten to point at malicious code, affecting 23,000+ repositories. Every team consuming the action by tag instead of commit SHA had to reconstruct which workflow state was clean — workflow pinning posture is what this artifact class evidences.
+      - name: GhostAction workflow-injection campaign
+        date: 2025-09-05
+        url: https://blog.gitguardian.com/ghostaction-campaign-3-325-secrets-stolen/
+        summary: 327 compromised GitHub accounts injected malicious workflows into 817 repositories. Affected teams had to identify and roll back injected workflow files and prove their pre-incident workflow state — recoverable workflow history is the artifact this class measures.
+      - name: Salesloft Drift GitHub account compromise
+        date: 2025-09-08
+        url: https://www.infosecurity-magazine.com/news/salesloft-github-breach-drift/
+        summary: The intruder established workflows inside Salesloft's GitHub environment during a months-long undetected window. Restoring a known-good workflow baseline after the fact required evidence of prior workflow state that GitHub alone does not preserve independently.
+  actions_secrets_metadata:
+    key: actions_secrets_metadata
+    label: Actions secrets metadata
+    description: Secret names and timestamps are recoverable metadata; secret values are write-only and must be reseeded from a separate source of truth.
+    default_severity: high
+    incident_references:
+      - name: GhostAction workflow-injection campaign
+        date: 2025-09-05
+        url: https://blog.gitguardian.com/ghostaction-campaign-3-325-secrets-stolen/
+        summary: 3,325 secrets (PyPI, npm, DockerHub, GitHub, AWS) were exfiltrated from CI/CD environments. Rotation required knowing exactly which secrets existed, where they were referenced, and who owned them — the secret inventory and rotation-evidence metadata this artifact class measures.
+      - name: tj-actions/changed-files compromise (CVE-2025-30066)
+        date: 2025-03-14
+        url: https://github.com/advisories/ghsa-mrrh-fwg8-r2c3
+        summary: The compromised action dumped CI runner memory, exposing access keys, GitHub PATs, npm tokens, and private RSA keys via public logs. Teams without a current secret inventory could not bound what needed rotation.
+  environment_secrets_metadata:
+    key: environment_secrets_metadata
+    label: Environment secrets metadata
+    description: Environment secrets and protection rules are deployment-critical state that must be independently documented and reseeded.
+    default_severity: high
+  org_secrets_metadata:
+    key: org_secrets_metadata
+    label: Organization secrets metadata
+    description: Organization-level secrets can affect many repositories; value recovery and blast-radius mapping require an external source of truth.
+    default_severity: high
+    incident_references:
+      - name: GhostAction workflow-injection campaign
+        date: 2025-09-05
+        url: https://blog.gitguardian.com/ghostaction-campaign-3-325-secrets-stolen/
+        summary: Attackers enumerated which secrets were available to workflows before exfiltrating them across 817 repositories. Org-level secrets multiply that blast radius across every repository that can reference them.
+  deploy_keys:
+    key: deploy_keys
+    label: Deploy keys
+    description: Deploy keys bind automation to repositories and often require manual owner, rotation, and dependent-system records.
+    default_severity: high
+  webhooks:
+    key: webhooks
+    label: Webhooks
+    description: Webhooks couple GitHub to external systems; destinations and secrets must be recreated safely after restore.
+    default_severity: medium
+  environments:
+    key: environments
+    label: Environments
+    description: Environments carry deployment gates and required reviewers that affect restore safety.
+    default_severity: medium
+  repo_settings:
+    key: repo_settings
+    label: Repository settings
+    description: Default branch, merge strategies, visibility, and auto-delete settings are operational state that may drift or fail to restore.
+    default_severity: low
+  signed_tags:
+    key: signed_tags
+    label: Signed tags
+    description: Signed tag verification can be lost or become hard to prove during restore depending on backup path.
+    default_severity: low
+vendors:
+  rewind:
+    last_verified: 2026-06-09
+    notes: Rewind's public feature documentation enumerates repo data plus issue/PR/milestone/release/wiki metadata. Restore semantics carry documented caveats (PRs restore as issues, wikis are not auto-restorable, authorship/dates are rewritten). Operational classes (branch protection, Actions config, secrets, deploy keys, webhooks, environments, settings) are absent from documented coverage and are marked as inferred gaps until the vendor demonstrates otherwise.
+    artifact_coverage:
+      repo_contents:
+        status: full
+        confidence: cited
+        notes: Rewind documents backup of refs, branches, commits, tags, objects, and logs.
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+          - url: https://help.rewind.com/hc/en-us/articles/27238177595419-What-does-Rewind-Backup-for-GitHub
+            title: What does Rewind Backup for GitHub back up?
+            retrieved_at: 2026-05-10
+      pull_requests:
+        status: partial
+        confidence: cited
+        notes: 'Documented restore caveat: "Pull requests can only be restored as issues." Merged/closed semantics and review state do not round-trip.'
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+      pr_review_comments:
+        status: partial
+        confidence: cited
+        notes: Review comments are backed up without reactions; because PRs restore as issues, review-thread structure is flattened on restore.
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+      issue_comments:
+        status: partial
+        confidence: cited
+        notes: Comments are backed up without reactions. Restored issues are filed by the restoring user; Rewind does not link @mentions or reassign issues on restore.
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+      issue_authors_dates:
+        status: partial
+        confidence: cited
+        notes: 'Documented restore caveat: restored issues carry the current date and restoring user; "the original author and issue date are included as text in the issue description." Audit-grade authorship does not survive restore.'
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+      wikis:
+        status: partial
+        confidence: cited
+        notes: 'Wikis are included in backups but "cannot be restored directly back to GitHub" — recovery requires a manual re-import path.'
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+      release_assets:
+        status: url_only
+        confidence: cited
+        notes: Release metadata is backed up; release assets/attachments are URL-backed in documented coverage rather than stored binaries.
+        citations:
+          - url: https://help.rewind.com/hc/en-us/articles/27238177595419-What-does-Rewind-Backup-for-GitHub
+            title: What does Rewind Backup for GitHub back up?
+            retrieved_at: 2026-05-10
+      branch_protection:
+        status: none
+        confidence: inferred
+        notes: Branch protection rules are absent from Rewind's documented backup coverage (reviewed 2026-06-09). Treat as not covered until the vendor demonstrates restore.
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+      rulesets:
+        status: none
+        confidence: inferred
+        notes: Repository/org rulesets are absent from Rewind's documented backup coverage (reviewed 2026-06-09).
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+      actions_workflows:
+        status: partial
+        confidence: inferred
+        notes: Workflow YAML files travel with backed-up git data, but Actions configuration, run history, pinning posture, and the secrets/environments workflows depend on are absent from documented coverage.
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+      actions_secrets_metadata:
+        status: none
+        confidence: inferred
+        notes: Secrets are absent from Rewind's documented coverage, and GitHub secret values are write-only — no vendor can recover values from GitHub APIs.
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+          - url: https://docs.github.com/en/actions/security-guides/using-secrets-in-github-actions
+            title: Using secrets in GitHub Actions
+            retrieved_at: 2026-05-10
+      environment_secrets_metadata:
+        status: none
+        confidence: inferred
+        notes: Environment secrets are absent from documented coverage; values are write-only on GitHub and must be reseeded from an external source of truth.
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+      org_secrets_metadata:
+        status: none
+        confidence: inferred
+        notes: Organization secrets are absent from documented coverage; values are write-only on GitHub.
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+      deploy_keys:
+        status: none
+        confidence: inferred
+        notes: Deploy keys are absent from Rewind's documented backup coverage (reviewed 2026-06-09); private key material is never recoverable from GitHub regardless of vendor.
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+      webhooks:
+        status: none
+        confidence: inferred
+        notes: Webhooks are absent from Rewind's documented backup coverage (reviewed 2026-06-09); webhook secrets cannot be read back from GitHub by any vendor.
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+      environments:
+        status: none
+        confidence: inferred
+        notes: Environments and their protection rules are absent from documented coverage; GitHub exposes no API to read environment secret values.
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+      repo_settings:
+        status: none
+        confidence: inferred
+        notes: Repository settings (default branch, merge strategy, visibility, auto-delete) are absent from Rewind's documented backup coverage (reviewed 2026-06-09).
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+      signed_tags:
+        status: partial
+        confidence: inferred
+        notes: Tag objects (including signature bytes) travel with backed-up git data, but post-restore signature verification depends on key management outside GitHub and is not documented by the vendor.
+        citations:
+          - url: https://rewind.com/backups-101/rewind-github-features/
+            title: Rewind for GitHub — Features
+            retrieved_at: 2026-06-09
+  gitprotect:
+    last_verified: 2026-06-09
+    notes: GitProtect's public product documentation claims the broadest metadata coverage of the reviewed vendors, explicitly listing branch protection rules, deploy keys, webhooks, and Actions/pipelines. Restore-path fidelity (authorship, timestamps, secret reseeding) is not publicly documented, so explicit claims are graded partial pending dogfood verification.
+    artifact_coverage:
+      repo_contents:
+        status: full
+        confidence: cited
+        notes: GitProtect documents repository backup and restore including GitHub LFS, with restore to same/different accounts and cross-platform migration.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+          - url: https://helpcenter.gitprotect.io/backup-and-recovery/devops/github/recovery/single-repository-recovery
+            title: GitProtect single repository recovery (helpcenter restructured 2026; local-device restore is repository-only, without metadata)
+            retrieved_at: 2026-07-15
+      pull_requests:
+        status: partial
+        confidence: cited
+        notes: Pull requests and PR comments are explicitly listed in backup coverage; merged/closed semantics and original authorship on restore are not publicly documented and are constrained by GitHub's API.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      pr_review_comments:
+        status: partial
+        confidence: cited
+        notes: '"Pull request comments" are listed in coverage; inline review-thread fidelity (diff context, review state) on restore is not publicly documented.'
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      issue_comments:
+        status: partial
+        confidence: cited
+        notes: Issues and issue comments are explicitly listed in backup coverage; restored authorship/timestamps are constrained by GitHub's API regardless of vendor.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      issue_authors_dates:
+        status: partial
+        confidence: inferred
+        notes: GitHub's API does not let any vendor recreate issues under the original author or original timestamps; restored items are filed by the restoring identity. Vendor docs do not address this caveat.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      wikis:
+        status: partial
+        confidence: cited
+        notes: Wiki is explicitly listed in backup coverage; the public docs do not detail the wiki restore path.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      release_assets:
+        status: partial
+        confidence: cited
+        notes: Tags and releases are explicitly listed; binary release-asset storage is not separately broken out in public docs.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      branch_protection:
+        status: partial
+        confidence: cited
+        notes: Branch protection rules are explicitly listed in backup coverage — the only reviewed vendor to claim this class. Restore path and fidelity are not publicly documented; verify before relying on it.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      rulesets:
+        status: none
+        confidence: inferred
+        notes: Repository/org rulesets are absent from GitProtect's otherwise extensive documented coverage list (reviewed 2026-06-09).
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      actions_workflows:
+        status: partial
+        confidence: cited
+        notes: '"Pipelines/Actions" are listed in backup coverage; workflow trust still depends on pinning posture and on secrets/environments that cannot round-trip through GitHub APIs.'
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      actions_secrets_metadata:
+        status: none
+        confidence: inferred
+        notes: Secrets are absent from documented coverage, and GitHub secret values are write-only — no vendor can recover values from GitHub APIs.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+          - url: https://docs.github.com/en/actions/security-guides/using-secrets-in-github-actions
+            title: Using secrets in GitHub Actions
+            retrieved_at: 2026-05-10
+      environment_secrets_metadata:
+        status: none
+        confidence: inferred
+        notes: Environment secrets are absent from documented coverage; values are write-only on GitHub and must be reseeded from an external source of truth.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      org_secrets_metadata:
+        status: none
+        confidence: inferred
+        notes: Organization secrets are absent from documented coverage; values are write-only on GitHub.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      deploy_keys:
+        status: partial
+        confidence: cited
+        notes: Deployment keys are explicitly listed in backup coverage. At most the public key entries can be restored — private key material never leaves the customer and is not recoverable from GitHub by any vendor.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      webhooks:
+        status: partial
+        confidence: cited
+        notes: Webhooks are explicitly listed in backup coverage; webhook secret tokens cannot be read back from GitHub and must be reseeded manually after any restore.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      environments:
+        status: none
+        confidence: inferred
+        notes: Environments are absent from documented coverage; GitHub exposes no API to read environment secret values, so environment protection state must be documented externally.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      repo_settings:
+        status: unknown
+        confidence: unknown
+        notes: Repository settings are not explicitly enumerated in GitProtect's public coverage list (reviewed 2026-06-09); the docs claim broad "metadata coverage" without settings detail. Verify before relying on it.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+      signed_tags:
+        status: partial
+        confidence: inferred
+        notes: Tags, branches, and commits are listed in coverage, so signature bytes should survive at the git level; post-restore signature verification is not documented and depends on key management outside GitHub.
+        citations:
+          - url: https://gitprotect.io/github.html
+            title: GitProtect GitHub backup product documentation
+            retrieved_at: 2026-06-09
+  cloudback:
+    last_verified: 2026-06-09
+    notes: Cloudback publishes the most explicit coverage-and-exclusions document of the reviewed vendors, including named API limitations (no API for secret/environment values, fork PRs unrestorable) and named gaps (deploy keys not included yet). Claims below quote that document directly.
+    artifact_coverage:
+      repo_contents:
+        status: full
+        confidence: cited
+        notes: 'Cloudback documents "a bare clone of a git repository… which includes all branches, tags, and refs" plus all Git LFS objects.'
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      pull_requests:
+        status: partial
+        confidence: cited
+        notes: 'All pull requests including reviews are backed up, but documented restore exclusions apply: GitHub rejects restoration of PRs without commits, and PRs from forks cannot be restored because source branches are inaccessible in new repos.'
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      pr_review_comments:
+        status: partial
+        confidence: cited
+        notes: Review comments (inline code comments with diff context) are documented as backed up; restore is subject to the same fork-PR and empty-PR exclusions as pull requests.
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      issue_comments:
+        status: partial
+        confidence: cited
+        notes: All issues, issue comments, and sub-issues are documented as backed up; original authorship/timestamps cannot be recreated through GitHub's API on restore.
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      issue_authors_dates:
+        status: partial
+        confidence: inferred
+        notes: GitHub's API constraint applies to all vendors — restored issues/comments are filed by the restoring identity with current timestamps; original authorship survives only as backed-up data, not as restored GitHub state.
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      wikis:
+        status: full
+        confidence: cited
+        notes: Wiki repositories are documented as backed up.
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      release_assets:
+        status: full
+        confidence: cited
+        notes: 'Cloudback documents "All Releases including release asset binary files" — the only reviewed vendor to claim stored release binaries.'
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      branch_protection:
+        status: none
+        confidence: inferred
+        notes: Branch protection rules are not present in Cloudback's documented backup contents (page reviewed 2026-06-09; the document enumerates coverage and exclusions and mentions neither branch protection nor rulesets).
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      rulesets:
+        status: none
+        confidence: inferred
+        notes: Rulesets are not present in Cloudback's documented backup contents (reviewed 2026-06-09).
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      actions_workflows:
+        status: partial
+        confidence: inferred
+        notes: Workflow YAML files are inside the documented bare clone, but Actions configuration, run history, and the secrets/environments workflows depend on are excluded by GitHub API limitations.
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      actions_secrets_metadata:
+        status: none
+        confidence: cited
+        notes: 'Cloudback documents encrypted secrets as unrecoverable: "There is no API to get an encrypted value." Secret values must be reseeded from an external source of truth after any restore.'
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      environment_secrets_metadata:
+        status: none
+        confidence: cited
+        notes: 'Cloudback documents the GitHub API limitation directly: "There is no API to get environment variable value."'
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      org_secrets_metadata:
+        status: none
+        confidence: cited
+        notes: Encrypted secrets are documented as excluded by GitHub API limitations; organization-level secret values are not recoverable from GitHub by any vendor.
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      deploy_keys:
+        status: none
+        confidence: cited
+        notes: 'Documented gap, quoted directly: "Deploy Keys: Not included in backup yet."'
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      webhooks:
+        status: partial
+        confidence: cited
+        notes: 'All webhooks are documented as backed up "Except secret tokens. Secret tokens must be set manually after restore."'
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      environments:
+        status: none
+        confidence: cited
+        notes: Environments are documented as excluded because GitHub provides no API to retrieve environment values.
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      repo_settings:
+        status: partial
+        confidence: cited
+        notes: Repository metadata (description, settings, merge configuration, visibility, license) is documented as backed up; account and organization details are explicitly excluded.
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+      signed_tags:
+        status: partial
+        confidence: inferred
+        notes: The documented bare clone preserves tag objects including signature bytes; verifying signatures after restore requires key management outside GitHub and is not documented.
+        citations:
+          - url: https://docs.cloudback.it/github/backup-contents
+            title: Cloudback GitHub backup contents
+            retrieved_at: 2026-06-09
+  github_native:
+    last_verified: 2026-05-10
+    notes: GitHub-native is the source system, not an independent backup. It should be treated as no independent DR for repo deletion or org compromise.
+    artifact_coverage:
+      repo_contents:
+        status: partial
+        confidence: inferred
+        notes: Git history may exist in local clones, but GitHub-native alone is not an independent backup for org deletion or compromise.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10
+      pull_requests:
+        status: none
+        confidence: inferred
+        notes: Native GitHub is not an independent recovery copy after deletion/compromise.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10
+      pr_review_comments:
+        status: none
+        confidence: inferred
+        notes: Native GitHub is not an independent recovery copy after deletion/compromise.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10
+      issue_comments:
+        status: none
+        confidence: inferred
+        notes: Native GitHub is not an independent recovery copy after deletion/compromise.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10
+      issue_authors_dates:
+        status: none
+        confidence: inferred
+        notes: Native GitHub is not an independent recovery copy after deletion/compromise.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10
+      wikis:
+        status: none
+        confidence: inferred
+        notes: Native GitHub is not an independent recovery copy after deletion/compromise.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10
+      release_assets:
+        status: none
+        confidence: inferred
+        notes: Native GitHub is not an independent recovery copy after deletion/compromise.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10
+      branch_protection:
+        status: none
+        confidence: inferred
+        notes: Native GitHub is not an independent recovery copy after deletion/compromise.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10
+      rulesets:
+        status: none
+        confidence: inferred
+        notes: Native GitHub is not an independent recovery copy after deletion/compromise.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10
+      actions_workflows:
+        status: partial
+        confidence: inferred
+        notes: Workflow files may exist in Git clones; execution state, secrets, environments, and Actions history are not an independent recovery copy.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10
+      actions_secrets_metadata:
+        status: none
+        confidence: inferred
+        notes: Secret values are write-only and cannot be recovered from GitHub after loss.
+        citations:
+          - url: https://docs.github.com/en/actions/security-guides/using-secrets-in-github-actions
+            title: Using secrets in GitHub Actions
+            retrieved_at: 2026-05-10
+      environment_secrets_metadata:
+        status: none
+        confidence: inferred
+        notes: Secret values are write-only and cannot be recovered from GitHub after loss.
+        citations:
+          - url: https://docs.github.com/en/actions/security-guides/using-secrets-in-github-actions
+            title: Using secrets in GitHub Actions
+            retrieved_at: 2026-05-10
+      org_secrets_metadata:
+        status: none
+        confidence: inferred
+        notes: Secret values are write-only and cannot be recovered from GitHub after loss.
+        citations:
+          - url: https://docs.github.com/en/actions/security-guides/using-secrets-in-github-actions
+            title: Using secrets in GitHub Actions
+            retrieved_at: 2026-05-10
+      deploy_keys:
+        status: none
+        confidence: inferred
+        notes: Native GitHub is not an independent recovery copy after deletion/compromise.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10
+      webhooks:
+        status: none
+        confidence: inferred
+        notes: Native GitHub is not an independent recovery copy after deletion/compromise.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10
+      environments:
+        status: none
+        confidence: inferred
+        notes: Native GitHub is not an independent recovery copy after deletion/compromise.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10
+      repo_settings:
+        status: none
+        confidence: inferred
+        notes: Native GitHub is not an independent recovery copy after deletion/compromise.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10
+      signed_tags:
+        status: partial
+        confidence: inferred
+        notes: Local Git data may preserve signed tags, but GitHub-native alone is not independent DR.
+        citations:
+          - url: https://docs.github.com/
+            title: GitHub Docs
+            retrieved_at: 2026-05-10

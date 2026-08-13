@@ -1,0 +1,17 @@
+{
+  "checkpoint_hash": "1056cd3299da3942d67204e2f482cf80a7ae4fc902ff0b4b3483cb155ce8a5a9",
+  "entry_count": 5,
+  "first_entry_hash": "b96aee1890c9b94fda52436d7aab5cf552c466b1e492dc1d825182b1e08fe41c",
+  "first_entry_id": "df3581e4-a4cc-41c1-a75c-b82cdf676131",
+  "identity": {
+    "authority": "local-ledger",
+    "hash_algorithm": "sha256",
+    "signature_status": "unsigned"
+  },
+  "latest_entry_hash": "d0407f2795fd0853567048d2d532f2c48b7dcd92835bfbedcaea7d1a5df4983b",
+  "latest_entry_id": "51fe4044-164d-4e85-ac2a-1ff870e666c5",
+  "ledger_id": "local",
+  "schema_version": 1,
+  "signature": null,
+  "signature_type": "unsigned-local"
+}

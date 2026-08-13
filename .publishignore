@@ -1,0 +1,23 @@
+# .publishignore — tracked files that must NOT ride along into the public
+# export. One shell glob per line, matched against paths from `git ls-files`.
+# Blank lines and #-comments ignored. See scripts/publish-export.sh.
+#
+# This is for things that are legitimately tracked privately but are not part
+# of the public product: internal decision records, private notes, anything
+# that is ours rather than the tool's.
+#
+# It is NOT a substitute for scrub-check.sh. Excluding a file from the export
+# does nothing about the same content sitting in an earlier commit — which is
+# why the export is squashed to a single commit with no history.
+
+# Internal-only plumbing: private CI (a public repo gets GitHub Actions, not
+# this) and the internal platform-standard exemption marker.
+.gitea/**
+.platform-module-exempt
+
+# Candidates to decide before the first publish (uncomment if they should stay
+# private — leaving them listed-but-commented is deliberate, so the decision is
+# visible rather than forgotten):
+#
+# docs/COMPLIANCE_MAP.md   # compliance/framework mapping was cut as off-thesis
+#                          # on local main; still tracked on gitea/main.

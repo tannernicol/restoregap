@@ -1,0 +1,10 @@
+diff --git a/Caddyfile b/Caddyfile
+index 1111111..2222222 100644
+--- a/Caddyfile
++++ b/Caddyfile
+@@ -1,3 +1,3 @@
+-admin.home.example {
+-  reverse_proxy 127.0.0.1:8080
++app.home.example {
++  reverse_proxy 127.0.0.1:8081
+ }

@@ -1,0 +1,32 @@
+version: 2
+# Worked example for docs/drill-authoring.md: ssh keys restored from a
+# generic recovery kit. Every path here is fake (/home/user/..., /backups/...)
+# — copy the shape, replace the recover: command with whatever your actual
+# backup tool uses, and point expect_from at your own live key directory.
+drills:
+  - proof: ssh-keys-recovery
+    artifact: /home/user/.ssh
+    recovery_source: /backups/recovery-kit/ssh
+    # Replace with your actual restore command (restic, borg, a plain
+    # encrypted tarball, a cloud snapshot API — whatever you already run by
+    # hand today). It must reconstruct the key directory under $RG_TARGET;
+    # $RG_SANDBOX is a private scratch directory it can use freely.
+    recover: |
+      mkdir -p "$RG_TARGET"
+      cp -a "$RG_RECOVERY_SOURCE"/. "$RG_TARGET"/
+    # Cheap and frequent: proves the recovery kit is still reachable and
+    # non-empty, without performing a recovery. Wire this to run daily.
+    pin_check: test -n "$(ls -A "$RG_RECOVERY_SOURCE" 2>/dev/null)"
+    budgets:
+      rto: 2m
+    validate:
+      # By fingerprint, never by reading the keys: every key currently in
+      # /home/user/.ssh must be provably present in the recovered copy.
+      # This is stronger than "some keys came back" — it is "the SAME keys
+      # came back", which is the entire point of a key recovery drill. A
+      # recovery kit that's stale (missing a key rotated after the kit was
+      # last updated) fails this exactly as it should.
+      - type: key_fingerprint
+        keys: ssh
+        expect_from: /home/user/.ssh
+        min_keys: 1

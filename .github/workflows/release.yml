@@ -1,0 +1,52 @@
+# Cut a release when a v* tag is pushed.
+#
+# Deliberately does NOT run `make verify`: that target includes the platform
+# gate from a checkout that only exists on Tanner's machine, so it cannot run
+# here. The checks below are the portable subset.
+#
+# The scrub gate runs BEFORE anything is published. This repo leaked a real
+# ed25519 private key once (2026-08-03) past a scan that only looked for
+# identity, so "we already checked locally" is not the standard — a release is
+# the moment the contents become permanent and public.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # goreleaser builds the changelog from history; a shallow clone
+          # silently produces an empty one.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+
+      - name: scrub gate
+        run: bash scripts/scrub-check.sh
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        run: go test ./...
+
+      - name: release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          # Pinned to the line that runs on the repo's Go version. goreleaser
+          # v2.17+ requires Go >= 1.26.5; raise this and go.mod together.
+          version: "~> v2.5"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

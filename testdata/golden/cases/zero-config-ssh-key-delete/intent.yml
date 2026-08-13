@@ -1,0 +1,4 @@
+version: 1
+action: delete_file
+path: ~/.ssh/id_ed25519
+description: Delete the primary SSH private key.

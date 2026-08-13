@@ -1,0 +1,6 @@
+{
+  "adapter": "local",
+  "findings": [],
+  "summary": "No recovery-critical surface touched; safe to proceed.",
+  "verdict": "pass"
+}

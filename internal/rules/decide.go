@@ -1,0 +1,154 @@
+package rules
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/tannernicol/restoregap/internal/contextspec"
+	"github.com/tannernicol/restoregap/internal/engine"
+)
+
+// decide turns one guard match into a fully decided Finding: it checks every
+// required proof/fact via contextspec, derives a RiskClass from the guard's
+// kind, and calls engine.Decide for the final verdict.
+func decide(m MatchResult, ctx contextspec.Context, now time.Time) engine.Finding {
+	proofStatus, risk, detail := checkRequirements(m, ctx, now)
+	enforcement := mapEnforcement(m.Enforcement)
+	verdict := engine.Decide(risk, proofStatus, enforcement)
+
+	return engine.Finding{
+		ID:               findingID(m),
+		GuardID:          m.GuardID,
+		Kind:             string(m.Kind),
+		Resource:         m.Resource,
+		Actions:          m.Actions,
+		RiskClass:        risk,
+		ProofStatus:      proofStatus,
+		Verdict:          verdict,
+		Title:            title(m, verdict),
+		Proof:            detail,
+		RequiredNextStep: requiredNextStep(m, verdict, ctx),
+	}
+}
+
+// checkRequirements resolves a guard's Requires against the context's
+// declared proofs/facts and derives the risk class implied by its kind. A
+// lifeline guard with nothing to prove it safe (no requires declared, as in
+// contextspec.Default()) is fail-closed by design: docs/ARCHITECTURE.md
+// §Compatibility stance, point 2.
+func checkRequirements(m MatchResult, ctx contextspec.Context, now time.Time) (engine.ProofStatus, engine.RiskClass, string) {
+	if m.Requires.Empty() {
+		if m.Kind == contextspec.GuardKindLifeline {
+			return engine.ProofMissing, engine.RiskCannotProveSafe,
+				fmt.Sprintf("guard %q matched a declared lifeline resource with no proof vocabulary configured for it", m.GuardID)
+		}
+		return engine.ProofNotRequired, engine.RiskNone, fmt.Sprintf("guard %q is informational; no proof required", m.GuardID)
+	}
+
+	worst := contextspec.StatePresent
+	var details []string
+	for _, id := range m.Requires.Proofs {
+		res := ctx.CheckProof(id, m.MaxProofAgeHours, m.RequireVerified, now)
+		details = append(details, res.Detail)
+		worst = worstState(worst, res.State)
+	}
+	for _, id := range m.Requires.Facts {
+		res := ctx.CheckFact(id, now)
+		details = append(details, res.Detail)
+		worst = worstState(worst, res.State)
+	}
+
+	proofStatus := mapProofState(worst)
+	if worst == contextspec.StatePresent {
+		return proofStatus, engine.RiskNone, strings.Join(details, "; ")
+	}
+	if m.Kind == contextspec.GuardKindLifeline {
+		return proofStatus, engine.RiskDataLossUnrecoverable, strings.Join(details, "; ")
+	}
+	return proofStatus, engine.RiskRecoveryProofGap, strings.Join(details, "; ")
+}
+
+// worstState returns the more severe of two proof states, in the priority
+// order contradicted > missing > stale > present.
+func worstState(a, b contextspec.ProofState) contextspec.ProofState {
+	rank := map[contextspec.ProofState]int{
+		contextspec.StateContradicted: 3,
+		contextspec.StateMissing:      2,
+		contextspec.StateStale:        1,
+		contextspec.StatePresent:      0,
+	}
+	if rank[b] > rank[a] {
+		return b
+	}
+	return a
+}
+
+func mapProofState(s contextspec.ProofState) engine.ProofStatus {
+	switch s {
+	case contextspec.StatePresent:
+		return engine.ProofPresent
+	case contextspec.StateStale:
+		return engine.ProofStale
+	case contextspec.StateContradicted:
+		return engine.ProofContradicted
+	default:
+		return engine.ProofMissing
+	}
+}
+
+func mapEnforcement(e contextspec.Enforcement) engine.Enforcement {
+	if e == contextspec.EnforcementWarn {
+		return engine.EnforceWarn
+	}
+	return engine.EnforceBlock
+}
+
+func title(m MatchResult, verdict engine.Verdict) string {
+	switch verdict {
+	case engine.VerdictBlock:
+		return "Restore Gap preflight could not prove the declared recovery path survives this change."
+	case engine.VerdictWarn:
+		return "Restore Gap preflight found a declared guard whose proof needs review."
+	default:
+		return "Restore Gap preflight matched a declared guard with satisfied proof."
+	}
+}
+
+func requiredNextStep(m MatchResult, verdict engine.Verdict, ctx contextspec.Context) string {
+	if verdict == engine.VerdictPass {
+		return "No action required; proof is current."
+	}
+	// A guard already matched — that is why there is a finding at all — so
+	// telling the operator to "declare a guard" sends them to do something they
+	// have done. What is missing is a requires: block ON THAT GUARD, and until
+	// the remedy says so the only exit anyone finds is an owner override.
+	if m.Requires.Empty() {
+		proofID := m.GuardID + "-recovery"
+		return fmt.Sprintf(
+			"Guard %q matches this resource but declares no requires:, so no proof can ever satisfy it. "+
+				"Add `requires: {proofs: [%s]}` to that guard and record the proof with "+
+				"`restoregap evidence ingest --proof %s --context <ctx> --command '<verifier>'`, "+
+				"or record an owner override before proceeding. "+
+				"`restoregap context lint` lists every guard in this state.",
+			m.GuardID, proofID, proofID,
+		)
+	}
+	var need []string
+	for _, id := range m.Requires.Proofs {
+		need = append(need, fmt.Sprintf("proof %q", id))
+	}
+	for _, id := range m.Requires.Facts {
+		need = append(need, fmt.Sprintf("fact %q", id))
+	}
+	return fmt.Sprintf("Refresh or supply %s, or record an owner override before proceeding.", strings.Join(need, ", "))
+}
+
+// findingID is a stable, deterministic identifier for a finding so ledger
+// overrides can reference it across runs of the same guard match.
+func findingID(m MatchResult) string {
+	sum := sha256.Sum256([]byte(string(m.Kind) + "|" + m.GuardID + "|" + m.Resource))
+	return "finding_" + hex.EncodeToString(sum[:])[:24]
+}

@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>restoregap UI gallery</title>
+<script>(function(){try{var t=localStorage.getItem("rg-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}})()</script>
+<link rel="stylesheet" href="dist/restoregap.css">
+<script type="module" src="dist/restoregap.js"></script>
+</head>
+<body>
+<div class="rg-shell">
+
+  <header class="rg-topbar">
+    <span class="rg-brand">restore<b>gap</b></span>
+    <span class="rg-meta">UI gallery — every component with sample data</span>
+    <span class="rg-spacer"></span>
+    <button class="rg-theme-toggle" data-rg-theme-toggle>theme</button>
+  </header>
+
+  <h1>Preflight report</h1>
+
+  <section class="rg-banner" data-verdict="block">
+    <span class="rg-verdict">BLOCK</span>
+    <span>2 findings block this change · 1 warning · evaluated 2026-07-16T17:02:11Z · actor <code>agent/claude</code></span>
+    <span class="rg-next"><b>To proceed:</b> capture a fresh restore drill for <code>portable-recovery-kit</code>
+      (<code>restoregap evidence ingest --proof portable-recovery-kit</code>) or record an owner override.</span>
+  </section>
+
+  <div data-rg-tableset>
+    <input class="rg-filter" type="search" placeholder="Filter findings…" aria-label="Filter findings">
+    <div class="rg-tablewrap">
+      <table class="rg-table">
+        <thead>
+          <tr>
+            <th data-sortable>Verdict</th>
+            <th data-sortable>Risk class</th>
+            <th data-sortable>Proof</th>
+            <th data-sortable>Guard</th>
+            <th data-sortable>Resource</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="rg-chip" data-verdict="block">BLOCK</span></td>
+            <td>data_loss_unrecoverable</td>
+            <td>missing</td>
+            <td>portable-recovery-kit</td>
+            <td><code>/media/recovery-usb/keys/</code></td>
+          </tr>
+          <tr>
+            <td><span class="rg-chip" data-verdict="block">BLOCK</span></td>
+            <td>cannot_prove_safe</td>
+            <td>stale</td>
+            <td>openclaw-runtime-state</td>
+            <td><code>~/.openclaw/credentials/</code></td>
+          </tr>
+          <tr>
+            <td><span class="rg-chip" data-verdict="warn">WARN</span></td>
+            <td>recovery_proof_gap</td>
+            <td>unknown</td>
+            <td>heuristic/risky-package-update</td>
+            <td><code>nvidia-driver</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <details class="rg-fold">
+    <summary>Evidence detail — portable-recovery-kit (proof missing)</summary>
+    <div class="rg-fold-body">
+      <dl class="rg-kv">
+        <dt>Required proof</dt><dd><code>portable-recovery-kit</code> restore drill, max age 168h</dd>
+        <dt>Last observed</dt><dd>2026-06-30T18:07:10Z (16 days ago — stale)</dd>
+        <dt>Evidence ref</dt><dd><code>restoregap://local/proofs/portable-recovery-kit</code></dd>
+      </dl>
+      <div class="rg-code">$ restoregap evidence ingest --proof portable-recovery-kit \
+    --command "restic restore latest --target /tmp/drill" \
+    --signing-key ~/.config/restoregap/verifier.key</div>
+    </div>
+  </details>
+
+  <h2>Framework evidence</h2>
+  <dl class="rg-kv">
+    <dt>Tested restore drill</dt>
+    <dd>SOC 2 A1.3 · ISO 27001:2022 A.8.13 · NIST 800-53 CP-4 · carrier ransomware supplements</dd>
+    <dt>Offline recovery copy</dt>
+    <dd>CIS v8 11.4 · NIST CSF 2.0 RC.RP · cyber-insurance "offline/immutable backups" questions</dd>
+    <dt>Decision ledger</dt>
+    <dd>SOC 2 CC7.5 · change-gating evidence for underwriting review</dd>
+  </dl>
+
+  <h1 style="margin-top:2.5rem">Status overview</h1>
+  <dl class="rg-kv">
+    <dt>Recovery posture</dt><dd><span class="rg-chip" data-verdict="warn">WARN</span> 2 proofs expiring within 7 days</dd>
+    <dt>Guards declared</dt><dd>14 (6 lifelines, 8 guards)</dd>
+    <dt>Ledger</dt><dd>1,204 entries · chain verified · last decision 2026-07-16</dd>
+    <dt>Last restore drill</dt><dd>2026-06-30 (portable-recovery-kit · validated · signed)</dd>
+  </dl>
+
+  <h2>Severity chips</h2>
+  <p>
+    <span class="rg-chip" data-severity="critical">critical</span>
+    <span class="rg-chip" data-severity="high">high</span>
+    <span class="rg-chip" data-severity="medium">medium</span>
+    <span class="rg-chip" data-severity="low">low</span>
+    <span class="rg-chip" data-severity="info">info</span>
+  </p>
+
+  <h1 style="margin-top:2.5rem">Vendor limits</h1>
+  <p class="rg-meta" style="color:var(--rg-text-muted)">Claim status per vendor — title, status, two-line summary, detail folded.</p>
+  <div class="rg-cards">
+    <div class="rg-card">
+      <div class="rg-card-head">
+        <span class="rg-card-title">Branch protection</span>
+        <span class="rg-pill" data-status="partial">partial</span>
+      </div>
+      <div class="rg-card-sub">Rules are explicitly listed in backup coverage — the only reviewed vendor to claim this class. Restore path and fidelity are not publicly documented.</div>
+      <details class="rg-fold"><summary>Full claim + citation</summary>
+        <div class="rg-fold-body rg-card-sub" style="-webkit-line-clamp:unset">Restore path and fidelity are not publicly documented; verify before relying on it. <a href="#">Vendor backup product documentation</a></div>
+      </details>
+      <div class="rg-card-meta">retrieved 2026-06-09</div>
+    </div>
+    <div class="rg-card">
+      <div class="rg-card-head">
+        <span class="rg-card-title">Repository rulesets</span>
+        <span class="rg-pill" data-status="none">none</span>
+      </div>
+      <div class="rg-card-sub">Rulesets are not present in the vendor's documented backup contents; the document enumerates coverage and exclusions and mentions neither rulesets nor org policies.</div>
+      <div class="rg-card-meta">retrieved 2026-06-09</div>
+    </div>
+    <div class="rg-card">
+      <div class="rg-card-head">
+        <span class="rg-card-title">Workflow files</span>
+        <span class="rg-pill" data-status="cited">cited</span>
+      </div>
+      <div class="rg-card-sub">Workflow files restore, but workflow trust depends on pinned actions, secrets, environments, and external integrations that do not.</div>
+      <div class="rg-card-meta">retrieved 2026-05-10</div>
+    </div>
+    <div class="rg-card">
+      <div class="rg-card-head">
+        <span class="rg-card-title">Native platform recovery</span>
+        <span class="rg-pill" data-status="inferred">inferred</span>
+      </div>
+      <div class="rg-card-sub">Native hosting is not an independent recovery copy after deletion or compromise.</div>
+      <div class="rg-card-meta">retrieved 2026-05-10</div>
+    </div>
+  </div>
+
+  <h2>Empty state</h2>
+  <div class="rg-empty">No findings — every declared guard has current proof.<br>
+    <code>restoregap status</code> shows when the next proof expires.</div>
+
+  <footer class="rg-footer">
+    Generated by restoregap · self-contained evidence artifact · <a href="#">restoregap.com</a>
+  </footer>
+</div>
+</body>
+</html>

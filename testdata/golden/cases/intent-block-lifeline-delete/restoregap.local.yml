@@ -1,0 +1,190 @@
+version: 1
+
+lifeline_artifacts:
+  - id: portable-recovery-kit
+    kind: recovery_kit
+    path_patterns:
+      - ~/recovery-kit/**
+      - /media/recovery-usb/**
+      - /mnt/backup/recovery-kit/**
+    required_for:
+      - cold-metal-recovery
+      - agent-control-recovery
+      - backup-recovery
+    recovery_copy: customer-owned external disk, USB drive, or encrypted backup bundle
+    alternate_paths:
+      - local-console
+      - second-machine
+
+  - id: openclaw-runtime-state
+    kind: agent_runtime
+    paths:
+      - ~/.openclaw/openclaw.json
+      - ~/.openclaw/secrets.json
+      - ~/.openclaw/workspace/AGENTS.md
+      - ~/.openclaw/workspace/SOUL.md
+      - ~/.openclaw/workspace/TOOLS.md
+    path_patterns:
+      - ~/.openclaw/credentials/**
+      - ~/.openclaw/agents/*/agent/auth-profiles.json
+      - ~/.openclaw/workspace/skills/**
+    required_for:
+      - openclaw-control-plane
+      - agent-control-recovery
+    recovery_copy: customer-owned encrypted backup bundle
+    alternate_paths:
+      - local-console
+      - second-machine
+
+  - id: hermes-runtime-state
+    kind: agent_runtime
+    paths:
+      - ~/.hermes/config.yaml
+      - ~/.hermes/.env
+      - ~/.hermes/auth.json
+      - ~/.hermes/SOUL.md
+    path_patterns:
+      - ~/.hermes/memories/**
+      - ~/.hermes/skills/**
+      - ~/.hermes/cron/**
+      - ~/.hermes/cache/remote-syncs/**
+    required_for:
+      - hermes-control-plane
+      - agent-control-recovery
+    recovery_copy: customer-owned encrypted backup bundle
+    alternate_paths:
+      - local-console
+      - second-machine
+
+  - id: openclawd-runtime-state
+    kind: agent_runtime
+    paths:
+      - ~/openclawd/.env
+      - ~/openclawd/server/mcp-servers.json
+    path_patterns:
+      - ~/openclawd/server/data/**
+      - ~/openclawd/server/uploads/**
+    required_for:
+      - openclawd-control-plane
+      - mcp-tool-recovery
+    recovery_copy: customer-owned encrypted backup bundle
+    alternate_paths:
+      - local-console
+      - second-machine
+
+  - id: agent-service-units
+    kind: service_unit
+    path_patterns:
+      - /etc/systemd/system/openclaw*.service
+      - /etc/systemd/system/hermes*.service
+      - /etc/systemd/system/openclawd*.service
+      - ~/.config/systemd/user/openclaw*.service
+      - ~/.config/systemd/user/hermes*.service
+      - ~/.config/systemd/user/openclawd*.service
+    required_for:
+      - agent-control-recovery
+      - gateway-recovery
+    recovery_copy: customer-owned service unit backup or configuration repository
+    alternate_paths:
+      - local-console
+      - second-machine
+
+  - id: nas-or-backup-root
+    kind: backup_root
+    path_patterns:
+      - /mnt/backup/vault/**
+      - /mnt/backup/**
+      - /srv/backups/**
+    required_for:
+      - backup-recovery
+      - notes-vault-recovery
+    recovery_copy: off-machine backup inventory
+    alternate_paths:
+      - local-console
+      - second-machine
+
+single_writer_resources:
+  - id: codex-state
+    kind: agent_sqlite_state
+    paths:
+      - ~/.codex/state_5.sqlite
+      - ~/.codex/logs_2.sqlite
+      - ~/.codex/goals_1.sqlite
+      - ~/.codex/memories_1.sqlite
+    holder_pattern: codex
+    recovery_backup: customer-owned encrypted/offline agent-state backup
+    recovery_backup_proof: agent-runtime-state-backup
+
+update_guards:
+  - id: remote-access-stack
+    kind: remote_access_stack
+    packages:
+      - tailscale
+      - tailscale-*
+      - wireguard-tools
+      - cloudflared
+      - caddy
+      - nginx
+      - traefik
+    required_recovery_paths:
+      - local-console
+      - second-machine
+    recovery_artifacts:
+      - portable-recovery-kit
+
+command_guards:
+  - id: agent-runtime-control-plane
+    kind: agent_runtime
+    commands:
+      - openclaw*
+      - hermes*
+      - openclawd*
+    required_recovery_paths:
+      - local-console
+      - second-machine
+    recovery_artifacts:
+      - agent-runtime-state-backup
+      - portable-recovery-kit
+
+assurance_contracts:
+  - id: selfhosted-agent-recovery-assurance
+    applies_to:
+      actors:
+        - codex
+        - claude-code
+        - cursor
+        - windsurf
+        - aider
+        - openhands
+        - openclaw
+        - hermes
+      context_windows:
+        - local-shell
+        - coding-agent
+        - agent-context-window
+      actions:
+        - run_command
+        - delete_file
+        - modify_file
+        - move_file
+        - package_update
+        - system_update
+      resource_kinds:
+        - agent_runtime
+        - service_unit
+        - remote_access_stack
+        - graphics_stack
+        - service_runtime
+    requires:
+      knowledge:
+        - runtime owner and rollback path
+        - affected services and credentials
+        - out-of-band access path
+      checks:
+        - independent access path is still available
+        - recovery kit or state backup is current
+        - rollback command is documented outside the agent runtime
+      proofs:
+        - agent-runtime-state-backup
+        - portable-recovery-kit
+    max_proof_age_hours: 168

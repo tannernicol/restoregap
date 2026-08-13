@@ -1,0 +1,58 @@
+version: 2
+# Worked example for docs/drill-authoring.md: a sqlite database restored from
+# a generic snapshot tool. Every path here is fake (/srv/app/..., /backups/...)
+# — copy the shape, replace the recover: command with whatever your actual
+# backup tool uses, and replace the checks with your own real invariants.
+drills:
+  - proof: app-db-recovery
+    artifact: /srv/app/data.db
+    recovery_source: /backups/app
+    # Replace with your actual restore command (restic, borg, a cloud
+    # snapshot API, a managed-DB point-in-time-restore CLI — whatever you
+    # already run by hand today). It must write the reconstructed database
+    # to $RG_TARGET; $RG_SANDBOX is a private scratch directory it can use
+    # freely and that restoregap removes when the drill finishes.
+    recover: |
+      snapshot-tool restore --repo "$RG_RECOVERY_SOURCE" --latest --target "$RG_TARGET"
+    # Cheap and frequent: proves the recovery source is still reachable and
+    # has at least one snapshot, without performing a recovery. Wire this to
+    # run daily; it is what catches a pruned or rotated snapshot between the
+    # full drills below.
+    pin_check: snapshot-tool snapshots --repo "$RG_RECOVERY_SOURCE" --latest >/dev/null
+    budgets:
+      rto: 10m   # how long a real recovery may take before it's a finding, not just a fact
+      rpo: 26h   # backups run nightly; 26h gives one missed run of slack before it's a finding
+    validate:
+      # Structural health + the production floor, not "greater than zero".
+      # Pick real numbers from your own data, not vanity placeholders.
+      - type: sqlite
+        integrity: true
+        tables:
+          orders: ">= 500"
+          users: ">= 10"
+        freshness:
+          table: orders
+          column: created_at
+      # A real invariant beyond row counts: no order should reference a user
+      # that doesn't exist. sqlite's built-in check type only does
+      # integrity/counts/freshness, so an arbitrary query goes through a
+      # command check instead.
+      - type: command
+        run: |
+          sqlite3 "$RG_TARGET" \
+            "SELECT COUNT(*) FROM orders WHERE user_id NOT IN (SELECT id FROM users)" \
+            | grep -qx 0
+      # The L4 rung, commented out until there's a real app binary to boot
+      # here: not every artifact needs this (see "when NOT to add serve" in
+      # docs/drill-authoring.md) — a plain sqlite export with no service in
+      # front of it has an honest ceiling of data-valid, and that's fine.
+      # Uncomment and point at your real app once one exists:
+      #
+      # - type: serve
+      #   run: /usr/local/bin/app -addr 127.0.0.1:$RG_PORT -db "$RG_TARGET"
+      #   ready_timeout: 30s
+      #   probes:
+      #     - type: http
+      #       path: /api/orders/summary
+      #       expect_status: 200
+      #       expect_body: order_count

@@ -1,0 +1,4 @@
+version: 1
+action: delete_file
+path: ~/.openclaw/credentials/telegram/default/creds.json
+description: Remove an old OpenClaw Telegram session.

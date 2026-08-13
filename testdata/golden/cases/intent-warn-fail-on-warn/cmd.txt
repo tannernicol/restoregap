@@ -1,0 +1,5 @@
+# run from the scanner checkout root
+# out.json (ledger.jsonl in this directory was fresh/absent before this run):
+restoregap preflight --intent /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-warn-fail-on-warn/intent.yml --context /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-warn-fail-on-warn/restoregap.local.yml --ledger /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-warn-fail-on-warn/ledger.jsonl --actor agent/claude --as-of 2026-05-14T12:00:00Z --fail-on-warn --format json
+# out.md (run against a separate fresh temp ledger):
+restoregap preflight --intent /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-warn-fail-on-warn/intent.yml --context /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-warn-fail-on-warn/restoregap.local.yml --ledger '<fresh-temp-ledger.jsonl>' --actor agent/claude --as-of 2026-05-14T12:00:00Z --fail-on-warn --format md
