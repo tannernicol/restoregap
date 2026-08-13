@@ -1,0 +1,130 @@
+# ci/verify.yml — the SINGLE SOURCE OF TRUTH for the server-side gauntlet
+# workflow (ENFORCEMENT §6). Every conforming service carries a byte-identical
+# copy at .gitea/workflows/verify.yml; `platform-conform` diffs it against this
+# file, so a drifted — or deleted — workflow is a conformance failure. Same
+# reference-not-copy treatment mk/verify.mk and .golangci.yml already get.
+#
+# Three properties this file exists to guarantee:
+#
+#  1. HERMETIC. The platform SDK is cloned from COMMITTED git objects at the SHA
+#     pinned in .platform-sdk-ref — never symlinked to $HOME/homelab, whose
+#     working tree may carry uncommitted edits. A green run is reproducible from
+#     git alone. The pinned SHA is additionally asserted to be reachable from a
+#     Gitea remote branch, so CI can never go green on an SDK commit that exists
+#     only on this box.
+#  2. TIER-AWARE. The target comes from .platform-gate (tier 2 -> verify-tier2),
+#     so the server-side gate is never weaker than the bypassable pre-push hook.
+#  3. BOUNDED. timeout-minutes stops a hung gauntlet from pinning the single
+#     runner forever; the concurrency group drops superseded runs.
+name: verify
+
+on:
+  push:
+  pull_request:
+
+# One in-flight run per ref. Supersedes queued runs instead of stacking them on
+# a single-runner host.
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gauntlet:
+    runs-on: host
+    # The full Tier-2 gauntlet (gremlins mutation testing) is the slow case.
+    # Well above its real cost; low enough that a hang frees the runner.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: pin platform SDK (hermetic — committed objects only)
+        run: |
+          set -euo pipefail
+          test -f .platform-sdk-ref || {
+            echo "::error::missing .platform-sdk-ref (one line: the homelab commit this service builds against)"
+            exit 1
+          }
+          ref=$(tr -d '[:space:]' < .platform-sdk-ref)
+          src="$HOME/homelab"
+          test -d "$src/.git" || { echo "::error::platform SDK source not found at $src"; exit 1; }
+
+          # The pinned commit must be PUBLISHED, not just local: otherwise a
+          # green run could depend on an SDK commit nobody else can fetch.
+          if ! git -C "$src" branch -r --contains "$ref" 2>/dev/null | grep -q .; then
+            echo "::error::.platform-sdk-ref $ref is not reachable from any remote branch — push homelab first"
+            exit 1
+          fi
+
+          # Clone (not symlink) so only COMMITTED objects cross the boundary.
+          rm -rf ../platform-sdk
+          git clone --quiet --no-checkout "$src" ../platform-sdk
+          git -C ../platform-sdk checkout --quiet --detach "$ref"
+          echo "platform SDK pinned at $ref"
+          git -C ../platform-sdk log -1 --format='  %h %s'
+
+          # The clone must itself be clean — a dirty SDK checkout would mean the
+          # gauntlet is again running against something git does not describe.
+          test -z "$(git -C ../platform-sdk status --porcelain)" || {
+            echo "::error::pinned SDK checkout is not clean"; exit 1; }
+
+          # SDK consumers declare `replace <private-git-host>/tanner/homelab =>
+          # ../homelab` so local dev resolves the private module on-box. In CI
+          # that path does not exist and the gauntlet dies at `go vet` with
+          # "replacement directory ../homelab does not exist" — which is exactly
+          # how money, notes, email and platform-dashboard sat RED for days
+          # while their pre-push hook stayed green, because $HOME/homelab does
+          # exist there. Point the path at the PINNED clone so the replace
+          # resolves to committed objects and hermeticity is preserved.
+          #
+          # Never delete a real directory here: outside a runner workspace ".."
+          # is $HOME, and an unguarded rm would take out the SDK checkout
+          # itself. Only create the link when nothing real occupies the path.
+          if [ -L ../homelab ] || [ ! -e ../homelab ]; then
+            ln -sfn platform-sdk ../homelab
+            echo "  ../homelab -> platform-sdk (satisfies the go.mod replace)"
+          fi
+
+      - name: select gauntlet tier
+        run: |
+          set -euo pipefail
+          test -f .platform-gate || {
+            echo "::error::missing .platform-gate (one line: the tier, 0, 1 or 2)"
+            exit 1
+          }
+          tier=$(head -1 .platform-gate | tr -d '[:space:]')
+          case "$tier" in
+            0) target=verify ;;
+            1) target=verify ;;
+            2) target=verify-tier2 ;;
+            *) echo "::error::.platform-gate tier must be 0, 1 or 2, got '$tier'"; exit 1 ;;
+          esac
+          echo "PLATFORM_TIER=$tier" >> "$GITHUB_ENV"
+          echo "PLATFORM_TARGET=$target" >> "$GITHUB_ENV"
+          echo "tier $tier -> make $target"
+
+      - name: platform gauntlet
+        # PLATFORM_MK is passed explicitly: a service Makefile defaults it to
+        # $(HOME)/homelab/mk/verify.mk, which would read the LIVE SDK tree and
+        # silently undo the pin above. Overriding it points the gauntlet — and,
+        # via PLATFORM_MK_DIR, the shared .golangci.yml and check-coverage.sh —
+        # at the pinned clone. Command-line assignment beats the Makefile's `?=`.
+        run: |
+          set -euo pipefail
+          echo "== make $PLATFORM_TARGET (tier $PLATFORM_TIER) =="
+          make PLATFORM_MK="$PWD/../platform-sdk/mk/verify.mk" "$PLATFORM_TARGET"
+
+      - name: conformance
+        run: $HOME/bin/platform-conform --homelab-root "$PWD/../platform-sdk" .
+
+      - name: gauntlet report
+        # Always: a RED report is the one worth keeping. PLATFORM §4 says Tanner
+        # reads the gauntlet report — this is where it lands (the dashboard and
+        # the telemetry sweep both read this directory).
+        if: always()
+        run: $HOME/bin/gauntlet-report
+          --repo "${{ github.repository }}"
+          --sha "${{ github.sha }}"
+          --ref "${{ github.ref }}"
+          --tier "$PLATFORM_TIER"
+          --status "${{ job.status }}"
+          --coverage-profile coverage.out
