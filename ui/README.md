@@ -1,7 +1,7 @@
 # restoregap UI design system
 
 One design system for every HTML artifact restoregap emits (reports, status,
-evidence packets, vendor-limits). Go inlines the built assets via `go:embed`
+evidence packets). Go inlines the built assets via `go:embed`
 of `dist/`, so artifacts stay **self-contained single files** — offline,
 emailable, archivable.
 

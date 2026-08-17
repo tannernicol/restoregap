@@ -11,3 +11,10 @@ include $(PLATFORM_MK)
 .PHONY: clean
 clean:
 	rm -f coverage.out
+
+# Re-record the README demo (needs vhs, ttyd, ffmpeg, sqlite3). See demo/demo.tape.
+.PHONY: demo
+demo:
+	demo/setup.sh /tmp/rg-demo
+	go build -trimpath -o /tmp/rg-demo/bin/restoregap ./cmd/restoregap
+	vhs demo/demo.tape

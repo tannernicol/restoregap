@@ -193,7 +193,7 @@ single HTML files (offline, emailable, archivable — that's the evidence-produc
   fold/expand, table sort/filter, copy buttons, severity chips, recovery graph).
 - Go embeds `ui/dist` via `go:embed` and inlines both assets into every artifact head.
   One page shell (`report.PageShell`) used by ALL surfaces: report, status, preflight,
-  evidence packet, vendor-limits, ledger/story. This kills the four-CSS-regimes problem
+  evidence packet, ledger/story. This kills the four-CSS-regimes problem
   structurally — a surface cannot ship without the shell.
 - Information design per surface: verdict banner first (BLOCK/WARN/PASS chip + required
   next step), then evidence tables with severity chips and collapsible proof detail.
@@ -218,7 +218,7 @@ single HTML files (offline, emailable, archivable — that's the evidence-produc
 0. Architecture doc (this file) + golden fixtures + scaffold.        ← current
 1. Preflight vertical slice (intent + diff + zero-config + ledger).  Parity: fixtures.
 2. policy scan/plan/fix/evidence, status, ledger cmds, MCP server.
-3. UI design system + all artifact surfaces + vendor-limits.
+3. UI design system + all artifact surfaces.
 4. GitHub/AWS adapters, release gates, agent/github demos.
 5. Cutover gate → repoint ~/bin/restoregap → archive Python as reference.
 
