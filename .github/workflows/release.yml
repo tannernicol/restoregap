@@ -32,8 +32,23 @@ jobs:
           go-version-file: go.mod
           check-latest: false
 
+      # The identity denylist is gitignored on purpose (the list of names is
+      # itself the leak), so CI gets it from a repository secret. Each term is
+      # masked before the scan so a hit can never print the term into a
+      # public Actions log. Missing secret = missing denylist = the gate fails
+      # closed, exactly as it does locally.
       - name: scrub gate
-        run: bash scripts/scrub-check.sh
+        env:
+          SCRUB_DENYLIST_CONTENT: ${{ secrets.SCRUB_DENYLIST }}
+        run: |
+          if [ -n "$SCRUB_DENYLIST_CONTENT" ]; then
+            printf '%s\n' "$SCRUB_DENYLIST_CONTENT" | while IFS= read -r t; do
+              [ -n "$t" ] && echo "::add-mask::$t"
+            done
+            printf '%s\n' "$SCRUB_DENYLIST_CONTENT" > .scrub-denylist
+          fi
+          bash scripts/scrub-check.sh
+          rm -f .scrub-denylist
 
       - name: vet
         run: go vet ./...
