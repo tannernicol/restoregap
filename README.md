@@ -22,47 +22,49 @@ not a compliance dashboard.
 
 ## The 60-second story
 
-Three commands, each one earning the right to the next.
+Three commands, each one earning the right to the next. This is the exact
+transcript of the fixture in `demo/setup.sh` (the gif above is recorded from
+it): a small project, a "backup" of it that quietly went stale, and a coding
+agent about to delete the database.
 
 ```console
+$ demo/setup.sh /tmp/rg-demo && cd /tmp/rg-demo
+$ export RESTOREGAP_LEDGER=$PWD/ledger.jsonl        # keep a try-out run out of your real ledger
+
 # 1. Drift — no config. Does the copy you'd restore from still match the thing it protects?
-$ restoregap check ~/proj /mnt/backup/proj
-tree: 3 live / 2 recovery — 1 MISSING FROM RECOVERY, 1 STALE IN RECOVERY
+$ restoregap check proj backup/proj
+tree: 3 live / 2 recovery — 1 MISSING FROM RECOVERY, 2 STALE IN RECOVERY
   these exist in exactly one place:
     .env
   these exist in both but the recovery copy is out of date:
     app.conf
-next: turn this into a proof — restoregap drill propose ~/proj
+    app.db
+next: turn this into a proof — restoregap drill propose proj
 error: recovery copy is not faithful
 $ echo $?      # 1 — and your nightly backup job said "success" the whole time
 
 # 2. Proof — declare the drill by measuring the live artifact, then actually restore it in a sandbox.
-$ restoregap drill propose ~/proj/app.db --source /mnt/backup/app.db > restoregap.local.yml
+$ restoregap drill propose proj/app.db --source backup/app.db > restoregap.local.yml
 $ restoregap preflight --intent rm-app-db.yml         # rm-app-db.yml: 5 lines of YAML, see below
 context: restoregap.local.yml (discovered)
+ledger: /tmp/rg-demo/ledger.jsonl (default)
 # BLOCK
 Restore Gap blocked this change. Supply proof, change the plan, or record an owner override.
 - Refresh or supply proof "app-db-recovery", or record an owner override before proceeding.
 …                                                     # verdict table + detail trimmed here
-ledger: ~/.local/state/restoregap/ledger.jsonl (default)
 $ restoregap drill
 context: restoregap.local.yml (discovered)
-✓ app-db-recovery — data-valid (L3) in 0.2s: integrity ok; users=1210 (>= 90% of live 1210 = 1089)
+✓ app-db-recovery — data-valid (L3) in 0s: integrity ok; users=95 (>= 90% of live 100 = 90)
 
 # 3. Gate — the same change is allowed now, and refused again the day that proof expires.
 $ restoregap preflight --intent rm-app-db.yml
 context: restoregap.local.yml (discovered)
+ledger: /tmp/rg-demo/ledger.jsonl (default)
 # PASS
 Restore Gap found no unresolved recovery risk.
 …
 $ echo $?      # 0 — 30 days from now, without a fresh drill, it is 1 again
 ```
-
-Trying it in a scratch directory? Every verdict is appended to the machine's
-ledger, so point a throwaway run at its own file first:
-`export RESTOREGAP_LEDGER=$PWD/ledger.jsonl` (or pass `--ledger`). The whole
-walkthrough above is reproducible with `demo/setup.sh` — that is what the gif
-was recorded from.
 
 `check` needs no configuration and exits 1 on drift, so it can sit in cron or CI
 today. `drill` turns a drifting copy into a **verified, expiring proof** — only a
@@ -74,8 +76,8 @@ append-only, hash-chained ledger (`restoregap ledger verify`; default under
 never silent.
 
 `rm-app-db.yml` is the intent — a few lines of YAML (`version: 2`,
-`action: delete_file`, `path: /home/user/proj/app.db`, `actor: agent/claude`,
-`description: …`); a git diff (`--diff`) or a Terraform plan
+`action: delete_file`, `path: /tmp/rg-demo/proj/app.db`, `actor: agent/claude`,
+`description: …`; `demo/setup.sh` writes it); a git diff (`--diff`) or a Terraform plan
 (`--terraform-plan`) works too. `drill propose` writes a complete
 `restoregap.local.yml` (drill + the guard that gates the artifact on it);
 `restoregap context init` writes a starter one instead. Commands find that
@@ -118,6 +120,8 @@ run anything: `sha256sum -c checksums.txt --ignore-missing`.
 
 ```console
 $ go install github.com/tannernicol/restoregap/cmd/restoregap@latest
+# or, from a clone:
+$ go build -o restoregap ./cmd/restoregap
 ```
 
 Windows is not built yet — it is one line in `.goreleaser.yml` once someone
