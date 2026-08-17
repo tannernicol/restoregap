@@ -24,11 +24,17 @@ drills:
       rpo: 26h   # backups run nightly; 26h gives one missed run of slack before it's a finding
     validate:
       # Structural health + the production floor, not "greater than zero".
-      # Pick real numbers from your own data, not vanity placeholders.
+      # Pick real numbers/percentages from your own data, not vanity
+      # placeholders.
       - type: sqlite
         integrity: true
         tables:
-          orders: ">= 500"
+          # orders: relative to the live count at drill time (propose's
+          # default) — an absolute floor rots the moment a legitimate
+          # cleanup or retention job shrinks the table; use one anyway
+          # (like users: below) when the requirement really is a hard
+          # minimum regardless of what live currently holds.
+          orders: ">= 90%"
           users: ">= 10"
         freshness:
           table: orders

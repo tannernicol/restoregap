@@ -84,6 +84,39 @@ may be redesigned freely. What MUST carry over is **semantics**, not bytes:
 Cutover gate = semantic reference cases green + git hooks and one guarded-update
 wrapper exercised end-to-end against the Go binary.
 
+## Where state lives
+
+Every subcommand that takes `--context` or `--ledger` (status, preflight, drill,
+evidence ingest/export, context lint) resolves an omitted flag instead of either
+silently using a different policy than the caller expects or refusing outright:
+
+- **`--context` discovery order:** `$RESTOREGAP_CONTEXT` env var, then
+  `./restoregap.local.yml`, then `./restoregap.yml`, relative to the current
+  working directory. `status` and `preflight` fall back further, to the
+  built-in zero-config default policy, when nothing is discoverable — every
+  other command with no such fallback (`drill`, `evidence ingest`/`export`,
+  `context lint`) refuses with "run `restoregap context init` first, or pass
+  --context". A context found by discovery — never one passed explicitly —
+  prints one `context: <path> (discovered)` line to stderr, so a run's
+  provenance is never silent.
+- **`--ledger` default:** `$RESTOREGAP_LEDGER` env var, then
+  `$XDG_STATE_HOME/restoregap/ledger.jsonl`, then
+  `~/.local/state/restoregap/ledger.jsonl` (parent directories are created on
+  first use). `preflight`, `drill` (real run / `--pins-only`), and
+  `evidence ingest` always write to a ledger now — explicit or defaulted —
+  making the "every decision lands in an append-only, hash-chained ledger"
+  claim true unconditionally rather than only when `--ledger` happened to be
+  passed. `preflight` names the ledger path it used once, on stderr, after
+  the rendered report. `restoregap ledger verify`/`list`/`anchor` accept zero
+  (or, for `anchor`, one) positional ledger-path arguments and fall back to
+  the same default. `drill --calibrate` is the one exception: it reads back
+  accumulated telemetry rather than writing it, so it keeps requiring an
+  explicit `--ledger` — defaulting it would silently point calibration at a
+  fresh, empty ledger instead of surfacing that no telemetry exists yet.
+
+Passing `--context`/`--ledger` explicitly always behaves exactly as before;
+discovery/defaulting only activates when the flag is omitted entirely.
+
 ## Module layout
 
 ```

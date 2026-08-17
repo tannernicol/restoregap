@@ -1,11 +1,12 @@
 # Restore Gap
 
-**Recovery Policy as Code.** Declare what must stay recoverable, gate risky
-changes on recovery *proof*, and export audit-ready evidence — the same
-artifacts cyber-insurance underwriters and SOC 2 auditors ask for.
+**Prove your recovery works — then refuse the risky change until it does.**
+Your recovery path can't depend on what just broke: Restore Gap finds the copy
+that quietly went stale, restores it for real to prove it, and gates the
+destructive change (yours or your coding agent's) on that proof.
 
-One static Go binary. No runtime, no agents, no phone-home. Every report is a
-self-contained HTML file you can email, archive, or attach to an audit.
+One static Go binary. No runtime, no daemon, no account, no phone-home. Every
+report is a self-contained file you can keep, diff, or hand to whoever asks.
 
 > Not a backup tool, not a linter. Restore Gap is the gate between "we have
 > backups" and "we can prove a restore works" — before the change that would
@@ -13,38 +14,66 @@ self-contained HTML file you can email, archive, or attach to an audit.
 
 ## The 60-second story
 
+Three commands, each one earning the right to the next.
+
 ```console
-$ restoregap context init                 # declare your lifelines
-$ restoregap evidence ingest --proof kit-restore-drill \
-    --command "restic restore latest --target /tmp/drill" --expires-in 720h
-$ restoregap preflight --intent delete-old-ssh-key.yml --context restoregap.local.yml
-# BLOCK
-Restore Gap blocked this change. Supply proof, change the plan, or record an owner override.
-- Refresh or supply proof "ssh-key-recovery-copy", or record an owner override before proceeding.
-$ echo $?                                 # 1 — your pre-commit hook / agent just stopped
+# 1. Drift — no config. Does the copy you'd restore from still match the thing it protects?
+$ restoregap check ~/proj /mnt/backup/proj
+tree: 3 live / 2 recovery — 1 MISSING FROM RECOVERY, 1 STALE IN RECOVERY
+  these exist in exactly one place:
+    .env
+  these exist in both but the recovery copy is out of date:
+    app.conf
+next: turn this into a proof — restoregap drill propose ~/proj
+$ echo $?      # 1 — and your nightly backup job said "success" the whole time
+
+# 2. Proof — declare the drill by measuring the live artifact, then actually restore it in a sandbox.
+$ restoregap drill propose ~/proj/app.db --source /mnt/backup/app.db > restoregap.local.yml
+$ restoregap preflight --intent rm-app-db.yml         # rm-app-db.yml: 5 lines of YAML, see below
+# BLOCK — Refresh or supply proof "app-db-recovery", or record an owner override before proceeding.
+$ restoregap drill
+✓ app-db-recovery — data-valid (L3) in 0.2s: integrity ok; users=1210 (>= 90% of live 1210 = 1089)
+
+# 3. Gate — the same change is allowed now, and refused again the day that proof expires.
+$ restoregap preflight --intent rm-app-db.yml
+# PASS
+$ echo $?      # 0 — 30 days from now, without a fresh drill, it is 1 again
 ```
 
-Every decision lands in an append-only, hash-chained ledger
-(`restoregap ledger verify`). Owner overrides are first-class and audited —
+`check` needs no configuration and exits 1 on drift, so it can sit in cron or CI
+today. `drill` turns a drifting copy into a **verified, expiring proof** — only a
+real reconstruction counts (a `recover:` command that "succeeds" while restoring
+garbage fails closed). `preflight` is the thesis: *prove your recovery works,
+then refuse the risky change until it does.* Every decision lands in an
+append-only, hash-chained ledger (`restoregap ledger verify`; default under
+`$XDG_STATE_HOME/restoregap/`). Owner overrides are first-class and audited —
 never silent.
+
+`rm-app-db.yml` is the intent — a few lines of YAML (`version: 2`,
+`action: delete_file`, `path: /home/user/proj/app.db`, `actor: agent/claude`,
+`description: …`); a git diff (`--diff`) or a Terraform plan
+(`--terraform-plan`) works too. `drill propose` writes a complete
+`restoregap.local.yml` (drill + the guard that gates the artifact on it);
+`restoregap context init` writes a starter one instead. Commands find that
+file in the current directory without `--context`.
 
 ## What it does
 
-| Surface | Command |
-|---|---|
-| Gate a change (file/package/command intent, or a git diff) | `restoregap preflight` |
-| Gate Terraform plans on RDS/S3/KMS recovery requirements | `restoregap preflight --terraform-plan` |
-| Zero-config safety: SSH keys & recovery bundles blocked even with NO config | built in |
-| Recovery-chain posture: guards, proof freshness, ledger health | `restoregap status` |
-| Record proofs (hash-bound, optionally command-verified) | `restoregap evidence ingest` |
-| Export framework evidence packets (cyber-insurance, SOC 2, ISO 27001, NIST, CIS, HIPAA, DORA) | `restoregap evidence export --framework soc2` |
-| Scan a GitHub org for recovery gaps + vendor coverage limits | `restoregap scan` |
-| Agents: same gates over MCP (8 tools, including drill_lint) | `restoregap mcp serve` |
+| Rung | Command | Claim it lets you make |
+|---|---|---|
+| Drift | `restoregap check <live> <recovery>` | "these entries exist in exactly one place" — zero config, exit 1 on drift |
+| Proof | `restoregap drill` (+ `drill propose`, `--lint`, `--calibrate`) | "this restored, byte-identically or by typed checks, inside its RTO/RPO budget" |
+| Gate | `restoregap preflight` (intent / diff / Terraform plan) | "this change is refused until that proof exists and is fresh" |
+| Posture | `restoregap status`, `restoregap saves` | guards, proof freshness, ledger health; provable near-misses |
+| Zero-config safety | built in | SSH keys & recovery bundles blocked even with NO config |
+| Agents | `restoregap mcp serve` | the same gates over MCP (8 tools, including drill_lint) |
+| Evidence | `restoregap evidence export --framework soc2` | the drill record, exported for whoever asks whether you *test* restores |
 
-The compliance mappings are primary-source-verified (`docs/COMPLIANCE_MAP.md`)
-— including the carrier ransomware questionnaires that ask, verbatim, whether
-you *test* restores. `direct` vs `supporting` strength is always labeled;
-Restore Gap never overclaims a control.
+The evidence packet is a by-product of the gate, not the product: the compliance
+mappings in `docs/COMPLIANCE_MAP.md` are primary-source-verified, `direct` vs
+`supporting` strength is always labeled, and Restore Gap never overclaims a
+control — but the buyer is the engineer who wants a seatbelt, not the auditor
+who wants a report.
 
 ## Install
 

@@ -24,12 +24,16 @@ func newDrillProposeCmd() *cobra.Command {
 		Long: "Reads the LIVE artifact, measures it, and prints a paste-ready drills: YAML entry: type\n" +
 			"detection by content (sqlite magic bytes, a git worktree/bare repo, an ssh/gnupg key\n" +
 			"directory, any other directory or file), then real invariants measured from what's actually\n" +
-			"there — table row counts, git ref counts, file counts, key fingerprints. Every measured\n" +
-			"count constraint is given ~15% headroom below the measured value, then rounded DOWN to\n" +
-			"something a human would write (2 significant figures; under 10, just \">= 1\") — the floor()\n" +
-			"rule, documented once in internal/drill.Floor: hand-authored budgets on a real system came in\n" +
-			"44x-8333x looser than the worst observed run, because eyeballing headroom by hand doesn't\n" +
-			"work. No budgets: block is emitted — run the drill a few times, then `drill --calibrate`.\n" +
+			"there — table row counts, git ref counts, file counts, key fingerprints. sqlite table row\n" +
+			"counts default to a floor relative to the live count at drill time (\">= 90%\") rather than a\n" +
+			"fixed number, so a legitimate cleanup doesn't rot the floor into a false red; switch a table\n" +
+			"to an absolute floor by hand when it needs a hard minimum regardless of live. Every other\n" +
+			"measured count constraint (refs, files) is given ~15% headroom below the measured value,\n" +
+			"then rounded DOWN to something a human would write (2 significant figures; under 10, just\n" +
+			"\">= 1\") — the floor() rule, documented once in internal/drill.Floor: hand-authored budgets\n" +
+			"on a real system came in 44x-8333x looser than the worst observed run, because eyeballing\n" +
+			"headroom by hand doesn't work. No budgets: block is emitted — run the drill a few times,\n" +
+			"then `drill --calibrate`.\n" +
 			"With --source, the recovery source is classified (restic/borg repo, a dated-snapshot dir, an\n" +
 			"archive dir, or a plain path) and a matching recover:/pin_check: stub is emitted, clearly\n" +
 			"marked # TODO for the operator to verify — this tool never scans the filesystem hunting for\n" +

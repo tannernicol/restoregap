@@ -85,7 +85,7 @@ func Ingest(req IngestRequest) (string, error) {
 		return "", fmt.Errorf("evidence ingest: --proof is required")
 	}
 	if req.ContextPath == "" {
-		return "", fmt.Errorf("evidence ingest: --context is required")
+		return "", fmt.Errorf("evidence ingest: --context is required — run `restoregap context init` first, or pass --context")
 	}
 	doc, err := loadContextDoc(req.ContextPath)
 	if err != nil {

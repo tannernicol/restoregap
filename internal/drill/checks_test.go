@@ -2,6 +2,7 @@ package drill
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,6 +116,108 @@ func TestRunSQLiteFailTableCount(t *testing.T) {
 		t.Error("an empty table failing its count constraint must not pass")
 	}
 	if !strings.Contains(res.outcome.Detail, "transactions=0 (>= 1)") {
+		t.Errorf("unexpected detail: %q", res.outcome.Detail)
+	}
+}
+
+// ---- sqlite: percent-of-live table floors --------------------------------
+
+// createSQLiteTable creates a fresh sqlite database at path with one table
+// (id INTEGER PRIMARY KEY) holding exactly rows rows.
+func createSQLiteTable(t *testing.T, path, table string, rows int) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(fmt.Sprintf("CREATE TABLE %s (id INTEGER PRIMARY KEY)", table)); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	for i := 0; i < rows; i++ {
+		if _, err := db.Exec(fmt.Sprintf("INSERT INTO %s (id) VALUES (?)", table), i); err != nil {
+			t.Fatalf("insert row %d: %v", i, err)
+		}
+	}
+}
+
+func TestRunSQLiteTablesPercentOfLivePass(t *testing.T) {
+	dir := t.TempDir()
+	livePath := filepath.Join(dir, "live.db")
+	recoveredPath := filepath.Join(dir, "recovered.db")
+	createSQLiteTable(t, livePath, "assistant_jobs", 327)
+	createSQLiteTable(t, recoveredPath, "assistant_jobs", 325)
+
+	c := contextspec.DrillCheck{Type: "sqlite", Tables: map[string]string{"assistant_jobs": ">= 90%"}}
+	env := checkEnv{Target: recoveredPath, Artifact: livePath, Now: time.Now}
+	res := runCheck(c, env)
+	if !res.outcome.Pass {
+		t.Fatalf("325 of a live 327 clears a 90%% floor (threshold 295), got %+v", res.outcome)
+	}
+	want := "assistant_jobs=325 (>= 90% of live 327 = 295)"
+	if !strings.Contains(res.outcome.Detail, want) {
+		t.Errorf("detail = %q, want substring %q", res.outcome.Detail, want)
+	}
+}
+
+// TestRunSQLiteTablesPercentOfLiveBoundary exercises the exact threshold:
+// ceil(0.90 * 100) == 90, so 90 must pass and 89 must fail.
+func TestRunSQLiteTablesPercentOfLiveBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		recovered int
+		wantPass  bool
+	}{
+		{"exactly at threshold passes", 90, true},
+		{"one below threshold fails", 89, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			livePath := filepath.Join(dir, "live.db")
+			recoveredPath := filepath.Join(dir, "recovered.db")
+			createSQLiteTable(t, livePath, "t", 100)
+			createSQLiteTable(t, recoveredPath, "t", tc.recovered)
+
+			c := contextspec.DrillCheck{Type: "sqlite", Tables: map[string]string{"t": ">= 90%"}}
+			env := checkEnv{Target: recoveredPath, Artifact: livePath, Now: time.Now}
+			res := runCheck(c, env)
+			if res.outcome.Pass != tc.wantPass {
+				t.Errorf("recovered=%d live=100: Pass = %v, want %v (%+v)", tc.recovered, res.outcome.Pass, tc.wantPass, res.outcome)
+			}
+		})
+	}
+}
+
+func TestRunSQLiteTablesPercentOfLiveMissingLiveTable(t *testing.T) {
+	dir := t.TempDir()
+	livePath := filepath.Join(dir, "live.db")
+	recoveredPath := filepath.Join(dir, "recovered.db")
+	createSQLiteTable(t, livePath, "other_table", 5) // live db exists but lacks assistant_jobs
+	createSQLiteTable(t, recoveredPath, "assistant_jobs", 10)
+
+	c := contextspec.DrillCheck{Type: "sqlite", Tables: map[string]string{"assistant_jobs": ">= 90%"}}
+	env := checkEnv{Target: recoveredPath, Artifact: livePath, Now: time.Now}
+	res := runCheck(c, env)
+	if res.outcome.Pass {
+		t.Error("a table missing from the live artifact must fail closed, not pass")
+	}
+	if !strings.Contains(res.outcome.Detail, "relative to the live artifact") {
+		t.Errorf("detail should explain the constraint is relative to a live artifact that couldn't supply it, got %q", res.outcome.Detail)
+	}
+}
+
+func TestRunSQLiteTablesPercentOfLiveNoArtifact(t *testing.T) {
+	dir := t.TempDir()
+	recoveredPath := filepath.Join(dir, "recovered.db")
+	createSQLiteTable(t, recoveredPath, "assistant_jobs", 10)
+
+	c := contextspec.DrillCheck{Type: "sqlite", Tables: map[string]string{"assistant_jobs": ">= 90%"}}
+	// No Artifact set — a percent constraint has nothing to measure against.
+	res := runCheck(c, fixedEnv(recoveredPath, dir, time.Now()))
+	if res.outcome.Pass {
+		t.Error("a percent constraint with no live artifact available must fail closed, not pass")
+	}
+	if !strings.Contains(res.outcome.Detail, "relative to the live artifact") {
 		t.Errorf("unexpected detail: %q", res.outcome.Detail)
 	}
 }

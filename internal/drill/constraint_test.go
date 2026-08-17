@@ -49,3 +49,80 @@ func TestEvalCountConstraintMalformed(t *testing.T) {
 		}
 	}
 }
+
+func TestParsePercentConstraint(t *testing.T) {
+	cases := []struct {
+		constraint   string
+		wantOp       string
+		wantFraction float64
+	}{
+		{">= 90%", ">=", 0.90},
+		{">=90%", ">=", 0.90},       // no space is legal
+		{">= 90% live", ">=", 0.90}, // explicit spelling
+		{">=90%live", ">=", 0.90},   // explicit spelling, no spaces at all
+		{"  >= 90%  ", ">=", 0.90},  // surrounding whitespace tolerated
+		{"< 50%", "<", 0.50},
+		{"== 100%", "==", 1.0},
+		{"> 0%", ">", 0.0},
+	}
+	for _, c := range cases {
+		pc, isPercent, err := parsePercentConstraint(c.constraint)
+		if err != nil {
+			t.Errorf("parsePercentConstraint(%q): unexpected error: %v", c.constraint, err)
+			continue
+		}
+		if !isPercent {
+			t.Errorf("parsePercentConstraint(%q): isPercent = false, want true", c.constraint)
+			continue
+		}
+		if pc.op != c.wantOp || pc.fraction != c.wantFraction {
+			t.Errorf("parsePercentConstraint(%q) = {%q, %v}, want {%q, %v}",
+				c.constraint, pc.op, pc.fraction, c.wantOp, c.wantFraction)
+		}
+	}
+}
+
+func TestParsePercentConstraintNotPercent(t *testing.T) {
+	// No "%" at all: not this grammar, no error — the caller falls back to
+	// evalCountConstraint.
+	for _, c := range []string{">= 400", "", "5", "between 1 and 5"} {
+		_, isPercent, err := parsePercentConstraint(c)
+		if err != nil {
+			t.Errorf("parsePercentConstraint(%q): unexpected error: %v", c, err)
+		}
+		if isPercent {
+			t.Errorf("parsePercentConstraint(%q): isPercent = true, want false", c)
+		}
+	}
+}
+
+func TestParsePercentConstraintMalformed(t *testing.T) {
+	cases := []string{
+		"90%",           // no operator
+		">= five%",      // not a number
+		">= 90% future", // unexpected trailing word
+		">= -5%",        // negative percentage
+		"~= 90%",        // unknown operator
+	}
+	for _, c := range cases {
+		if _, isPercent, err := parsePercentConstraint(c); err == nil {
+			t.Errorf("parsePercentConstraint(%q): expected error, got none (isPercent=%v)", c, isPercent)
+		}
+	}
+}
+
+func TestValidateTableConstraintSyntax(t *testing.T) {
+	valid := []string{">= 400", ">= 90%", ">= 90% live", "== 0", "< 5"}
+	for _, c := range valid {
+		if err := validateTableConstraintSyntax(c); err != nil {
+			t.Errorf("validateTableConstraintSyntax(%q): unexpected error: %v", c, err)
+		}
+	}
+
+	invalid := []string{"", "not a constraint", ">= five", ">= 90% future", ">= -5%"}
+	for _, c := range invalid {
+		if err := validateTableConstraintSyntax(c); err == nil {
+			t.Errorf("validateTableConstraintSyntax(%q): expected error, got none", c)
+		}
+	}
+}

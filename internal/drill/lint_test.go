@@ -103,6 +103,29 @@ func TestLint(t *testing.T) {
 				Validate: []contextspec.DrillCheck{{Type: "key_fingerprint", Keys: "gpg", Expect: []string{"DEADBEEF"}, MinKeys: 1}},
 			},
 		},
+		{
+			name: "sqlite tables: percent-of-live floor is clean",
+			drill: contextspec.Drill{
+				Proof: "tables-percent", Artifact: existingArtifact, Recover: "true", PinCheck: "true",
+				Validate: []contextspec.DrillCheck{{Type: "sqlite", Tables: map[string]string{"assistant_jobs": ">= 90%"}}},
+			},
+		},
+		{
+			name: "sqlite tables: explicit 'N% live' spelling is clean",
+			drill: contextspec.Drill{
+				Proof: "tables-percent-live", Artifact: existingArtifact, Recover: "true", PinCheck: "true",
+				Validate: []contextspec.DrillCheck{{Type: "sqlite", Tables: map[string]string{"assistant_jobs": ">= 90% live"}}},
+			},
+		},
+		{
+			name: "sqlite tables: malformed constraint is an error",
+			drill: contextspec.Drill{
+				Proof: "tables-malformed", Artifact: existingArtifact, Recover: "true", PinCheck: "true",
+				Validate: []contextspec.DrillCheck{{Type: "sqlite", Tables: map[string]string{"assistant_jobs": "plenty"}}},
+			},
+			wantSevs:   []LintSeverity{LintError},
+			wantSubstr: []string{"tables.assistant_jobs"},
+		},
 	}
 
 	for _, c := range cases {

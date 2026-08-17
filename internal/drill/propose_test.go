@@ -54,7 +54,7 @@ func TestFloorNeverExceedsMeasured(t *testing.T) {
 func assertProposeRoundTrips(t *testing.T, doc string) contextspec.Context {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "proposed.yml")
-	full := "version: 2\n" + doc
+	full := doc // Propose emits a complete context, version line included
 	if err := os.WriteFile(path, []byte(full), 0o644); err != nil {
 		t.Fatalf("write proposed context: %v", err)
 	}
@@ -161,6 +161,23 @@ func TestProposeSQLite(t *testing.T) {
 	}
 	if !strings.Contains(doc, "orders:") || !strings.Contains(doc, "users:") {
 		t.Errorf("expected both qualifying tables, got:\n%s", doc)
+	}
+	// Table floors default to a percentage of the live count, not an
+	// absolute number — absolute floors rot the moment a legitimate
+	// cleanup shrinks the table (this is what propose --lint would have
+	// caught nothing wrong with, and what a hand-guessed absolute floor
+	// would eventually go red on for no real reason).
+	if !strings.Contains(doc, "orders: '>= 90%'") || !strings.Contains(doc, "users: '>= 90%'") {
+		t.Errorf("expected both tables to default to a relative (>= 90%%) floor, got:\n%s", doc)
+	}
+	if !strings.Contains(doc, "relative to the live count at drill time") {
+		t.Errorf("expected the one-line explainer for why floors default to relative, got:\n%s", doc)
+	}
+	if !strings.Contains(doc, "use an absolute floor like \">= 400\"") {
+		t.Errorf("expected the explainer to name absolute floors as the alternative, got:\n%s", doc)
+	}
+	if !strings.Contains(doc, "measured 500 on") || !strings.Contains(doc, "measured 12 on") {
+		t.Errorf("expected a 'measured N on <date>' comment per table, got:\n%s", doc)
 	}
 	if !strings.Contains(doc, "freshness:") || !strings.Contains(doc, "column: created_at") {
 		t.Errorf("expected a freshness block on created_at, got:\n%s", doc)

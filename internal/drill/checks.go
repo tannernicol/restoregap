@@ -3,6 +3,7 @@ package drill
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,6 +43,13 @@ type checkEnv struct {
 	RecoverySource string
 	PreHash        string // set only when a byte_identical check is running
 	Now            func() time.Time
+
+	// Artifact is the live artifact's path (contextspec.Drill.Artifact),
+	// used only by a sqlite check's percent-of-live tables: constraints
+	// (see sqliteTableCount) to re-measure the live row count at drill
+	// time. Empty when the caller has no live path to offer, in which case
+	// a percent constraint fails closed rather than silently skipping.
+	Artifact string
 }
 
 // checkResult is what running one DrillCheck produces.
@@ -118,6 +126,13 @@ func runSQLite(c contextspec.DrillCheck, env checkEnv) checkResult {
 		return failOutcome("sqlite", fmt.Sprintf("cannot open recovered database: %v", err))
 	}
 
+	// The live database is only opened when a percent-of-live tables:
+	// constraint actually needs it (openLiveDB is lazy and memoized) — most
+	// sqlite checks declare absolute floors and never pay for a second file
+	// open.
+	openLiveDB, closeLiveDB := lazyLiveDBOpener(env.Artifact)
+	defer closeLiveDB()
+
 	var parts []string
 	pass := true
 
@@ -128,7 +143,7 @@ func runSQLite(c contextspec.DrillCheck, env checkEnv) checkResult {
 	}
 
 	for _, table := range sortedKeys(c.Tables) {
-		ok, detail := sqliteTableCount(db, table, c.Tables[table])
+		ok, detail := sqliteTableCount(db, openLiveDB, table, c.Tables[table])
 		parts = append(parts, detail)
 		pass = pass && ok
 	}
@@ -162,21 +177,92 @@ func sqliteIntegrityCheck(db *sql.DB) (bool, string) {
 	return true, "integrity ok"
 }
 
-// sqliteTableCount runs SELECT COUNT(*) against table and evaluates the
-// result against constraint. table is quoted as a SQL identifier rather than
-// bound as a parameter (COUNT(*) FROM ? is not legal SQL); it comes from the
-// drill's own declared context document, not external input.
-func sqliteTableCount(db *sql.DB, table, constraint string) (bool, string) {
+// lazyLiveDBOpener returns a memoized opener for the live artifact's sqlite
+// database at artifactPath, plus a closer the caller should defer
+// regardless of whether the opener was ever actually called. The database
+// is not opened until opener() is first invoked — most sqlite checks
+// declare absolute tables: floors and never need the live artifact at all —
+// and every call after the first returns the same *sql.DB (or the same
+// error) rather than reopening it. artifactPath == "" is a valid input
+// (no live artifact was given to this drill) and opener() reports that as
+// its error rather than panicking or silently succeeding.
+func lazyLiveDBOpener(artifactPath string) (opener func() (*sql.DB, error), closer func()) {
+	var db *sql.DB
+	var openErr error
+	opener = func() (*sql.DB, error) {
+		if db != nil || openErr != nil {
+			return db, openErr
+		}
+		if artifactPath == "" {
+			openErr = fmt.Errorf("no live artifact path was given to this drill")
+			return nil, openErr
+		}
+		d, err := sql.Open("sqlite", "file:"+artifactPath+"?mode=ro")
+		if err != nil {
+			openErr = err
+			return nil, err
+		}
+		if err := d.Ping(); err != nil {
+			_ = d.Close()
+			openErr = err
+			return nil, err
+		}
+		db = d
+		return db, nil
+	}
+	closer = func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	}
+	return opener, closer
+}
+
+// sqliteTableCount runs SELECT COUNT(*) against table in the recovered
+// database and evaluates the result against constraint. table is quoted as
+// a SQL identifier rather than bound as a parameter (COUNT(*) FROM ? is not
+// legal SQL); it comes from the drill's own declared context document, not
+// external input.
+//
+// constraint uses one of two grammars. Absolute (">= 400") is evaluated
+// directly. Percent-of-live (">= 90%", parsePercentConstraint) is evaluated
+// against openLiveDB()'s row count for the SAME table instead of a fixed
+// number: threshold = ceil(fraction * live_count). This is what lets a
+// floor track a legitimate cleanup that shrinks the live table — an
+// absolute floor has no way to know the drop was intentional, so it rots
+// into a false red the next time volume moves. A table missing from the
+// live artifact, or no live artifact being available at all, fails this
+// constraint closed rather than skipping it.
+func sqliteTableCount(recoveredDB *sql.DB, openLiveDB func() (*sql.DB, error), table, constraint string) (bool, string) {
 	q := fmt.Sprintf("SELECT COUNT(*) FROM %s", quoteIdent(table))
 	var count int
-	if err := db.QueryRow(q).Scan(&count); err != nil {
+	if err := recoveredDB.QueryRow(q).Scan(&count); err != nil {
 		return false, fmt.Sprintf("%s: query failed: %v", table, err)
 	}
-	ok, err := evalCountConstraint(constraint, count)
+
+	pc, isPercent, err := parsePercentConstraint(constraint)
 	if err != nil {
 		return false, fmt.Sprintf("%s: %v", table, err)
 	}
-	return ok, fmt.Sprintf("%s=%d (%s)", table, count, constraint)
+	if !isPercent {
+		ok, err := evalCountConstraint(constraint, count)
+		if err != nil {
+			return false, fmt.Sprintf("%s: %v", table, err)
+		}
+		return ok, fmt.Sprintf("%s=%d (%s)", table, count, constraint)
+	}
+
+	live, err := openLiveDB()
+	if err != nil {
+		return false, fmt.Sprintf("%s: constraint %q is relative to the live artifact, but it could not be opened: %v", table, constraint, err)
+	}
+	var liveCount int
+	if err := live.QueryRow(q).Scan(&liveCount); err != nil {
+		return false, fmt.Sprintf("%s: constraint %q is relative to the live artifact, but table %q could not be read from it: %v", table, constraint, table, err)
+	}
+	threshold := int(math.Ceil(pc.fraction * float64(liveCount)))
+	ok := compareCount(pc.op, count, threshold)
+	return ok, fmt.Sprintf("%s=%d (%s of live %d = %d)", table, count, constraint, liveCount, threshold)
 }
 
 // sqliteFreshness reads MAX(column) from table and reports how many seconds

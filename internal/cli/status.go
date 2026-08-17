@@ -24,8 +24,15 @@ func newStatusCmd() *cobra.Command {
 			"file per drill (its proof-writing timer rewrites that file, so co-mingling several drills in one\n" +
 			"file fights the timer that owns it). Every loaded file's guards/proofs/drills are aggregated;\n" +
 			"a duplicate id across files is never silently merged — the last-loaded file wins and a warning\n" +
-			"prints to stderr. Omit --context entirely to see the built-in zero-config default policy.",
+			"prints to stderr. Omit --context entirely and status tries $RESTOREGAP_CONTEXT, then\n" +
+			"./restoregap.local.yml, then ./restoregap.yml; only when none of those exists does it fall back to\n" +
+			"the built-in zero-config default policy.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if len(req.ContextPaths) == 0 {
+				if discovered := discoverContext(cmd, ""); discovered != "" {
+					req.ContextPaths = []string{discovered}
+				}
+			}
 			s, err := status.Gather(req)
 			if err != nil {
 				return err
@@ -46,7 +53,8 @@ func newStatusCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringArrayVar(&req.ContextPaths, "context", nil,
-		"path to restoregap.yml / restoregap.local.yml; repeatable to view several context files as one machine (default: built-in zero-config policy)")
+		"path to restoregap.yml / restoregap.local.yml; repeatable to view several context files as one machine "+
+			"(default when omitted entirely: "+contextDiscoveryHelp+"; falls back further to the built-in zero-config policy)")
 	f.StringVar(&req.LedgerPath, "ledger", "", "path to the decision ledger (JSONL)")
 	f.StringVar(&req.Format, "format", "text", "output format: text or html")
 	f.StringVar(&req.AsOf, "as-of", "", "evaluate freshness as of this RFC3339 time")
@@ -57,11 +65,16 @@ func newStatusCmd() *cobra.Command {
 func newLedgerCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "ledger", Short: "Inspect and verify the decision ledger"}
 	verify := &cobra.Command{
-		Use:   "verify <ledger.jsonl>",
+		Use:   "verify [ledger.jsonl]",
 		Short: "Verify the ledger's hash chain end to end",
-		Args:  cobra.ExactArgs(1),
+		Long:  "Verifies the given ledger, or the default one when no path is given: " + ledgerDiscoveryHelp,
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			res, err := ledger.Verify(args[0])
+			path, err := ledgerArg(args)
+			if err != nil {
+				return err
+			}
+			res, err := ledger.Verify(path)
 			if err != nil {
 				return err
 			}
@@ -75,23 +88,35 @@ func newLedgerCmd() *cobra.Command {
 	}
 	var anchorReason, anchorApprovedBy, anchorActor string
 	anchor := &cobra.Command{
-		Use:   "anchor <ledger.jsonl> <entry-id>",
+		Use:   "anchor [ledger.jsonl] <entry-id>",
 		Short: "Append an owner-approved attestation vouching for one historical entry's hash mismatch",
 		Long: "Records that a specific entry's stored hash no longer matches its content and the\n" +
 			"mismatch is accepted, not tampering. Chain anchors do not repair the entry in place —\n" +
 			"Prev is part of every entry's hashed content, so an in-place edit would cascade and\n" +
 			"break every hash after it. This only ever appends; it refuses if the entry does not\n" +
-			"exist, already verifies (nothing to anchor), or already has an anchor.",
-		Args: cobra.ExactArgs(2),
+			"exist, already verifies (nothing to anchor), or already has an anchor.\n\n" +
+			"ledger.jsonl may be omitted to use the default ledger: " + ledgerDiscoveryHelp,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if anchorReason == "" || anchorApprovedBy == "" {
 				return fmt.Errorf("ledger anchor: --reason and --approved-by are required")
+			}
+			var path, entryID string
+			if len(args) == 2 {
+				path, entryID = args[0], args[1]
+			} else {
+				entryID = args[0]
+				p, _, err := resolveLedger("")
+				if err != nil {
+					return err
+				}
+				path = p
 			}
 			actor := anchorActor
 			if actor == "" {
 				actor = "human/owner"
 			}
-			entry, err := ledger.AnchorNow(args[0], args[1], anchorReason, anchorApprovedBy, actor)
+			entry, err := ledger.AnchorNow(path, entryID, anchorReason, anchorApprovedBy, actor)
 			if err != nil {
 				return err
 			}
@@ -106,11 +131,16 @@ func newLedgerCmd() *cobra.Command {
 	af.StringVar(&anchorApprovedBy, "approved-by", "", "owner who approved anchoring this entry (required)")
 	af.StringVar(&anchorActor, "actor", "", "recording actor (default: human/owner)")
 	list := &cobra.Command{
-		Use:   "list <ledger.jsonl>",
+		Use:   "list [ledger.jsonl]",
 		Short: "List ledger entries (id, type, actor, time)",
-		Args:  cobra.ExactArgs(1),
+		Long:  "Lists the given ledger, or the default one when no path is given: " + ledgerDiscoveryHelp,
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			entries, err := ledger.ReadAll(args[0])
+			path, err := ledgerArg(args)
+			if err != nil {
+				return err
+			}
+			entries, err := ledger.ReadAll(path)
 			if err != nil {
 				return err
 			}
@@ -123,6 +153,18 @@ func newLedgerCmd() *cobra.Command {
 	}
 	cmd.AddCommand(verify, anchor, list)
 	return cmd
+}
+
+// ledgerArg resolves the optional single positional ledger-path argument
+// shared by `ledger verify`/`ledger list`: args[0] when given, else the
+// default ledger path.
+func ledgerArg(args []string) (string, error) {
+	explicit := ""
+	if len(args) == 1 {
+		explicit = args[0]
+	}
+	path, _, err := resolveLedger(explicit)
+	return path, err
 }
 
 // renderVerifyOK renders a passing VerifyResult. A chain with anchored

@@ -178,6 +178,7 @@ func (r Runner) Run(spec Spec) Result {
 		RecoverySource: spec.RecoverySource,
 		PreHash:        preHash,
 		Now:            r.now,
+		Artifact:       spec.Artifact,
 	}
 
 	outcomes := make([]contextspec.CheckOutcome, 0, len(checks))

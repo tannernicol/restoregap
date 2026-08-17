@@ -96,7 +96,7 @@ func TestDrillProposePrintsToStdout(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(out.String(), "drills:") || !strings.Contains(out.String(), "type: byte_identical") {
+	if !strings.HasPrefix(out.String(), "version: 2\ndrills:\n") || !strings.Contains(out.String(), "type: byte_identical") {
 		t.Errorf("expected a drills: fragment on stdout, got %q", out.String())
 	}
 }

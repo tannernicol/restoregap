@@ -45,13 +45,23 @@ matching `recover:`/`pin_check:` stub is emitted, always clearly marked
 `# TODO` for you to verify — propose never scans the filesystem hunting for
 a backup layout it wasn't told about; guessing wrong is worse than asking.
 
-**The `floor()` rule.** Every measured count constraint (`tables:` row
-counts, `refs:`, `files:`) is given ~15% headroom below the measured value,
-then rounded DOWN to something a human would write: under 10, just `>= 1`;
-otherwise, 2 significant figures (2379 measured → `>= 2000`, 65 measured →
-`>= 55`). One implementation (`internal/drill.Floor`), documented here, in
-`restoregap drill propose --help`, and nowhere else, so there is exactly one
-place to look when a number in a proposed drill looks surprising.
+**The `floor()` rule.** Every measured `refs:`/`files:` count constraint is
+given ~15% headroom below the measured value, then rounded DOWN to
+something a human would write: under 10, just `>= 1`; otherwise, 2
+significant figures (2379 measured → `>= 2000`, 65 measured → `>= 55`). One
+implementation (`internal/drill.Floor`), documented here, in `restoregap
+drill propose --help`, and nowhere else, so there is exactly one place to
+look when a number in a proposed drill looks surprising.
+
+**`tables:` row-count floors default to relative, not `floor()`-ed.**
+`propose` emits `>= 90%` for every measured table — a floor relative to the
+live count at drill time, with a one-line comment explaining why (see
+"Constraint grammar" below) and the measured count noted alongside it for
+context. Unlike `refs:`/`files:`, an absolute number here is not the
+default: it rots the moment a legitimate cleanup shrinks the table, which is
+exactly what `floor()`-style headroom cannot see coming. Switch a given
+table to an absolute floor by hand when the real requirement is a hard
+minimum regardless of live count.
 
 **Why budgets start empty.** `propose` emits NO `budgets:` block, on
 purpose. An experienced operator with full system context hand-authored 13
@@ -126,8 +136,8 @@ its bytes must match `artifact` exactly. This is the only check that reads
 - type: sqlite
   integrity: true                       # PRAGMA integrity_check must return exactly "ok"
   tables:                               # table name -> row-count constraint (see grammar below)
-    orders: ">= 500"
-    users: ">= 10"
+    orders: ">= 90%"                    # relative to live at drill time (propose's default)
+    users: ">= 10"                      # absolute floor — a hard minimum regardless of live
   freshness:                            # optional; feeds the RPO measurement
     table: orders
     column: created_at                  # accepts RFC3339, "YYYY-MM-DD HH:MM:SS", "YYYY-MM-DD", or unix seconds
@@ -236,9 +246,31 @@ that missing, that is a bug, not a style preference.
 
 ### Constraint grammar
 
-`tables`, `refs`, and `files` constraints all share one grammar:
+`tables`, `refs`, and `files` constraints all share one absolute grammar:
 `>= N`, `> N`, `== N`, `<= N`, `< N` — an operator, optional whitespace, an
 integer. Nothing else parses.
+
+**`tables` also accepts a percent-of-live grammar**, sqlite-only: `>= 90%`
+(or, spelled out, `>= 90% live`) — same five operators, but N is a
+percentage of that same table's row count in the LIVE artifact, measured
+fresh at drill time, instead of a number fixed when the drill was authored.
+`assistant_jobs: ">= 90%"` means "the recovered count must be at least 90%
+of whatever the live database holds for `assistant_jobs` right now" — not
+90% of some number someone typed in months ago.
+
+This exists because absolute floors rot: a real deployment declared
+`assistant_jobs: ">= 400"` when the live table happened to hold 451 rows; a
+later, entirely legitimate cleanup dropped it to 325, and the drill went red
+for days as "disputed" until a human re-guessed the floor. A percent
+constraint tracks the live count automatically, so a real cleanup does not
+masquerade as a recovery gap. The detail line for a percent check reports
+both numbers so the arithmetic is never opaque:
+`assistant_jobs=325 (>= 90% of live 327 = 295)`. A table the percent
+constraint can't find in the live artifact — wrong name, live database
+unreachable — fails that check closed, with a message explaining why, never
+a silent skip. Reach for an absolute floor instead when the requirement
+really is a hard minimum no matter what live currently holds (e.g. "there
+must always be at least 10 users").
 
 ### Budgets
 
@@ -441,11 +473,12 @@ recovers this artifact today.
    one, that's the finding: say so, don't invent a `recover:` command that
    has never actually been run.
 3. **`restoregap drill propose <artifact> --source <source> --out draft.yml`.**
-   Measures the artifact for you: type detection, real invariants (row
-   counts, ref counts, file counts, key fingerprints) with `floor()`
-   headroom already applied, and a classified `recover:`/`pin_check:` stub
-   — see "Start here" above. This replaces hand-writing steps 4 and 5 from
-   here on; you're reviewing a measured draft, not inventing one.
+   Measures the artifact for you: type detection, real invariants (table
+   row counts relative to live, ref counts, file counts, key fingerprints —
+   the latter two with `floor()` headroom already applied), and a
+   classified `recover:`/`pin_check:` stub — see "Start here" above. This
+   replaces hand-writing steps 4 and 5 from here on; you're reviewing a
+   measured draft, not inventing one.
 4. **Fill in / verify the `recover` command the stub proposed.** It must
    reconstruct into `$RG_TARGET` using `$RG_RECOVERY_SOURCE`. Prefer the
    operator's existing restore command over a hand-rolled equivalent — the
@@ -517,8 +550,8 @@ drills:
       - type: sqlite
         integrity: true
         tables:
-          orders: ">= 500"
-          users: ">= 10"
+          orders: ">= 90%"  # relative to live at drill time (propose's default)
+          users: ">= 10"    # absolute floor — a hard minimum regardless of live
         freshness:
           table: orders
           column: created_at

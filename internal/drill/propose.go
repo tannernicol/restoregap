@@ -62,6 +62,12 @@ func Propose(opts ProposeOptions) (string, error) {
 	}
 
 	var b strings.Builder
+	// A complete, loadable context — `drill propose x > restoregap.local.yml`
+	// then `restoregap drill` must just work for a first-time user (it did
+	// not: without the version line the loader rejected the file). When
+	// pasting into an existing context, drop the version line and merge the
+	// drills: entry under the file's own drills: key.
+	b.WriteString("version: 2\n")
 	b.WriteString("drills:\n")
 	fmt.Fprintf(&b, "  - proof: %s\n", yamlScalar(proof))
 	fmt.Fprintf(&b, "    artifact: %s\n", yamlScalar(opts.Artifact))
@@ -81,6 +87,23 @@ func Propose(opts ProposeOptions) (string, error) {
 		return "", err
 	}
 	b.WriteString(validateBlock)
+
+	// The proof is only half the point: a drill you can run is rung 2, a
+	// change that is REFUSED until that drill has passed is rung 3. Declaring
+	// the artifact as a lifeline guarded by its own proof is what connects
+	// them — without it, `preflight` on this very file passes with "no
+	// findings", which is the opposite of what someone who just wrote a
+	// recovery drill for it expects. require_verified means an ingested
+	// attestation is not enough; only a real drill run satisfies it.
+	b.WriteString("guards:\n")
+	fmt.Fprintf(&b, "  - id: %s\n", yamlScalar(proof+"-guard"))
+	b.WriteString("    kind: lifeline\n")
+	b.WriteString("    enforcement: block\n")
+	b.WriteString("    match:\n")
+	fmt.Fprintf(&b, "      paths: [%s]\n", yamlScalar(opts.Artifact))
+	b.WriteString("    require_verified: true\n")
+	fmt.Fprintf(&b, "    requires: {proofs: [%s]}\n", yamlScalar(proof))
+	b.WriteString("    # Delete this guard if you only want the proof and not the gate.\n")
 
 	return b.String(), nil
 }
@@ -263,6 +286,28 @@ func floorComment(measured int, now time.Time) string {
 		measured, now.Format("2006-01-02"))
 }
 
+// measuredComment renders the lighter-weight "what this number was" comment
+// propose attaches next to a percent-of-live tables: constraint — headroom
+// is already expressed by the percentage itself, so there is nothing left
+// to explain beyond what the live count was when it was measured.
+func measuredComment(measured int, now time.Time) string {
+	return fmt.Sprintf("  # measured %d on %s", measured, now.Format("2006-01-02"))
+}
+
+// defaultTableFloor is the constraint propose emits for every sqlite table
+// row-count floor by default: 90% of the live count at drill time.
+const defaultTableFloor = ">= 90%"
+
+// relativeTableFloorComment is the one-line explainer propose emits once
+// above every proposed tables: block: an absolute floor (">= 400") rots the
+// moment a legitimate cleanup or retention job shrinks the table — the
+// exact failure a real deployment hit (a floor tuned to a live count that
+// later, correctly, dropped) and had to re-guess by hand. A percent-of-live
+// floor tracks that change automatically; an absolute floor is still there
+// for the rarer case where the requirement really is a hard minimum
+// regardless of what live currently holds.
+const relativeTableFloorComment = "          # relative to the live count at drill time, so a legitimate cleanup doesn't rot this into a false red — use an absolute floor like \">= 400\" instead if you need a hard minimum regardless of live count\n"
+
 // ---- budgets: deliberately absent -----------------------------------------
 
 const budgetsAbsentComment = `    # No budgets yet — on purpose. Run this drill a few times, then:
@@ -313,9 +358,10 @@ func proposeSQLiteValidate(path string, now time.Time) (string, error) {
 
 	if len(prop.tables) > 0 {
 		b.WriteString("        tables:\n")
+		b.WriteString(relativeTableFloorComment)
 		for _, t := range prop.tables {
 			fmt.Fprintf(&b, "          %s: %s%s\n",
-				t.name, yamlScalar(fmt.Sprintf(">= %d", Floor(t.count))), floorComment(t.count, now))
+				t.name, yamlScalar(defaultTableFloor), measuredComment(t.count, now))
 		}
 		if prop.qualifyingCount > len(prop.tables) {
 			fmt.Fprintf(&b, "        # capped at the %d largest tables (of %d with rows) — add more by hand if needed\n",

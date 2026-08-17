@@ -126,6 +126,26 @@ func requiredNextStep(m MatchResult, verdict engine.Verdict, ctx contextspec.Con
 	// have done. What is missing is a requires: block ON THAT GUARD, and until
 	// the remedy says so the only exit anyone finds is an owner override.
 	if m.Requires.Empty() {
+		// The built-in zero-config policy (contextspec.Default) is not a file
+		// the caller owns or can edit — telling them to add requires: to it
+		// points at nothing. Origin is data set by the loader (parse.go sets
+		// it to the file path; Default() sets it to DefaultOrigin), never
+		// derived by string-matching the guard id, so this stays correct even
+		// as more built-in guard ids are added.
+		if ctx.Origin == contextspec.DefaultOrigin {
+			return fmt.Sprintf(
+				"Guard %q is part of restoregap's built-in zero-config lifeline policy, which has no proof "+
+					"vocabulary of its own — it always blocks until you declare a real context. Run "+
+					"`restoregap context init` to write a starter restoregap.local.yml (it already declares "+
+					"an ssh-keys guard with `requires: {proofs: [ssh-key-recovery-copy]}`), then record that "+
+					"proof with `restoregap evidence ingest --proof ssh-key-recovery-copy "+
+					"--context restoregap.local.yml --command '<a command that proves the recovery copy exists>' "+
+					"--expires-in 720h` (or draft a real recovery drill first with "+
+					"`restoregap drill propose <path>`), and re-run preflight with "+
+					"`--context restoregap.local.yml`. Or record an owner override before proceeding.",
+				m.GuardID,
+			)
+		}
 		proofID := m.GuardID + "-recovery"
 		return fmt.Sprintf(
 			"Guard %q matches this resource but declares no requires:, so no proof can ever satisfy it. "+

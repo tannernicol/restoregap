@@ -60,6 +60,12 @@ func newDrillCmd() *cobra.Command {
 			"derives RTO/RPO budgets from real ledger telemetry instead of a guess; `drill propose` drafts a\n" +
 			"whole new drills: entry from a live artifact — see `restoregap drill propose --help`.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			resolvedContext, err := requireContext(cmd, contextPath, "drill")
+			if err != nil {
+				return err
+			}
+			contextPath = resolvedContext
+
 			ctx, err := contextspec.Load(contextPath)
 			if err != nil {
 				return fmt.Errorf("drill: %w", err)
@@ -69,11 +75,24 @@ func newDrillCmd() *cobra.Command {
 			}
 
 			if calibrate {
+				// --calibrate reads back accumulated telemetry rather than
+				// writing it, so an omitted --ledger stays a hard requirement
+				// here (a silent default would just mean "no runs found,
+				// skip everything", which reads as a bug, not a decision) —
+				// unlike the two writer modes below, this one keeps its
+				// original required-flag behavior.
 				return runDrillCalibrateCmd(cmd, contextPath, ctx.Drills, ledgerPath, minRuns, margin, apply)
 			}
 			if lint {
 				return runDrillLintCmd(cmd, ctx.Drills, only)
 			}
+
+			resolvedLedger, _, err := resolveLedger(ledgerPath)
+			if err != nil {
+				return err
+			}
+			ledgerPath = resolvedLedger
+
 			if pinsOnly {
 				return runPinsOnlyCmd(cmd, contextPath, ctx.Drills, only, ledgerPath, actor)
 			}
@@ -81,12 +100,14 @@ func newDrillCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&contextPath, "context", "", "v2 context file with a drills: block (required)")
+	cmd.Flags().StringVar(&contextPath, "context", "",
+		"v2 context file with a drills: block (required; "+contextDiscoveryHelp+")")
 	cmd.Flags().StringVar(&only, "proof", "", "drill only this proof id (default: all declared drills)")
-	cmd.Flags().StringVar(&expiresIn, "expires-in", "", "validity window for verified proofs, e.g. 720h")
+	cmd.Flags().StringVar(&expiresIn, "expires-in", "720h", "validity window for verified proofs (default 30 days — a proof that never expires would let a months-old drill satisfy the gate forever; pass 0 for no expiry)")
 	cmd.Flags().StringVar(&signingKey, "signing-key", "", "hex ed25519 seed to sign verified proofs")
 	cmd.Flags().StringVar(&ledgerPath, "ledger", "",
-		"also append one telemetry entry per drill result to this ledger (required with --calibrate, which reads it back)")
+		"append one telemetry entry per drill result to this ledger; required with --calibrate, which reads it "+
+			"back; for a real run or --pins-only, "+ledgerDiscoveryHelp)
 	cmd.Flags().StringVar(&actor, "actor", "", "acting identity recorded in the ledger, e.g. agent/claude")
 	cmd.Flags().StringVar(&sandboxDir, "sandbox-dir", "",
 		"parent directory for throwaway sandboxes (default: OS temp dir, which is often tmpfs/RAM — "+
@@ -104,7 +125,6 @@ func newDrillCmd() *cobra.Command {
 		"safety multiplier --calibrate applies to the observed RTO p95")
 	cmd.Flags().BoolVar(&apply, "apply", false,
 		"with --calibrate, rewrite the budgets: block of every matched drill in --context (nothing is written without this)")
-	_ = cmd.MarkFlagRequired("context")
 
 	cmd.AddCommand(newDrillProposeCmd())
 	return cmd
@@ -147,7 +167,7 @@ func runDrillLintCmd(cmd *cobra.Command, drills []contextspec.Drill, only string
 // anything did not verify.
 func runFullDrillCmd(cmd *cobra.Command, contextPath string, drills []contextspec.Drill, only, expiresIn, signingKey, ledgerPath, actor, sandboxDir string) error {
 	var ttl time.Duration
-	if expiresIn != "" {
+	if expiresIn != "" && expiresIn != "0" {
 		d, err := time.ParseDuration(expiresIn)
 		if err != nil {
 			return fmt.Errorf("drill: --expires-in: %w", err)

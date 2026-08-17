@@ -62,6 +62,9 @@ func newCheckCmd() *cobra.Command {
 				}
 			} else {
 				_, _ = fmt.Fprint(out, res.Text())
+				if !res.Faithful() {
+					_, _ = fmt.Fprintf(out, "next: turn this into a proof — restoregap drill propose %s\n", live)
+				}
 			}
 
 			if !res.Faithful() {

@@ -54,6 +54,8 @@ func Lint(d contextspec.Drill) []LintFinding {
 		})
 	}
 
+	out = append(out, lintTableConstraints(d.Proof, checks)...)
+
 	if d.PinCheck == "" {
 		out = append(out, LintFinding{
 			Proof: d.Proof, Severity: LintWarn,
@@ -89,5 +91,26 @@ func Lint(d contextspec.Drill) []LintFinding {
 		}
 	}
 
+	return out
+}
+
+// lintTableConstraints checks every sqlite check's tables: entries for
+// syntax errors under either grammar (absolute or percent-of-live) — split
+// out of Lint to keep its cyclomatic complexity under the repo lint budget.
+func lintTableConstraints(proof string, checks []contextspec.DrillCheck) []LintFinding {
+	var out []LintFinding
+	for _, c := range checks {
+		if c.Type != "sqlite" {
+			continue
+		}
+		for _, table := range sortedKeys(c.Tables) {
+			if err := validateTableConstraintSyntax(c.Tables[table]); err != nil {
+				out = append(out, LintFinding{
+					Proof: proof, Severity: LintError,
+					Message: fmt.Sprintf("tables.%s: %v", table, err),
+				})
+			}
+		}
+	}
 	return out
 }

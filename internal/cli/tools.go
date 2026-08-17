@@ -21,6 +21,18 @@ func newEvidenceCmd() *cobra.Command {
 		Use:   "ingest",
 		Short: "Record/refresh a proof: run an optional verifier command, hash its output, update the context",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			path, err := requireContext(cmd, ing.ContextPath, "evidence ingest")
+			if err != nil {
+				return err
+			}
+			ing.ContextPath = path
+
+			ledgerPath, _, err := resolveLedger(ing.LedgerPath)
+			if err != nil {
+				return err
+			}
+			ing.LedgerPath = ledgerPath
+
 			if expiresIn != "" {
 				d, err := time.ParseDuration(expiresIn)
 				if err != nil {
@@ -38,12 +50,13 @@ func newEvidenceCmd() *cobra.Command {
 	}
 	f := ingest.Flags()
 	f.StringVar(&ing.ProofID, "proof", "", "proof id to record (required)")
-	f.StringVar(&ing.ContextPath, "context", "", "v2 context file to update (required)")
+	f.StringVar(&ing.ContextPath, "context", "",
+		"v2 context file to update (required; "+contextDiscoveryHelp+")")
 	f.StringVar(&ing.Command, "command", "", "verifier command; its output is hashed into the proof")
 	f.StringVar(&ing.EvidenceURL, "evidence-url", "", "where the underlying evidence lives")
 	f.StringVar(&expiresIn, "expires-in", "", "proof validity window, e.g. 720h")
 	f.BoolVar(&ing.Validated, "validated", false, "record as validated (default observed)")
-	f.StringVar(&ing.LedgerPath, "ledger", "", "also record the ingestion in this ledger")
+	f.StringVar(&ing.LedgerPath, "ledger", "", "record the ingestion in this ledger; "+ledgerDiscoveryHelp)
 	f.StringVar(&ing.Actor, "actor", "", "recording actor")
 
 	exp := evidence.ExportRequest{}
@@ -52,6 +65,12 @@ func newEvidenceCmd() *cobra.Command {
 		Use:   "export",
 		Short: "Export a self-contained HTML evidence packet: proofs, their freshness, and ledger integrity",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			path, err := requireContext(cmd, exp.ContextPath, "evidence export")
+			if err != nil {
+				return err
+			}
+			exp.ContextPath = path
+
 			rendered, err := evidence.Export(exp)
 			if err != nil {
 				return err
@@ -64,7 +83,8 @@ func newEvidenceCmd() *cobra.Command {
 		},
 	}
 	g := export.Flags()
-	g.StringVar(&exp.ContextPath, "context", "", "v2 context file (required)")
+	g.StringVar(&exp.ContextPath, "context", "",
+		"v2 context file (required; "+contextDiscoveryHelp+")")
 	g.StringVar(&exp.LedgerPath, "ledger", "", "decision ledger for the integrity section")
 	g.StringVar(&exp.AsOf, "as-of", "", "evaluate freshness as of this RFC3339 time")
 	g.StringVar(&outPath, "out", "", "write the packet to this path (- for stdout)")
@@ -125,6 +145,12 @@ func newContextLintCmd() *cobra.Command {
 			"duplicate guards that report one blocked change several times.\n\n" +
 			"Exit 0 when clean or only warnings, 1 when an error-level finding is present.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			resolved, err := requireContext(cmd, contextPath, "context lint")
+			if err != nil {
+				return err
+			}
+			contextPath = resolved
+
 			ctx, err := contextspec.Load(contextPath)
 			if err != nil {
 				return fmt.Errorf("context lint: %w", err)
@@ -166,7 +192,8 @@ func newContextLintCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&contextPath, "context", "restoregap.local.yml", "context file to lint")
+	cmd.Flags().StringVar(&contextPath, "context", "",
+		"context file to lint (required; "+contextDiscoveryHelp+")")
 	cmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
 	return cmd
 }
