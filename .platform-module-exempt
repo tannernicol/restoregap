@@ -1,0 +1,7 @@
+Deliberate public vanity import path. This repo is the OSS export of Restore
+Gap: its canonical *public* Go import path is github.com/tannernicol/restoregap
+(the `origin` remote consumers import from), while `gitea` remote
+tanner/restoregap-public is the private working mirror. Importers must reach the
+module via GitHub, so the module path follows the GitHub identity, not the
+private Gitea home. This file is internal-only and excluded from the public
+export by .publishignore.
