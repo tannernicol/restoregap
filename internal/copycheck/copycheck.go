@@ -27,6 +27,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/tannernicol/restoregap/internal/globmatch"
 )
 
 // Kind identifies which comparator was used, so the report can say what it
@@ -50,6 +52,11 @@ type Result struct {
 	// match byte for byte. Which side is WRONG is a separate question from
 	// whether they differ, and the fingerprint alone cannot answer it.
 	Differing []string
+	// ExcludedCount is how many distinct entries (by name, unioned across
+	// both sides) were dropped before comparison because they matched an
+	// exclude pattern. They are never counted in LiveCount/RecoveryCount or
+	// reported as missing, stale, or only-in-recovery.
+	ExcludedCount int
 	// LiveOlder is the subset of Differing where the live entry's mtime is
 	// older than the recovery copy's — the signature of the live side having
 	// been REVERTED rather than the backup having fallen behind.
@@ -114,6 +121,12 @@ func entries(root string, kind Kind) (map[string]string, error) {
 		if kind == KindSecretStore && !strings.HasSuffix(d.Name(), ".gpg") {
 			return nil
 		}
+		// The exclude-pattern file itself is check's own configuration, not
+		// recoverable content — it would otherwise report as permanently
+		// missing from every recovery copy that (correctly) doesn't have one.
+		if d.Name() == ".restoregapignore" {
+			return nil
+		}
 		rel, rerr := filepath.Rel(root, path)
 		if rerr != nil {
 			return rerr
@@ -131,9 +144,37 @@ func entries(root string, kind Kind) (map[string]string, error) {
 	return out, nil
 }
 
+// applyExcludes drops every entry matching any of excludes from BOTH maps
+// (by name, unioned across the two sides) and returns how many distinct
+// names were dropped.
+func applyExcludes(liveEntries, recEntries map[string]string, excludes []string) int {
+	excluded := map[string]bool{}
+	for name := range liveEntries {
+		if globmatch.MatchPathAny(excludes, name) {
+			excluded[name] = true
+		}
+	}
+	for name := range recEntries {
+		if globmatch.MatchPathAny(excludes, name) {
+			excluded[name] = true
+		}
+	}
+	for name := range excluded {
+		delete(liveEntries, name)
+		delete(recEntries, name)
+	}
+	return len(excluded)
+}
+
 // Compare runs the comparison. A resolved symlinked root is used so a kit
 // reached through a link is scanned rather than silently skipped.
-func Compare(live, recovery string, kind Kind) (Result, error) {
+//
+// excludes are path globs (internal/globmatch's doublestar syntax) matched
+// against each entry's relative path. A match on either side drops that
+// entry from BOTH sides before anything else runs, so it never counts
+// toward LiveCount/RecoveryCount and never appears as missing, stale, or
+// only-in-recovery.
+func Compare(live, recovery string, kind Kind, excludes []string) (Result, error) {
 	res := Result{Kind: kind}
 
 	for _, dir := range []string{live, recovery} {
@@ -154,6 +195,8 @@ func Compare(live, recovery string, kind Kind) (Result, error) {
 	if err != nil {
 		return res, fmt.Errorf("scanning %s: %w", recovery, err)
 	}
+
+	res.ExcludedCount = applyExcludes(liveEntries, recEntries, excludes)
 
 	res.LiveCount = len(liveEntries)
 	res.RecoveryCount = len(recEntries)

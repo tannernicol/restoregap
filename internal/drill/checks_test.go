@@ -334,7 +334,10 @@ func gitInit(t *testing.T, dir string) {
 	t.Helper()
 	run := func(args ...string) {
 		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		// Hermetic: the developer's global git config (core.hooksPath with a
+		// commit-msg policy hook, signing, templates) must not reach a fixture.
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}

@@ -26,7 +26,6 @@ import (
 // comes from evaluating GuardRule against contextspec.Default() rather than
 // from a second, special-cased rule (see Evaluate).
 type Rule interface {
-	ID() string
 	Match(ci intent.ChangeIntent, ctx contextspec.Context) []MatchResult
 }
 
@@ -47,9 +46,6 @@ type MatchResult struct {
 // AND-across-categories / OR-within-category semantics documented on
 // contextspec.Matcher.
 type GuardRule struct{}
-
-// ID returns the rule's stable identifier, used to attribute a finding.
-func (GuardRule) ID() string { return "rules.guard" }
 
 // Match reports which of the context's guards apply to the change intent.
 func (GuardRule) Match(ci intent.ChangeIntent, ctx contextspec.Context) []MatchResult {

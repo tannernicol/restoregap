@@ -1,0 +1,70 @@
+name: restoregap-preflight
+description: >-
+  Gate a pull request's diff on Restore Gap's declared recovery guards —
+  refuse the change until every guard it touches has a proof, or an owner
+  override is on record.
+author: restoregap
+branding:
+  icon: shield
+  color: gray-dark
+
+inputs:
+  version:
+    description: Restore Gap release tag to install (RESTOREGAP_VERSION for scripts/install.sh)
+    required: false
+    default: latest
+  context:
+    description: >-
+      Path(s) to restoregap.yml/restoregap.local.yml to gate against, one per
+      line. Omit to use the repo's discovered context ($RESTOREGAP_CONTEXT,
+      ./restoregap.local.yml, ./restoregap.yml) — a declared context is
+      required either way; this action has no default policy of its own.
+    required: false
+    default: ""
+  diff-base:
+    description: Git ref to diff HEAD against
+    required: false
+    default: origin/${{ github.base_ref }}
+  fail-on:
+    description: Verdict that fails the check — "block" or "warn"
+    required: false
+    default: block
+
+runs:
+  using: composite
+  steps:
+    - name: install restoregap
+      shell: bash
+      env:
+        RG_VERSION: ${{ inputs.version }}
+      run: |
+        # The installer ships WITH this action (same commit the workflow pinned),
+        # so nothing is fetched-and-executed from the network: it downloads the
+        # release archive and verifies it against the release's checksums.txt.
+        if [ "$RG_VERSION" != "latest" ]; then export RESTOREGAP_VERSION="$RG_VERSION"; fi
+        sh "$GITHUB_ACTION_PATH/scripts/install.sh"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - name: fetch diff base
+      shell: bash
+      env:
+        DIFF_BASE: ${{ inputs.diff-base }}
+      run: |
+        ref="${DIFF_BASE#origin/}"
+        if [ "$ref" != "$DIFF_BASE" ]; then
+          git fetch --no-tags --depth=1 origin "$ref:refs/remotes/origin/$ref" || true
+        fi
+
+    - name: preflight
+      shell: bash
+      env:
+        DIFF_BASE: ${{ inputs.diff-base }}
+        CONTEXT: ${{ inputs.context }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        args=(--diff-root "$GITHUB_WORKSPACE" --format md --out "$GITHUB_STEP_SUMMARY")
+        while IFS= read -r p; do
+          [ -n "$p" ] && args+=(--context "$p")
+        done <<< "$CONTEXT"
+        [ "$FAIL_ON" = "warn" ] && args+=(--fail-on-warn)
+        restoregap preflight --diff <(git diff "$DIFF_BASE"...HEAD) "${args[@]}"

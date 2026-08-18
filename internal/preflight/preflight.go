@@ -43,6 +43,13 @@ type Request struct {
 	OutPath       string
 	FailOnWarn    bool
 	AsOf          string // RFC3339; pins evaluation time for proof freshness (empty = now)
+	// Plan evaluates and renders exactly as a normal run does, but skips
+	// recordDecision: nothing is appended to the ledger. A readiness probe
+	// or dry run that re-evaluates the same unexecuted intent repeatedly
+	// must not spam the ledger with identical warn/block entries — a real
+	// deployment saw ~3,000 identical entries written in a week by a
+	// 10-minute readiness timer doing exactly that.
+	Plan bool
 }
 
 // Result is a rendered preflight outcome plus its process exit code.
@@ -59,7 +66,7 @@ func (r *Result) Write(w io.Writer) error {
 
 // Run executes a preflight against declared guards and the proofs backing them.
 func Run(_ context.Context, req Request) (*Result, error) {
-	if req.Format != "json" && req.Format != "md" && req.Format != "html" {
+	if req.Format != "json" && req.Format != "md" && req.Format != "html" && req.Format != "text" {
 		return nil, fmt.Errorf("preflight: --format must be json, md, or html, got %q", req.Format)
 	}
 	intents, err := loadIntents(req)
@@ -85,19 +92,15 @@ func Run(_ context.Context, req Request) (*Result, error) {
 	}
 	findings := rules.Evaluate(intents, ctxSpec, now)
 
-	if req.LedgerPath != "" {
-		entries, err := ledger.ReadAll(req.LedgerPath)
-		if err != nil {
-			return nil, fmt.Errorf("preflight: %w", err)
-		}
-		overrides := ledger.ActiveOverrides(entries, now)
-		findings = engine.ApplyOverrides(findings, overrides)
+	findings, err = applyLedgerOverrides(req.LedgerPath, findings, now)
+	if err != nil {
+		return nil, err
 	}
 
 	overall := engine.Overall(findings)
 	exitCode := engine.ExitCode(overall, req.FailOnWarn)
 
-	if req.LedgerPath != "" {
+	if req.LedgerPath != "" && !req.Plan {
 		if err := recordDecision(req, findings, overall, now); err != nil {
 			return nil, err
 		}
@@ -191,6 +194,21 @@ func loadContext(paths []string) (contextspec.Context, error) {
 	return ctxSpec, nil
 }
 
+// applyLedgerOverrides resolves active owner overrides from ledgerPath (if
+// any) and applies them to findings. An empty ledgerPath means no ledger was
+// supplied, so findings are returned unchanged.
+func applyLedgerOverrides(ledgerPath string, findings []engine.Finding, now time.Time) ([]engine.Finding, error) {
+	if ledgerPath == "" {
+		return findings, nil
+	}
+	entries, err := ledger.ReadAll(ledgerPath)
+	if err != nil {
+		return nil, fmt.Errorf("preflight: %w", err)
+	}
+	overrides := ledger.ActiveOverrides(entries, now)
+	return engine.ApplyOverrides(findings, overrides), nil
+}
+
 func recordDecision(req Request, findings []engine.Finding, overall engine.Verdict, now time.Time) error {
 	records := make([]ledger.FindingRecord, 0, len(findings))
 	for _, f := range findings {
@@ -226,6 +244,8 @@ func render(req Request, findings []engine.Finding, overall engine.Verdict, now 
 		return rep.JSON()
 	case "html":
 		return rep.HTML()
+	case "text":
+		return rep.Text(), nil
 	default:
 		return rep.Markdown(), nil
 	}

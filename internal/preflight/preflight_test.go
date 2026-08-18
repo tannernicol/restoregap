@@ -155,6 +155,44 @@ func TestRunMultiContextMergesGuardAndProofAcrossFiles(t *testing.T) {
 	})
 }
 
+// TestRunPlanDoesNotWriteLedger: --plan must evaluate and render exactly as
+// a normal run does (same verdict, same exit code) but append nothing to
+// the ledger — a readiness probe re-evaluating the same unexecuted intent
+// on a timer must not spam the ledger with identical entries.
+func TestRunPlanDoesNotWriteLedger(t *testing.T) {
+	intentPath := writeTemp(t, "intent.yml", "version: 2\naction: delete_file\npath: ~/.ssh/id_ed25519\n")
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.jsonl")
+
+	res, err := Run(context.Background(), Request{
+		Format: "json", IntentPath: intentPath, LedgerPath: ledgerPath, Actor: "agent/test", Plan: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 1 {
+		t.Errorf("exit = %d, want 1 (zero-config lifeline block, same as without --plan)", res.ExitCode)
+	}
+	if _, err := os.Stat(ledgerPath); !os.IsNotExist(err) {
+		t.Errorf("--plan must not create the ledger file, stat err = %v", err)
+	}
+}
+
+// TestRunWithoutPlanStillWritesLedger is the control for the above: without
+// --plan, existing behavior (a ledger entry per run) is unchanged.
+func TestRunWithoutPlanStillWritesLedger(t *testing.T) {
+	intentPath := writeTemp(t, "intent.yml", "version: 2\naction: delete_file\npath: ~/.ssh/id_ed25519\n")
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.jsonl")
+
+	if _, err := Run(context.Background(), Request{
+		Format: "json", IntentPath: intentPath, LedgerPath: ledgerPath, Actor: "agent/test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ledgerPath); err != nil {
+		t.Errorf("without --plan the ledger file must be created, stat err = %v", err)
+	}
+}
+
 // rdsMissingEvidenceTFPlan is a Terraform plan replacing a prod RDS
 // instance with no --evidence supplied at all: recovery.Build always emits
 // a single "terraform.rds.restore-proof-missing" issue at index 0 for this

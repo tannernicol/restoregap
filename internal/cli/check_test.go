@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -78,6 +79,102 @@ func TestCheckFaithfulPrintsNoHint(t *testing.T) {
 	}
 	if bytes.Contains(out.Bytes(), []byte("next:")) {
 		t.Errorf("a faithful recovery copy must not print the next-step hint, got:\n%s", out.String())
+	}
+}
+
+// TestCheckExcludeFlagDropsMatchingEntries: real dogfood motivation — a
+// .config/restoregap live root full of restoregap.local.yml.bak.* config
+// snapshots reported hundreds of false "missing" entries. --exclude (which
+// is repeatable) must drop matches from the report and print the summary
+// line naming what was excluded and why.
+func TestCheckExcludeFlagDropsMatchingEntries(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "live")
+	recovery := filepath.Join(dir, "recovery")
+	if err := os.Mkdir(live, 0o700); err != nil {
+		t.Fatalf("mkdir live: %v", err)
+	}
+	if err := os.Mkdir(recovery, 0o700); err != nil {
+		t.Fatalf("mkdir recovery: %v", err)
+	}
+	writeCheckFile(t, live, "a.txt", "a")
+	writeCheckFile(t, live, "restoregap.local.yml.bak.1", "snap1")
+	writeCheckFile(t, live, "restoregap.local.yml.bak.2", "snap2")
+	writeCheckFile(t, recovery, "a.txt", "a")
+
+	var out bytes.Buffer
+	cmd := newCheckCmd()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{live, recovery, "--exclude", "restoregap.local.yml.bak.*"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected excluded-only drift to report faithful, got: %v (%s)", err, out.String())
+	}
+	if !strings.Contains(out.String(), "excluded: 2 entries (patterns: restoregap.local.yml.bak.*)") {
+		t.Errorf("expected excluded summary line, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "bak.1") || strings.Contains(out.String(), "bak.2") {
+		t.Errorf("excluded entries must not appear in the report, got:\n%s", out.String())
+	}
+}
+
+// TestCheckRestoregapIgnoreFileExcludesEntries: patterns are also read from
+// <live>/.restoregapignore when present, gitignore-style (one glob per
+// line, # comments), with no flag required.
+func TestCheckRestoregapIgnoreFileExcludesEntries(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "live")
+	recovery := filepath.Join(dir, "recovery")
+	if err := os.Mkdir(live, 0o700); err != nil {
+		t.Fatalf("mkdir live: %v", err)
+	}
+	if err := os.Mkdir(recovery, 0o700); err != nil {
+		t.Fatalf("mkdir recovery: %v", err)
+	}
+	writeCheckFile(t, live, "a.txt", "a")
+	writeCheckFile(t, live, "cache.tmp", "junk")
+	writeCheckFile(t, recovery, "a.txt", "a")
+	writeCheckFile(t, live, ".restoregapignore", "# comment line\n\n*.tmp\n")
+
+	var out bytes.Buffer
+	cmd := newCheckCmd()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{live, recovery})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected .restoregapignore to exclude cache.tmp, got: %v (%s)", err, out.String())
+	}
+	if !strings.Contains(out.String(), "excluded: 1 entries (patterns: *.tmp)") {
+		t.Errorf("expected excluded summary line naming the file pattern, got:\n%s", out.String())
+	}
+}
+
+// TestCheckExcludePatternMatchingNothingPrintsNoSummaryLine: an --exclude
+// pattern that matches zero entries must not add a summary line the
+// operator then has to explain to themselves.
+func TestCheckExcludePatternMatchingNothingPrintsNoSummaryLine(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "live")
+	recovery := filepath.Join(dir, "recovery")
+	if err := os.Mkdir(live, 0o700); err != nil {
+		t.Fatalf("mkdir live: %v", err)
+	}
+	if err := os.Mkdir(recovery, 0o700); err != nil {
+		t.Fatalf("mkdir recovery: %v", err)
+	}
+	writeCheckFile(t, live, "a.txt", "a")
+	writeCheckFile(t, recovery, "a.txt", "a")
+
+	var out bytes.Buffer
+	cmd := newCheckCmd()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{live, recovery, "--exclude", "*.nonexistent"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected faithful copy, got: %v (%s)", err, out.String())
+	}
+	if strings.Contains(out.String(), "excluded:") {
+		t.Errorf("a pattern matching nothing must not print a summary line, got:\n%s", out.String())
 	}
 }
 

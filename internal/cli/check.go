@@ -2,7 +2,11 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -17,6 +21,7 @@ import (
 // recovery gap.
 func newCheckCmd() *cobra.Command {
 	var format, as, project string
+	var excludeFlags []string
 
 	cmd := &cobra.Command{
 		Use:   "check <live> <recovery>",
@@ -35,7 +40,13 @@ func newCheckCmd() *cobra.Command {
 				kind = copycheck.Detect(live)
 			}
 
-			res, err := copycheck.Compare(live, recovery, kind)
+			excludes, err := loadExcludes(live, excludeFlags)
+			if err != nil {
+				cmd.SilenceUsage = true
+				return &ExitError{Code: 2, Message: err.Error()}
+			}
+
+			res, err := copycheck.Compare(live, recovery, kind, excludes)
 			if err != nil {
 				cmd.SilenceUsage = true
 				return &ExitError{Code: 2, Message: err.Error()}
@@ -61,6 +72,9 @@ func newCheckCmd() *cobra.Command {
 					return &ExitError{Code: 2, Message: err.Error()}
 				}
 			} else {
+				if res.ExcludedCount > 0 {
+					_, _ = fmt.Fprintf(out, "excluded: %d entries (patterns: %s)\n", res.ExcludedCount, strings.Join(excludes, ", "))
+				}
 				_, _ = fmt.Fprint(out, res.Text())
 				if !res.Faithful() {
 					_, _ = fmt.Fprintf(out, "next: turn this into a proof — restoregap drill propose %s\n", live)
@@ -78,7 +92,47 @@ func newCheckCmd() *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "text", "text|json")
 	cmd.Flags().StringVar(&as, "as", "", "force a comparator instead of detecting one")
 	cmd.Flags().StringVar(&project, "project", "", "label this result (for later cross-machine aggregation)")
+	cmd.Flags().StringArrayVar(&excludeFlags, "exclude", nil,
+		"glob pattern to exclude from comparison (repeatable); matched against each entry's relative path. "+
+			"Also read, one pattern per line, from .restoregapignore in <live> if present")
 	return cmd
+}
+
+// loadExcludes combines --exclude flag values with the patterns declared in
+// <live>/.restoregapignore, if that file exists. Flag patterns come first,
+// file patterns second; order only matters for the summary line's
+// provenance, since matching itself is order-independent.
+func loadExcludes(live string, flagPatterns []string) ([]string, error) {
+	filePatterns, err := readIgnoreFile(filepath.Join(live, ".restoregapignore"))
+	if err != nil {
+		return nil, err
+	}
+	if len(flagPatterns) == 0 {
+		return filePatterns, nil
+	}
+	return append(append([]string{}, flagPatterns...), filePatterns...), nil
+}
+
+// readIgnoreFile parses a gitignore-style pattern file: one glob per line,
+// blank lines and lines starting with # ignored. A missing file is not an
+// error — most live roots will not have one.
+func readIgnoreFile(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	var patterns []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		patterns = append(patterns, line)
+	}
+	return patterns, nil
 }
 
 // Self-register so adding a command never edits root.go (the convention noted

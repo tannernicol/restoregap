@@ -48,7 +48,7 @@ func TestFaithfulCopy(t *testing.T) {
 	live := markSecretStore(t, store(t, "a.gpg", "sub/b.gpg"))
 	rec := markSecretStore(t, store(t, "a.gpg", "sub/b.gpg"))
 
-	res, err := Compare(live, rec, KindSecretStore)
+	res, err := Compare(live, rec, KindSecretStore, nil)
 	if err != nil {
 		t.Fatalf("compare: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestMissingFromRecovery(t *testing.T) {
 	live := markSecretStore(t, store(t, "a.gpg", "homelab/restic-password.gpg"))
 	rec := markSecretStore(t, store(t, "a.gpg"))
 
-	res, err := Compare(live, rec, KindSecretStore)
+	res, err := Compare(live, rec, KindSecretStore, nil)
 	if err != nil {
 		t.Fatalf("compare: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestExtraInRecovery(t *testing.T) {
 	live := markSecretStore(t, store(t, "a.gpg"))
 	rec := markSecretStore(t, store(t, "a.gpg", "deleted.gpg"))
 
-	res, err := Compare(live, rec, KindSecretStore)
+	res, err := Compare(live, rec, KindSecretStore, nil)
 	if err != nil {
 		t.Fatalf("compare: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestSecretStoreIgnoresNonEntries(t *testing.T) {
 	live := markSecretStore(t, store(t, "a.gpg", "README.md"))
 	rec := markSecretStore(t, store(t, "a.gpg"))
 
-	res, err := Compare(live, rec, KindSecretStore)
+	res, err := Compare(live, rec, KindSecretStore, nil)
 	if err != nil {
 		t.Fatalf("compare: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestSecretStoreIgnoresNonEntries(t *testing.T) {
 // recovery gap, and must not be mistaken for "nothing to report".
 func TestMissingDirectoryIsAnError(t *testing.T) {
 	live := markSecretStore(t, store(t, "a.gpg"))
-	if _, err := Compare(live, filepath.Join(t.TempDir(), "nope"), KindSecretStore); err == nil {
+	if _, err := Compare(live, filepath.Join(t.TempDir(), "nope"), KindSecretStore, nil); err == nil {
 		t.Error("a missing recovery directory must error, not report faithful")
 	}
 }
@@ -138,7 +138,7 @@ func TestStaleContentIsNotFaithful(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	res, err := Compare(live, rec, KindSecretStore)
+	res, err := Compare(live, rec, KindSecretStore, nil)
 	if err != nil {
 		t.Fatalf("compare: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestStaleContentIsNotFaithful(t *testing.T) {
 func TestIdenticalContentIsFaithful(t *testing.T) {
 	live := markSecretStore(t, store(t, "a.gpg", "sub/b.gpg"))
 	rec := markSecretStore(t, store(t, "a.gpg", "sub/b.gpg"))
-	res, err := Compare(live, rec, KindSecretStore)
+	res, err := Compare(live, rec, KindSecretStore, nil)
 	if err != nil {
 		t.Fatalf("compare: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestLiveOlderIsNotReportedAsStaleRecovery(t *testing.T) {
 		t.Fatalf("chtimes: %v", err)
 	}
 
-	res, err := Compare(live, rec, KindTree)
+	res, err := Compare(live, rec, KindTree, nil)
 	if err != nil {
 		t.Fatalf("compare: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestRecoveryOlderStillBlamesRecovery(t *testing.T) {
 		t.Fatalf("write live: %v", err)
 	}
 
-	res, err := Compare(live, rec, KindTree)
+	res, err := Compare(live, rec, KindTree, nil)
 	if err != nil {
 		t.Fatalf("compare: %v", err)
 	}
@@ -251,5 +251,61 @@ func TestRecoveryOlderStillBlamesRecovery(t *testing.T) {
 	text := res.Text()
 	if !strings.Contains(text, "STALE IN RECOVERY") || !strings.Contains(text, "out of date") {
 		t.Errorf("a genuinely behind backup must still be named as such, got %q", text)
+	}
+}
+
+// TestCompareExcludesDropEntriesFromBothSidesBeforeComparison: an excluded
+// entry must never surface as missing, stale, or only-in-recovery, and must
+// not be counted toward LiveCount/RecoveryCount — the whole point is that a
+// large, expected class of noise (e.g. local config backup snapshots) never
+// reaches the report at all.
+func TestCompareExcludesDropEntriesFromBothSidesBeforeComparison(t *testing.T) {
+	live := store(t, "a.txt", "restoregap.local.yml.bak.1", "restoregap.local.yml.bak.2")
+	rec := store(t, "a.txt")
+
+	res, err := Compare(live, rec, KindTree, []string{"restoregap.local.yml.bak.*"})
+	if err != nil {
+		t.Fatalf("compare: %v", err)
+	}
+	if !res.Faithful() {
+		t.Errorf("excluded-only drift must report faithful, got %+v", res)
+	}
+	if res.LiveCount != 1 || res.RecoveryCount != 1 {
+		t.Errorf("excluded entries must not count toward LiveCount/RecoveryCount, got live=%d recovery=%d", res.LiveCount, res.RecoveryCount)
+	}
+	if res.ExcludedCount != 2 {
+		t.Errorf("ExcludedCount = %d, want 2", res.ExcludedCount)
+	}
+}
+
+// TestEntriesSkipsRestoregapIgnoreFile: .restoregapignore is check's own
+// configuration, not recoverable content — it must never itself show up as
+// an entry (which would otherwise report as permanently missing from every
+// recovery copy that correctly doesn't carry one).
+func TestEntriesSkipsRestoregapIgnoreFile(t *testing.T) {
+	live := store(t, "a.txt", ".restoregapignore")
+	rec := store(t, "a.txt")
+
+	res, err := Compare(live, rec, KindTree, nil)
+	if err != nil {
+		t.Fatalf("compare: %v", err)
+	}
+	if !res.Faithful() {
+		t.Errorf(".restoregapignore must not be compared as content, got %+v", res)
+	}
+}
+
+// TestCompareNoExcludesUnchanged: a nil exclude list must behave exactly as
+// before the feature existed (globmatch.MatchPathAny(nil, ...) is false).
+func TestCompareNoExcludesUnchanged(t *testing.T) {
+	live := store(t, "a.txt", "b.txt")
+	rec := store(t, "a.txt")
+
+	res, err := Compare(live, rec, KindTree, nil)
+	if err != nil {
+		t.Fatalf("compare: %v", err)
+	}
+	if res.Faithful() || len(res.OnlyLive) != 1 || res.ExcludedCount != 0 {
+		t.Errorf("unexcluded run must behave as before, got %+v", res)
 	}
 }

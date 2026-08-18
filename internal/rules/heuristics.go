@@ -35,9 +35,6 @@ var sensitivePathPatterns = []string{
 // explicit context can only tighten, not loosen, what heuristics report.
 type HeuristicRule struct{}
 
-// ID returns the rule's stable identifier, used to attribute a finding.
-func (HeuristicRule) ID() string { return "rules.heuristic" }
-
 // Match reports which heuristic concerns apply to the given change intent.
 func (HeuristicRule) Match(ci intent.ChangeIntent, _ contextspec.Context) []MatchResult {
 	if reason, resource, ok := heuristicConcern(ci); ok {

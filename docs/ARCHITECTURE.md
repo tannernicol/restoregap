@@ -40,8 +40,8 @@ may be redesigned freely. What MUST carry over is **semantics**, not bytes:
    entry — never rewrites — that `Verify` honors only when the anchor's
    recorded `stored_hash` matches the target entry's claimed hash and the
    anchor appears later in the file than the entry it vouches for. A passing
-   verify with anchors present is reported as `OK — N entries (K anchored
-   anomalies: <ids>)`, not silently as a clean chain.
+   verify with anchors present is reported as `OK — N entries (K acknowledged
+   repairs: <ids>)`, not silently as a clean chain.
 5. **Context schema v2 — unified guard model.** Python's change_guards /
    update_guards / command_guards / assurance_contracts / lifeline_artifacts
    collapse into one concept:

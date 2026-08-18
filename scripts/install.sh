@@ -2,7 +2,8 @@
 # install.sh — download the latest Restore Gap release binary for this machine,
 # verify it against the release's checksums.txt, and put it on PATH.
 #
-#   curl -sSfL https://raw.githubusercontent.com/tannernicol/restoregap/main/scripts/install.sh | sh
+#   curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/<tag>/scripts/install.sh
+#   less install.sh && sh install.sh        # read it, then run it — never pipe it into a shell
 #
 # Environment:
 #   RESTOREGAP_VERSION   tag to install (default: latest release)

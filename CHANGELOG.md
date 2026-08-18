@@ -6,6 +6,31 @@ each such change is called out here.
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-08-17
+
+The launch follow-ups, each one traceable to a real run on the author's machine.
+
+- `action.yml`: a composite GitHub Action (`restoregap-preflight`) that
+  installs the release binary, preflights the PR diff against `diff-base`,
+  writes the rendered report to the job summary, and fails the check on
+  `block` (or `warn`, with `fail-on: warn`). See `docs/github-action.md`.
+- Copy: `ledger verify` prints "acknowledged repair(s)" instead of "anchored
+  anomaly/anomalies"; `status` inventory summary line now reads "N of M
+  provably restorable (restores or better) · K boot and serve".
+- `preflight --plan`: evaluate and print the verdict exactly as a normal run,
+  but append nothing to the ledger. A 10-minute readiness timer
+  re-preflighting the same two unexecuted intents wrote ~3,000 identical
+  warn entries in a week — a plan is not a decision.
+- `preflight` renders plain text instead of markdown when stdout is an
+  interactive terminal and `--format` was not given (piped/CI output keeps
+  the markdown default; explicit `--format` always wins).
+- `check --exclude <glob>` (repeatable) and a `.restoregapignore` file
+  (gitignore-style globs, one per line, `#` comments) read from `<live>` when
+  present: matching entries are dropped from both sides before comparison
+  and never counted as missing/stale/only-in-recovery. Found by dogfooding
+  `check` against `~/.config/restoregap`'s own backup: 403 reported
+  "missing" entries, 400 of them `restoregap.local.yml.bak.*` snapshots.
+
 ## [0.9.1] — 2026-08-17
 
 Found by dogfooding on the author's own estate the same day 0.9.0 was cut:

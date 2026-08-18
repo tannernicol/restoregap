@@ -10,3 +10,4 @@ coverage.out
 # pre-publish gate: the identity denylist must never be committed
 .scrub-denylist
 /restoregap-public/
+.gauntlet-steps.log

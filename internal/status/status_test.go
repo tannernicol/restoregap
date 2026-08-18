@@ -263,7 +263,7 @@ func TestInventorySummaryLine(t *testing.T) {
 	now := *t3339(t, "2026-08-20T12:00:00Z")
 	rows := buildInventory(ctx, nil, now)
 	got := inventorySummaryLine(rows)
-	want := "3 of 5 provably restorable (level >= restores); 1 serve"
+	want := "3 of 5 provably restorable (restores or better) · 1 boot and serve"
 	if got != want {
 		t.Errorf("inventorySummaryLine = %q, want %q", got, want)
 	}

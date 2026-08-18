@@ -85,11 +85,12 @@ func TestLedgerAnchorMissingFlagsRefused(t *testing.T) {
 	}
 }
 
-// TestLedgerAnchorAppendsAndVerifyReportsAnomaly: the CLI happy path end to
-// end — anchor a genuinely mismatched entry, then confirm `ledger verify`
-// reports OK with the entry called out as an anchored anomaly, matching the
-// documented "OK — N entries (1 anchored anomaly: <id>)" rendering.
-func TestLedgerAnchorAppendsAndVerifyReportsAnomaly(t *testing.T) {
+// TestLedgerAnchorAppendsAndVerifyReportsAcknowledgedRepair: the CLI happy
+// path end to end — anchor a genuinely mismatched entry, then confirm
+// `ledger verify` reports OK with the entry called out as an acknowledged
+// repair, matching the documented "OK — N entries (1 acknowledged repair:
+// <id>)" rendering.
+func TestLedgerAnchorAppendsAndVerifyReportsAcknowledgedRepair(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.jsonl")
 	id := writeHealthyLedger(t, path)
 	tamperEntryContent(t, path)
@@ -116,8 +117,8 @@ func TestLedgerAnchorAppendsAndVerifyReportsAnomaly(t *testing.T) {
 	if !strings.HasPrefix(got, "OK —") {
 		t.Errorf("verify output = %q, want it to start with %q", got, "OK —")
 	}
-	if !strings.Contains(got, "1 anchored anomaly: "+id) {
-		t.Errorf("verify output = %q, want it to report entry %s as the anchored anomaly", got, id)
+	if !strings.Contains(got, "1 acknowledged repair: "+id) {
+		t.Errorf("verify output = %q, want it to report entry %s as the acknowledged repair", got, id)
 	}
 
 	// A second anchor for the same entry must be refused (anchors are

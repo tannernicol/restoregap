@@ -18,7 +18,7 @@ change them. Not a backup tool, not monitoring, not a compliance dashboard.
 ## Quick start
 
 ```console
-$ curl -sSfL https://raw.githubusercontent.com/tannernicol/restoregap/main/scripts/install.sh | sh   # or go install, below
+$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.9.1/scripts/install.sh && sh install.sh   # pinned tag; verifies checksums
 $ restoregap check proj backup/proj          # zero config, exit 1 on drift — a project and its stale "backup"
 tree: 3 live / 2 recovery — 1 MISSING FROM RECOVERY, 2 STALE IN RECOVERY
   these exist in exactly one place:
@@ -45,7 +45,7 @@ transcript, the intent file, and the ledger: **[docs/walkthrough.md](docs/walkth
 
 | Rung | Command | Claim it lets you make |
 |---|---|---|
-| Drift | `restoregap check <live> <recovery>` | "these entries exist in exactly one place" — zero config, exit 1 on drift |
+| Drift | `restoregap check <live> <recovery>` | "these entries exist in exactly one place" — zero config, exit 1 on drift, `--exclude` (or `.restoregapignore` in `<live>`) drops known-noisy globs before comparing |
 | Proof | `restoregap drill` (+ `drill propose`, `--lint`, `--calibrate`) | "this restored, byte-identically or by typed checks, inside its RTO/RPO budget" |
 | Gate | `restoregap preflight` (intent / diff / Terraform plan) | "this change is refused until that proof exists and is fresh" |
 | Posture | `restoregap status`, `restoregap saves` | guards, proof freshness, ledger health; provable near-misses |
@@ -61,12 +61,14 @@ who wants a report.
 
 ## Install
 
-Linux and macOS, amd64 and arm64, one static binary. The installer downloads
-the latest release, verifies it against the release's `checksums.txt`, and
-puts it in `~/.local/bin` (never sudo):
+Linux and macOS, amd64 and arm64, one static binary. The installer (pinned to
+a tag, so what you read is what runs) downloads the latest release, verifies
+it against the release's `checksums.txt`, and puts it in `~/.local/bin` —
+never sudo, never `curl | sh`:
 
 ```console
-$ curl -sSfL https://raw.githubusercontent.com/tannernicol/restoregap/main/scripts/install.sh | sh
+$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.9.1/scripts/install.sh
+$ less install.sh && sh install.sh
 ```
 
 Or pick an archive from the [releases page](https://github.com/tannernicol/restoregap/releases)

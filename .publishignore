@@ -21,3 +21,6 @@
 #
 # docs/COMPLIANCE_MAP.md   # compliance/framework mapping was cut as off-thesis
 #                          # on local main; still tracked on gitea/main.
+
+# Platform-internal conformance marker (livehost test allowlist), not part of the product.
+.platform-allow-livehost-tests

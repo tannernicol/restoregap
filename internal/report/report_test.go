@@ -79,3 +79,55 @@ func TestMarkdownNoFindings(t *testing.T) {
 		t.Errorf("expected PASS banner and 'No findings.', got:\n%s", md)
 	}
 }
+
+// TestTextHasNoMarkdownSyntax: the whole point of Text is that it is not
+// markdown — no pipe tables, no #/** — so a human at a terminal isn't
+// handed source for a renderer nobody is piping it to.
+func TestTextHasNoMarkdownSyntax(t *testing.T) {
+	rep := FromFindings(sampleFindings(), engine.VerdictBlock, fixedTime, "agent/claude", "")
+	text := string(rep.Text())
+	if strings.Contains(text, "|") {
+		t.Errorf("Text must not contain a pipe table, got:\n%s", text)
+	}
+	if strings.Contains(text, "#") || strings.Contains(text, "**") {
+		t.Errorf("Text must not contain markdown headers/bold, got:\n%s", text)
+	}
+}
+
+// TestTextStartsWithHeadlineThenSummary: verdict headline first, then the
+// summary sentence — same order Markdown's banner uses.
+func TestTextStartsWithHeadlineThenSummary(t *testing.T) {
+	rep := FromFindings(sampleFindings(), engine.VerdictBlock, fixedTime, "agent/claude", "")
+	text := string(rep.Text())
+	if !strings.HasPrefix(text, "BLOCK\n"+summarySentence("block")+"\n") {
+		t.Fatalf("Text must start with the verdict headline then the summary sentence, got:\n%s", text)
+	}
+}
+
+// TestTextNamesGuardResourceProofPerFinding: each finding gets one line
+// naming its guard, resource, and proof status — the information a human
+// needs without a table.
+func TestTextNamesGuardResourceProofPerFinding(t *testing.T) {
+	rep := FromFindings(sampleFindings(), engine.VerdictBlock, fixedTime, "agent/claude", "")
+	text := string(rep.Text())
+	if !strings.Contains(text, "guard") || !strings.Contains(text, "default-ssh-private-keys") {
+		t.Errorf("expected the guard id in the finding line, got:\n%s", text)
+	}
+	if !strings.Contains(text, "resource") || !strings.Contains(text, "~/.ssh/id_ed25519") {
+		t.Errorf("expected the resource in the finding line, got:\n%s", text)
+	}
+	if !strings.Contains(text, "proof") || !strings.Contains(text, "missing") {
+		t.Errorf("expected the proof status in the finding line, got:\n%s", text)
+	}
+	if !strings.Contains(text, "next: declare a guard") {
+		t.Errorf("expected a next: line for the required next step, got:\n%s", text)
+	}
+}
+
+func TestTextNoFindings(t *testing.T) {
+	rep := FromFindings(nil, engine.VerdictPass, fixedTime, "agent/claude", "")
+	text := string(rep.Text())
+	if !strings.HasPrefix(text, "PASS\n") || !strings.Contains(text, "No findings.") {
+		t.Errorf("expected PASS headline and 'No findings.', got:\n%s", text)
+	}
+}

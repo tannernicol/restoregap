@@ -44,19 +44,25 @@ func (r Report) Markdown() []byte {
 func writeBanner(b *strings.Builder, r Report) {
 	verdict := strings.ToUpper(r.Verdict)
 	fmt.Fprintf(b, "# %s\n", verdict)
-	switch r.Verdict {
-	case "block":
-		b.WriteString("Restore Gap blocked this change. Supply proof, change the plan, or record an owner override.\n")
-	case "warn":
-		b.WriteString("Restore Gap found findings that need review before proceeding.\n")
-	default:
-		b.WriteString("Restore Gap found no unresolved recovery risk.\n")
-	}
+	b.WriteString(summarySentence(r.Verdict) + "\n")
 	for _, f := range r.Findings {
 		if f.Verdict == "pass" || f.RequiredNextStep == "" {
 			continue
 		}
 		fmt.Fprintf(b, "- %s\n", f.RequiredNextStep)
+	}
+}
+
+// summarySentence is the one-line verdict explanation shared by every
+// rendering (Markdown's banner, Text's headline, HTML's summary).
+func summarySentence(verdict string) string {
+	switch verdict {
+	case "block":
+		return "Restore Gap blocked this change. Supply proof, change the plan, or record an owner override."
+	case "warn":
+		return "Restore Gap found findings that need review before proceeding."
+	default:
+		return "Restore Gap found no unresolved recovery risk."
 	}
 }
 

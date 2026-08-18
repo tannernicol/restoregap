@@ -546,7 +546,7 @@ func inventorySummaryLine(rows []InventoryRow) string {
 			serving++
 		}
 	}
-	return fmt.Sprintf("%d of %d provably restorable (level >= restores); %d serve", restorable, len(rows), serving)
+	return fmt.Sprintf("%d of %d provably restorable (restores or better) · %d boot and serve", restorable, len(rows), serving)
 }
 
 func processLedger(ledgerPath string, s *Summary) error {

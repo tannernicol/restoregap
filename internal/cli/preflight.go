@@ -2,12 +2,24 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
 	"github.com/tannernicol/restoregap/internal/preflight"
 )
+
+// isTTYStdout reports whether w is an interactive terminal. It is a seam
+// over isatty so tests can force TTY behavior without a real terminal —
+// cmd.OutOrStdout() in tests is a bytes.Buffer, which is correctly never a
+// TTY, so most tests get the non-TTY path for free; forcing the TTY path
+// means overriding this var directly.
+var isTTYStdout = func(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && isatty.IsTerminal(f.Fd())
+}
 
 // newPreflightCmd defines the frozen preflight flag surface. Every flag here is
 // load-bearing for external callers (git hooks, ~/bin guarded-update wrappers,
@@ -24,6 +36,15 @@ func newPreflightCmd() *cobra.Command {
 			// "use the built-in zero-config default policy", so no extra
 			// fallback logic is needed here.
 			req.ContextPaths = discoverContextPaths(cmd, req.ContextPaths)
+
+			// A human at an interactive terminal did not ask for markdown
+			// source — render plain text instead, unless they explicitly
+			// picked a format with --format. Piped/redirected/CI output
+			// (agents, MCP, scripts) keeps the existing md default so
+			// nothing that parses this output today breaks.
+			if !cmd.Flags().Changed("format") && isTTYStdout(cmd.OutOrStdout()) {
+				req.Format = "text"
+			}
 
 			ledgerPath, defaulted, err := resolveLedger(req.LedgerPath)
 			if err != nil {
@@ -67,6 +88,7 @@ func newPreflightCmd() *cobra.Command {
 	f.StringVar(&req.Format, "format", "md", "output format: json, md, or html")
 	f.StringVar(&req.OutPath, "out", "", "write the report to this path (- for stdout)")
 	f.BoolVar(&req.FailOnWarn, "fail-on-warn", false, "exit non-zero on warnings, not just blocks")
+	f.BoolVar(&req.Plan, "plan", false, "evaluate without recording — for readiness probes and dry runs; a plan is not a decision")
 	f.StringVar(&req.AsOf, "as-of", "", "evaluate proof freshness as of this RFC3339 time instead of now")
 	return cmd
 }

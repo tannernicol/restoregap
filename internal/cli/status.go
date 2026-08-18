@@ -163,16 +163,17 @@ func ledgerArg(args []string) (string, error) {
 // renderVerifyOK renders a passing VerifyResult. A chain with anchored
 // anomalies is still OK (each mismatch was vouched for by an owner-approved
 // chain_anchor entry — see docs/ARCHITECTURE.md) but that fact is not
-// hidden: the anchored entry ids are called out on the same line.
+// hidden: the anchored entry ids are called out on the same line as
+// acknowledged repairs.
 func renderVerifyOK(res ledger.VerifyResult) string {
 	if len(res.AnchoredAnomalies) == 0 {
 		return fmt.Sprintf("OK: %d entries, chain verified (last hash %s)", res.EntryCount, res.LastHash)
 	}
-	noun := "anomaly"
+	noun := "repair"
 	if len(res.AnchoredAnomalies) != 1 {
-		noun = "anomalies"
+		noun = "repairs"
 	}
-	return fmt.Sprintf("OK — %d entries (%d anchored %s: %s)",
+	return fmt.Sprintf("OK — %d entries (%d acknowledged %s: %s)",
 		res.EntryCount, len(res.AnchoredAnomalies), noun, strings.Join(res.AnchoredAnomalies, ", "))
 }
 

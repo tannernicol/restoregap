@@ -15,7 +15,9 @@ merged no matter how well it is done:
 - **Nothing that turns `preflight` into a warning.** It is a gate. A recovery
   gap blocks or it is not a gap.
 - **No new configuration for `check`.** Its entire value is that it takes two
-  paths and needs nothing else.
+  paths and needs nothing else. `--exclude` / `.restoregapignore` is the one
+  filter it has (a real config dir drowns in `.bak` snapshots without it) and
+  it should stay the only one.
 
 Ideas outside those lines are still worth an issue — just open the discussion
 before the pull request.

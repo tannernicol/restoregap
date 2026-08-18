@@ -99,7 +99,7 @@ func TestDetectArtifactTypeByteIdentical(t *testing.T) {
 
 func TestDetectArtifactTypeGitWorktree(t *testing.T) {
 	dir := t.TempDir()
-	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+	if out, err := gitCmd("init", dir).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	if kind, err := DetectArtifactType(dir); err != nil || kind != "git" {
@@ -109,7 +109,7 @@ func TestDetectArtifactTypeGitWorktree(t *testing.T) {
 
 func TestDetectArtifactTypeGitBare(t *testing.T) {
 	dir := t.TempDir()
-	if out, err := exec.Command("git", "init", "--bare", dir).CombinedOutput(); err != nil {
+	if out, err := gitCmd("init", "--bare", dir).CombinedOutput(); err != nil {
 		t.Fatalf("git init --bare: %v: %s", err, out)
 	}
 	if kind, err := DetectArtifactType(dir); err != nil || kind != "git" {
@@ -226,7 +226,7 @@ func TestProposeSQLiteCapsAtEightTables(t *testing.T) {
 
 func TestProposeGit(t *testing.T) {
 	dir := t.TempDir()
-	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+	if out, err := gitCmd("init", dir).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	gitCommit(t, dir, "a.txt", "hello")
@@ -452,10 +452,19 @@ func gitCommit(t *testing.T, dir, name, content string) {
 		{"-C", dir, "add", name},
 		{"-C", dir, "-c", "user.email=test@example.invalid", "-c", "user.name=test", "commit", "-m", "fixture"},
 	} {
-		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+		if out, err := gitCmd(args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
+}
+
+// gitCmd runs git hermetically: the developer's global/system git config
+// (core.hooksPath with a commit-msg policy hook, signing, templates) must not
+// reach a test fixture.
+func gitCmd(args ...string) *exec.Cmd {
+	cmd := exec.Command("git", args...)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	return cmd
 }
 
 func sqlTableName(i int) string {
