@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package ui exposes the built design-system assets for go:embed inlining
 // into self-contained artifact pages. dist/ is committed so `go build`
 // never requires a Node toolchain; rebuild with `npm run build` + commit

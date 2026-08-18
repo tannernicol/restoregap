@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: MIT */
+/* SPDX-FileCopyrightText: 2026 Tanner Nicol */
+
 /* restoregap design tokens. Dark is the default theme; light exists for
    print and evidence recipients. The explicit [data-theme] attribute (set by
    the toggle, persisted as localStorage "rg-theme") always wins over the OS

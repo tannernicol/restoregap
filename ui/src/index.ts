@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 import "./tokens.css";
 import "./components.css";
 // Recovery-graph styles ride in the shared stylesheet (a few KB); the graph

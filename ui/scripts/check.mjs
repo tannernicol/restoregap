@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Post-build verification: the dist contract internal/report embeds.
 import { readFileSync, statSync } from "node:fs";
 import { resolve, dirname } from "node:path";

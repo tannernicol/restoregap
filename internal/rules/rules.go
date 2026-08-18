@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package rules matches normalized change intents against a contextspec
 // guard set and turns the result into engine.Findings. It is the "guard
 // matching" and "zero-config lifeline rule" component named in

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 /*
  * Restore Gap - interactive recovery-graph renderer (self-contained, no deps).
  *

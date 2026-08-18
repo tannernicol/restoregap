@@ -41,11 +41,26 @@ before the pull request.
 ```console
 $ go test ./...
 $ go vet ./... && gofmt -l .
+$ make reuse-lint
 ```
 
 Keep pull requests to one change. Tests live next to the code they cover;
 golden fixtures under `testdata/`. Commit messages say *why*, not just what.
 The demo gif is regenerated with `make demo` (needs `vhs`); do not hand-edit
 it.
+
+New source files carry two SPDX lines at the top (any comment style the
+language has):
+
+```go
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+```
+
+Files that cannot carry comments — generated output, golden fixtures, images,
+JSON, platform-managed files — are declared in `REUSE.toml` instead.
+`make reuse-lint` checks the lot (REUSE spec; it skips with a notice if the
+`reuse` tool is not installed — see the pinned install line in the
+`Makefile`).
 
 MIT licensed; by contributing you agree your contribution is too.

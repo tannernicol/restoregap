@@ -24,3 +24,9 @@
 
 # Platform-internal conformance marker (livehost test allowlist), not part of the product.
 .platform-allow-livehost-tests
+
+# Internal launch tooling: readiness bars and probes for OUR launch, not the
+# product. launch-bar.sh's grep patterns literally contain the identity
+# strings the scrub gate hunts (found 2026-08-18 when an export FAILed on it).
+LAUNCH_BAR.md
+scripts/launch-bar.sh

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package globmatch implements a small, dependency-free glob matcher shared
 // by contextspec guard matching and the rule engine. It supports two modes:
 //

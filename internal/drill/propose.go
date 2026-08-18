@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // propose.go generates a draft drills: entry from a LIVE artifact instead of
 // requiring one to be hand-authored. Type detection, invariants, and budgets
 // are all derivable by measuring the artifact directly — only the recover

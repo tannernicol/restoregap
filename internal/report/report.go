@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package report renders a preflight evaluation as JSON or Markdown. It is
 // a pure formatting layer: it takes already-decided engine.Findings and
 // produces bytes, performing no evaluation and no I/O of its own (callers

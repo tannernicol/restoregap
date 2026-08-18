@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package engine is the pure decision core of restoregap: it maps normalized
 // change intents, declared recovery context, and proof state to verdicts.
 // It performs no I/O; adapters normalize inputs and the ledger records outputs.

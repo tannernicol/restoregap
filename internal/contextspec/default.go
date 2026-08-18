@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 package contextspec
 
 // DefaultOrigin labels findings produced under the zero-config path.

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 # publish-export.sh — build the public tree from this private repo.
 #
 # The public repo is an EXPORT, not this repo with a flipped visibility switch.

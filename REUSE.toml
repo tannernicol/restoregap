@@ -1,0 +1,87 @@
+# REUSE.toml — SPDX coverage for files that cannot carry in-file headers.
+#
+# Hand-authored source (Go, shell, TS/JS, CSS, HTML, YAML, Makefile, go.mod)
+# carries its own `SPDX-License-Identifier` / `SPDX-FileCopyrightText` lines.
+# Everything below is covered here instead, grouped by the reason it cannot be
+# annotated in place. License text for MIT lives in LICENSES/MIT.txt.
+
+version = 1
+
+# Platform-managed files: `.gitea/workflows/verify.yml` is a byte-identical
+# copy diffed by `platform-conform` against the shared source of truth, and
+# `.platform-*` are single-value files parsed by platform tooling. Editing
+# either would drift them; they are declared here instead.
+[[annotations]]
+path = [
+  ".gitea/workflows/verify.yml",
+  ".platform-gate",
+  ".platform-kind",
+  ".platform-module-exempt",
+  ".platform-sdk-ref",
+]
+SPDX-FileCopyrightText = "2026 Tanner Nicol"
+SPDX-License-Identifier = "MIT"
+
+# Dotfiles consumed by line-oriented parsers (publish-export.sh reads
+# .publishignore line by line; the scrub gate reads denylist-shaped files).
+[[annotations]]
+path = [
+  ".gitignore",
+  ".publishignore",
+  ".scrub-denylist.example",
+]
+SPDX-FileCopyrightText = "2026 Tanner Nicol"
+SPDX-License-Identifier = "MIT"
+
+# Markdown has no comment syntax REUSE can read.
+[[annotations]]
+path = [
+  "*.md",
+  "docs/*.md",
+  "ui/*.md",
+]
+SPDX-FileCopyrightText = "2026 Tanner Nicol"
+SPDX-License-Identifier = "MIT"
+
+# Binaries and images.
+[[annotations]]
+path = [
+  "*.gif",
+  "*.ico",
+  "*.png",
+  "*.svg",
+  "demo/demo.gif",
+  "ui/mark.svg",
+]
+SPDX-FileCopyrightText = "2026 Tanner Nicol"
+SPDX-License-Identifier = "MIT"
+
+# JSON cannot carry comments; package-lock.json is generated.
+[[annotations]]
+path = [
+  "ui/package.json",
+  "ui/package-lock.json",
+  "ui/tsconfig.json",
+]
+SPDX-FileCopyrightText = "2026 Tanner Nicol"
+SPDX-License-Identifier = "MIT"
+
+# Generated files: go.sum and package-lock.json are tool output; ui/dist is
+# committed build product (rebuilt with `npm run build`, see ui/ui.go).
+[[annotations]]
+path = [
+  "go.sum",
+  "ui/dist/**",
+]
+SPDX-FileCopyrightText = "2026 Tanner Nicol"
+SPDX-License-Identifier = "MIT"
+
+# Golden fixtures: byte-compared test vectors and demo tape input that must
+# not drift from what the CLI actually produces.
+[[annotations]]
+path = [
+  "demo/demo.tape",
+  "testdata/**",
+]
+SPDX-FileCopyrightText = "2026 Tanner Nicol"
+SPDX-License-Identifier = "MIT"

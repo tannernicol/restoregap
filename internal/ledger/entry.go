@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package ledger implements the v2 append-only decision ledger: hash-chained
 // JSONL, ULID entry ids, typed payloads (no map[string]any in the domain
 // model — only at the JSON serialization boundary). docs/ARCHITECTURE.md §5.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package preflight orchestrates a preflight run: load context (or the
 // zero-config default), parse the proposed change (intent YAML or diff),
 // evaluate the engine, resolve/record ledger overrides and decisions, and

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package status summarizes the recovery chain: declared guards, proof
 // freshness, and ledger health — the "am I still recoverable?" view.
 package status

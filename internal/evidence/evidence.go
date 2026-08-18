@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package evidence records recovery proofs and exports framework-scoped
 // evidence packets — the money surface: restore drills become artifacts an
 // underwriter or auditor can accept.

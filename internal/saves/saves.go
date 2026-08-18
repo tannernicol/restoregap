@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package saves reconstructs, from the ledger, the times a gate actually
 // changed an outcome.
 //

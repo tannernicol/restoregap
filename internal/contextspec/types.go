@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package contextspec implements the restoregap.yml / restoregap.local.yml
 // v2 schema: a single unified `guards` concept (lifeline | guard) replacing
 // the Python schema's five separate guard/contract lists, plus `facts` and

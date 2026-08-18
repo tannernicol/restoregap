@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 # scrub-check.sh — pre-publish gate. Run before any push to a public remote.
 #
 # Checks THREE independent classes of leak. An identity-only scan is not

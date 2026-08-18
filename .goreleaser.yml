@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 # Release build for the restoregap CLI.
 #
 # WHY THIS FILE EXISTS (added 2026-08-12):
@@ -35,6 +38,12 @@ builds:
       # This is the whole point of the file: without -X the binary ships as
       # 0.0.0-dev no matter what tag built it.
       - -s -w -X github.com/tannernicol/restoregap/internal/cli.Version={{.Version}}
+    # Reproducible builds: with -trimpath (no absolute paths), -s -w (no
+    # symbol table/buildinfo variance) and a pinned modtimestamp, two builds of
+    # the same commit produce byte-identical archives — the checksums and the
+    # SBOMs below then mean something stable, and anyone can rebuild a release
+    # binary and check it against checksums.txt themselves.
+    mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
   - id: default
@@ -44,8 +53,51 @@ archives:
       - LICENSE
       - README.md
 
+# SBOM per archive, in the two formats consumers actually feed tools: SPDX-json
+# (license/REUSE-side tooling) and CycloneDX (dependency/supply-chain scanners).
+# goreleaser shells out to `syft` — it must already be on PATH on the release
+# runner; goreleaser never installs it (PLATFORM.md §3: no tool is fetched at
+# gate time). If syft is absent the release FAILS rather than silently shipping
+# archives with no SBOM.
+sboms:
+  - id: archive-spdx
+    artifacts: archive
+    cmd: syft
+    args: ["$artifact", "--output", "spdx-json=$document"]
+    documents: ["${artifact}.spdx.json"]
+  - id: archive-cyclonedx
+    artifacts: archive
+    cmd: syft
+    args: ["$artifact", "--output", "cyclonedx-json=$document"]
+    documents: ["${artifact}.cdx.json"]
+
 checksum:
   name_template: checksums.txt
+
+# Signing is COMMENTED OUT ON PURPOSE, not forgotten: keyless cosign needs the
+# OIDC identity of the release actor (the workflow token at tag time). This
+# repo releases from a self-hosted runner whose identity nobody has agreed to
+# trust yet — enabling this now would either hard-fail the release or sign
+# with an identity that gives false assurance. UNCOMMENT AT PUBLIC LAUNCH, in
+# the same commit that flips the repo public and pins the runner identity.
+# Requires cosign on PATH (same no-fetch rule as syft above).
+#
+# signs:
+#   - cmd: cosign
+#     # Sign checksums.txt, not each archive: one signature then covers every
+#     # artifact named in it, SBOMs included.
+#     artifacts: checksum
+#     output: true
+#     signature: "${artifact}.sig"
+#     certificate: "${artifact}.pem"
+#     args:
+#       - sign-blob
+#       - --yes
+#       - --output-signature
+#       - "${signature}"
+#       - --output-certificate
+#       - "${certificate}"
+#       - "${artifact}"
 
 snapshot:
   # Local proof builds are labelled so a snapshot can never be mistaken for a

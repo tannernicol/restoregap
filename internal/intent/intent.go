@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package intent defines the normalized ChangeIntent domain type and the
 // parsers that produce it: action-intent YAML and unified diffs. It has no
 // dependencies beyond the standard library and is imported by internal/rules

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package mcpserver exposes restoregap to agents over MCP (newline-delimited
 // JSON-RPC 2.0 on stdio). The seven capabilities ported from the Python
 // server — preflight_intent, preflight_diff, acknowledge_risk,

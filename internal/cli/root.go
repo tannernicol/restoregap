@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package cli builds the restoregap command tree. It maps flags to request
 // structs and dispatches to internal packages — no business logic lives here.
 package cli

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 package engine
 
 // Overall reduces a finding set to a single top-level verdict: any block

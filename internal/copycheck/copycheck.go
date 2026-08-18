@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package copycheck compares a live location against its recovery copy and
 // reports what exists in exactly one place.
 //

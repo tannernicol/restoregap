@@ -2,6 +2,7 @@
 
 **Prove your recovery works — then refuse the risky change until it does.**
 
+[![ci](https://github.com/tannernicol/restoregap/actions/workflows/ci.yml/badge.svg)](https://github.com/tannernicol/restoregap/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/tannernicol/restoregap?include_prereleases&label=release)](https://github.com/tannernicol/restoregap/releases)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![go](https://img.shields.io/github/go-mod/go-version/tannernicol/restoregap)](go.mod)
@@ -18,7 +19,7 @@ change them. Not a backup tool, not monitoring, not a compliance dashboard.
 ## Quick start
 
 ```console
-$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.9.1/scripts/install.sh && sh install.sh   # pinned tag; verifies checksums
+$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.9.2/scripts/install.sh && sh install.sh   # pinned tag; verifies checksums
 $ restoregap check proj backup/proj          # zero config, exit 1 on drift — a project and its stale "backup"
 tree: 3 live / 2 recovery — 1 MISSING FROM RECOVERY, 2 STALE IN RECOVERY
   these exist in exactly one place:
@@ -67,7 +68,7 @@ it against the release's `checksums.txt`, and puts it in `~/.local/bin` —
 never sudo, never `curl | sh`:
 
 ```console
-$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.9.1/scripts/install.sh
+$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.9.2/scripts/install.sh
 $ less install.sh && sh install.sh
 ```
 
@@ -75,6 +76,12 @@ Or pick an archive from the [releases page](https://github.com/tannernicol/resto
 yourself, or build from source: `go install github.com/tannernicol/restoregap/cmd/restoregap@latest`
 (Go 1.25+). Windows is one line in `.goreleaser.yml` once someone who runs it
 there asks.
+
+Every release ships a `checksums.txt` next to the archives — verify before you
+run anything: `sha256sum -c checksums.txt --ignore-missing`. Each archive also
+carries SBOMs (`*.spdx.json`, `*.cdx.json`), and the build is reproducible
+(`-trimpath`, pinned module timestamps), so a rebuild of the same tag matches
+its checksum.
 
 ## For agents (Claude Code, Codex, …)
 

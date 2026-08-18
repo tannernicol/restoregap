@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package drill proves a recovery by performing it.
 //
 // Every other signal in this tool is an assertion that someone looked. A drill

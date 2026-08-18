@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 version: 2
 # Worked example for docs/drill-authoring.md: ssh keys restored from a
 # generic recovery kit. Every path here is fake (/home/user/..., /backups/...)

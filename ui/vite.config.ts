@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 import { defineConfig } from "vite";
 
 // Builds exactly the artifacts internal/report inlines into self-contained

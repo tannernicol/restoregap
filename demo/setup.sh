@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 # demo/setup.sh — build the small fixture the README demo runs against.
 #
 # A live project with three files and a "backup" of it that quietly went

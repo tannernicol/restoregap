@@ -1,0 +1,21 @@
+# Portable CI: the subset of the platform gauntlet that runs anywhere.
+# Exists for the same reason gitleaks/ntfy carry a tests badge: a stranger's
+# first trust signal is a green check that ran on someone else's machine.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race ./...
