@@ -18,12 +18,12 @@ func newPreflightCmd() *cobra.Command {
 		Use:   "preflight",
 		Short: "Gate a proposed change on declared recovery invariants and proofs",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// discoverContext leaves req.ContextPath ("" from the flag,
-			// unless --context was passed) as "" when nothing is
-			// discoverable — preflight.Run already treats that as "use the
-			// built-in zero-config default policy", so no extra fallback
-			// logic is needed here.
-			req.ContextPath = discoverContext(cmd, req.ContextPath)
+			// discoverContextPaths leaves req.ContextPaths (nil from the
+			// flag, unless --context was passed at least once) nil when
+			// nothing is discoverable — preflight.Run already treats that as
+			// "use the built-in zero-config default policy", so no extra
+			// fallback logic is needed here.
+			req.ContextPaths = discoverContextPaths(cmd, req.ContextPaths)
 
 			ledgerPath, defaulted, err := resolveLedger(req.LedgerPath)
 			if err != nil {
@@ -58,7 +58,7 @@ func newPreflightCmd() *cobra.Command {
 	f.StringVar(&req.DiffPath, "diff", "", "path to a unified diff to preflight (- for stdin)")
 	f.StringVar(&req.DiffRoot, "diff-root", "", "repo root to resolve repo-relative diff paths against (git emits relative paths; guards are absolute)")
 	f.StringVar(&req.IntentPath, "intent", "", "path to an action-intent YAML file")
-	f.StringVar(&req.ContextPath, "context", "", "path to restoregap.yml / restoregap.local.yml (omit for built-in default policy; "+contextDiscoveryHelp+")")
+	f.StringArrayVar(&req.ContextPaths, "context", nil, "path to restoregap.yml / restoregap.local.yml (omit for built-in default policy; "+contextDiscoveryHelpRepeatable+")")
 	f.StringVar(&req.LedgerPath, "ledger", "", "path to the append-only decision ledger (JSONL); "+ledgerDiscoveryHelp)
 	f.StringVar(&req.Actor, "actor", "", "acting identity, e.g. agent/claude")
 	f.StringVar(&req.IntentActor, "intent-actor", "", "actor recorded inside the intent, if different")

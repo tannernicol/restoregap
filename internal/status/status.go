@@ -58,10 +58,6 @@ type Summary struct {
 	// InventorySummary is the "N of M provably restorable" line printed
 	// under the table. Empty when Inventory is empty.
 	InventorySummary string
-	// Warnings are one-line, printed-to-stderr-by-the-caller notices about
-	// the gather itself — currently just cross-context duplicate ids
-	// (see mergeContexts). Never part of the rendered report.
-	Warnings []string
 }
 
 // InventoryRow is one declared drill's earned recovery level
@@ -166,9 +162,12 @@ func Gather(req Request) (*Summary, error) {
 	if err != nil {
 		return nil, err
 	}
-	merged, warnings := mergeContexts(loaded)
+	merged, err := loadMerged(req.ContextPaths)
+	if err != nil {
+		return nil, err
+	}
 
-	s := &Summary{Verdict: "pass", Origin: joinOrigins(loaded), GeneratedAt: now, LedgerOK: true, Warnings: warnings}
+	s := &Summary{Verdict: "pass", Origin: merged.Origin, GeneratedAt: now, LedgerOK: true}
 	s.Lifelines, s.Guards = countLifelinesAndGuards(merged)
 
 	if len(req.ContextPaths) == 0 {
@@ -228,76 +227,22 @@ func getContexts(paths []string) ([]loadedContext, error) {
 	return out, nil
 }
 
-// joinOrigins renders the "Context" line. A single loaded context (the
-// zero- and one-path cases) uses its own Origin unchanged — the exact
-// string Load/Default already produced — so that line stays byte-identical
-// to before multi-context existed; more than one path joins them.
-func joinOrigins(loaded []loadedContext) string {
-	if len(loaded) == 1 {
-		return loaded[0].ctx.Origin
+// loadMerged loads and merges every declared context path via
+// contextspec.LoadAll — the single source of truth for cross-file merge
+// semantics (union of guards/facts/proofs/drills; a duplicate id across
+// files is an error naming both, never a silent last-loaded-wins) — or the
+// built-in zero-config default when none are declared. getContexts's own
+// per-path loop stays separate: it exists for drillSourceFiles's per-file
+// provenance, which a merged Context deliberately does not carry.
+func loadMerged(paths []string) (contextspec.Context, error) {
+	if len(paths) == 0 {
+		return contextspec.Default(), nil
 	}
-	origins := make([]string, len(loaded))
-	for i, lc := range loaded {
-		origins[i] = lc.ctx.Origin
+	ctx, err := contextspec.LoadAll(paths)
+	if err != nil {
+		return contextspec.Context{}, fmt.Errorf("status: %w", err)
 	}
-	return strings.Join(origins, ", ")
-}
-
-// mergeContexts combines every loaded context's guards/facts/proofs/drills
-// into one. contextspec.Parse already enforces id uniqueness WITHIN a
-// single file; nothing enforces it ACROSS files. When the same id appears
-// in more than one, the last-loaded file wins and a warning is returned —
-// silently merging two different declarations under one id would hide
-// exactly the kind of drift (a stale copy-pasted proof block, two timers
-// racing to own the same drill) this is here to catch.
-func mergeContexts(loaded []loadedContext) (contextspec.Context, []string) {
-	var merged contextspec.Context
-	var warnings []string
-
-	guardAt := map[string]int{}
-	factAt := map[string]int{}
-	proofAt := map[string]int{}
-	drillAt := map[string]int{}
-
-	for _, lc := range loaded {
-		for _, g := range lc.ctx.Guards {
-			if i, dup := guardAt[g.ID]; dup {
-				warnings = append(warnings, dupWarning("guard", g.ID, lc.path))
-				merged.Guards[i] = g
-				continue
-			}
-			guardAt[g.ID] = len(merged.Guards)
-			merged.Guards = append(merged.Guards, g)
-		}
-		for _, f := range lc.ctx.Facts {
-			if i, dup := factAt[f.ID]; dup {
-				warnings = append(warnings, dupWarning("fact", f.ID, lc.path))
-				merged.Facts[i] = f
-				continue
-			}
-			factAt[f.ID] = len(merged.Facts)
-			merged.Facts = append(merged.Facts, f)
-		}
-		for _, p := range lc.ctx.Proofs {
-			if i, dup := proofAt[p.ID]; dup {
-				warnings = append(warnings, dupWarning("proof", p.ID, lc.path))
-				merged.Proofs[i] = p
-				continue
-			}
-			proofAt[p.ID] = len(merged.Proofs)
-			merged.Proofs = append(merged.Proofs, p)
-		}
-		for _, d := range lc.ctx.Drills {
-			if i, dup := drillAt[d.Proof]; dup {
-				warnings = append(warnings, dupWarning("drill", d.Proof, lc.path))
-				merged.Drills[i] = d
-				continue
-			}
-			drillAt[d.Proof] = len(merged.Drills)
-			merged.Drills = append(merged.Drills, d)
-		}
-	}
-	return merged, warnings
+	return ctx, nil
 }
 
 // drillSourceFiles maps each declared drill's proof id to the context file
@@ -314,13 +259,6 @@ func drillSourceFiles(loaded []loadedContext) map[string]string {
 		}
 	}
 	return sources
-}
-
-func dupWarning(kind, id, path string) string {
-	if path == "" {
-		path = "the built-in default policy"
-	}
-	return fmt.Sprintf("status: duplicate %s id %q in %s — last-loaded wins, not merged", kind, id, path)
 }
 
 func countLifelinesAndGuards(ctx contextspec.Context) (int, int) {

@@ -313,9 +313,6 @@ func TestGatherAggregatesMultipleContexts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Gather: %v", err)
 	}
-	if len(s.Warnings) != 0 {
-		t.Errorf("no duplicates across these two files, expected no warnings, got %v", s.Warnings)
-	}
 	if len(s.Inventory) != 2 {
 		t.Fatalf("got %d inventory rows, want 2 (one per file's drill): %+v", len(s.Inventory), s.Inventory)
 	}
@@ -365,7 +362,7 @@ proofs:
 	}
 }
 
-func TestGatherDuplicateProofIDWarnsAndLastLoadedWins(t *testing.T) {
+func TestGatherDuplicateProofIDAcrossFilesErrors(t *testing.T) {
 	dir := t.TempDir()
 	pathA := writeContextFile(t, dir, "a.yml", `version: 2
 proofs:
@@ -381,24 +378,12 @@ proofs:
     verified: true
 `)
 
-	s, err := Gather(Request{ContextPaths: []string{pathA, pathB}, AsOf: "2026-08-20T12:00:00Z"})
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
+	_, err := Gather(Request{ContextPaths: []string{pathA, pathB}, AsOf: "2026-08-20T12:00:00Z"})
+	if err == nil {
+		t.Fatal("expected an error for a duplicate proof id across files, not a silent merge")
 	}
-	if len(s.Warnings) != 1 {
-		t.Fatalf("got %d warnings, want 1: %v", len(s.Warnings), s.Warnings)
-	}
-	w := s.Warnings[0]
-	if !strings.Contains(w, "shared-proof") || !strings.Contains(w, "last-loaded wins") {
-		t.Errorf("unexpected warning text: %q", w)
-	}
-	if !strings.Contains(w, pathB) {
-		t.Errorf("warning should name the file it kept (last-loaded, %s), got %q", pathB, w)
-	}
-	// last-loaded (b.yml, verified) must be the one that survived — not a
-	// silent merge of both declarations.
-	if len(s.Proofs) != 1 || s.Proofs[0].Status != "present" {
-		t.Fatalf("unexpected merged proofs: %+v", s.Proofs)
+	if !strings.Contains(err.Error(), "shared-proof") || !strings.Contains(err.Error(), pathA) || !strings.Contains(err.Error(), pathB) {
+		t.Errorf("error should name the id and both files, got %q", err.Error())
 	}
 }
 
@@ -416,9 +401,6 @@ func TestGatherSingleContextByteIdenticalToPreMultiContext(t *testing.T) {
 	if s.Origin != path {
 		t.Errorf("Origin = %q, want exactly %q (no joining/formatting for a single file)", s.Origin, path)
 	}
-	if len(s.Warnings) != 0 {
-		t.Errorf("a single file can never produce a cross-file duplicate warning, got %v", s.Warnings)
-	}
 	if len(s.Inventory) != 1 || s.Inventory[0].Proof != "vault-recovery" {
 		t.Fatalf("unexpected inventory: %+v", s.Inventory)
 	}
@@ -434,8 +416,5 @@ func TestGatherZeroContextsUsesBuiltInDefault(t *testing.T) {
 	}
 	if s.Verdict != "warn" {
 		t.Errorf("Verdict = %q, want warn (zero-config: nothing is provable yet)", s.Verdict)
-	}
-	if len(s.Warnings) != 0 {
-		t.Errorf("unexpected warnings on the default policy: %v", s.Warnings)
 	}
 }

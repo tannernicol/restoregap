@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/tannernicol/restoregap/internal/discovery"
 )
 
 // contextDiscoveryHelp documents the fallback order applied whenever
@@ -13,18 +16,27 @@ import (
 // the order never drifts out of sync with discoverContext below.
 const contextDiscoveryHelp = "discovery order when omitted: $RESTOREGAP_CONTEXT, then ./restoregap.local.yml, then ./restoregap.yml"
 
+// contextDiscoveryHelpRepeatable is contextDiscoveryHelp's variant for the
+// repeatable-context commands (preflight, status): $RESTOREGAP_CONTEXT may
+// itself hold a colon-separated list, and every loaded file's guards/proofs
+// are merged rather than the single-file replace-only semantics of the
+// write commands.
+const contextDiscoveryHelpRepeatable = "repeatable; also $RESTOREGAP_CONTEXT may hold a colon-separated list — " +
+	"proofs and guards from every file are merged, duplicate ids are an error"
+
 // ledgerDiscoveryHelp documents the fallback order applied whenever --ledger
 // is omitted, for reuse in --help text.
 const ledgerDiscoveryHelp = "discovery order when omitted: $RESTOREGAP_LEDGER, then $XDG_STATE_HOME/restoregap/ledger.jsonl, then ~/.local/state/restoregap/ledger.jsonl"
 
-// discoverContext resolves a --context flag value. If explicit is non-empty
-// it is returned unchanged (and silently — an explicitly passed context is
-// never announced). Otherwise it tries, in order: $RESTOREGAP_CONTEXT, then
-// ./restoregap.local.yml, then ./restoregap.yml relative to the current
-// working directory. It returns "" when none of those resolves to anything,
-// leaving the caller to decide what "no context" means for it (the built-in
-// zero-config default policy for status/preflight, or a hard refusal for
-// commands with no such fallback).
+// discoverContext resolves a single --context flag value. If explicit is
+// non-empty it is returned unchanged (and silently — an explicitly passed
+// context is never announced). Otherwise it tries, in order:
+// $RESTOREGAP_CONTEXT (taking the first entry if it holds a colon-separated
+// list), then ./restoregap.local.yml, then ./restoregap.yml relative to the
+// current working directory. It returns "" when none of those resolves to
+// anything, leaving the caller to decide what "no context" means for it
+// (the built-in zero-config default policy for status/preflight, or a hard
+// refusal for commands with no such fallback).
 //
 // Whenever a context is found by discovery — never when the caller passed
 // --context explicitly — exactly one line is printed to stderr naming it,
@@ -33,17 +45,30 @@ func discoverContext(cmd *cobra.Command, explicit string) string {
 	if explicit != "" {
 		return explicit
 	}
-	if v := os.Getenv("RESTOREGAP_CONTEXT"); v != "" {
-		announceDiscovery(cmd, "context", v)
-		return v
+	paths := discovery.ContextPaths()
+	if len(paths) == 0 {
+		return ""
 	}
-	for _, candidate := range []string{"restoregap.local.yml", "restoregap.yml"} {
-		if isRegularFile(candidate) {
-			announceDiscovery(cmd, "context", candidate)
-			return candidate
-		}
+	announceDiscovery(cmd, "context", paths[0])
+	return paths[0]
+}
+
+// discoverContextPaths is discoverContext for the repeatable-context
+// commands (preflight, status): explicit, when non-empty, is returned
+// unchanged and silently; otherwise every path discovery.ContextPaths()
+// finds is returned (which may be more than one, from a colon-separated
+// $RESTOREGAP_CONTEXT), announced as a single joined line so a multi-file
+// run's provenance is as visible as a single-file one's.
+func discoverContextPaths(cmd *cobra.Command, explicit []string) []string {
+	if len(explicit) > 0 {
+		return explicit
 	}
-	return ""
+	paths := discovery.ContextPaths()
+	if len(paths) == 0 {
+		return nil
+	}
+	announceDiscovery(cmd, "context", strings.Join(paths, ", "))
+	return paths
 }
 
 // requireContext is discoverContext for commands that have no zero-config
@@ -57,11 +82,6 @@ func requireContext(cmd *cobra.Command, explicit, cmdName string) (string, error
 		return "", fmt.Errorf("%s: --context is required — run `restoregap context init` first, or pass --context", cmdName)
 	}
 	return path, nil
-}
-
-func isRegularFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
 }
 
 func announceDiscovery(cmd *cobra.Command, kind, path string) {

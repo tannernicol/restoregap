@@ -108,6 +108,90 @@ func TestDiscoverContextFallsBackToPlainYml(t *testing.T) {
 	}
 }
 
+func TestDiscoverContextEnvVarColonListTakesFirstEntry(t *testing.T) {
+	dir := t.TempDir()
+	pathA := filepath.Join(dir, "a.yml")
+	pathB := filepath.Join(dir, "b.yml")
+	for _, p := range []string{pathA, pathB} {
+		if err := os.WriteFile(p, []byte("version: 2\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("RESTOREGAP_CONTEXT", pathA+":"+pathB)
+	t.Chdir(t.TempDir())
+
+	cmd, out := newTestCmd()
+	got := discoverContext(cmd, "")
+	if got != pathA {
+		t.Errorf("got %q, want the first entry of the colon list %q", got, pathA)
+	}
+	if !strings.Contains(out.String(), "context: "+pathA+" (discovered)") {
+		t.Errorf("expected a discovery announcement naming %q, got %q", pathA, out.String())
+	}
+}
+
+// ---- discoverContextPaths (repeatable --context) ---------------------------
+
+func TestDiscoverContextPathsExplicitPassesThroughSilently(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cmd, out := newTestCmd()
+	got := discoverContextPaths(cmd, []string{"a.yml", "b.yml"})
+	if len(got) != 2 || got[0] != "a.yml" || got[1] != "b.yml" {
+		t.Errorf("got %v, want the explicit paths unchanged", got)
+	}
+	if out.Len() != 0 {
+		t.Errorf("explicitly passed --context values must never be announced, got %q", out.String())
+	}
+}
+
+func TestDiscoverContextPathsEnvVarColonList(t *testing.T) {
+	dir := t.TempDir()
+	pathA := filepath.Join(dir, "a.yml")
+	pathB := filepath.Join(dir, "b.yml")
+	for _, p := range []string{pathA, pathB} {
+		if err := os.WriteFile(p, []byte("version: 2\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("RESTOREGAP_CONTEXT", pathA+":"+pathB)
+	t.Chdir(t.TempDir())
+
+	cmd, out := newTestCmd()
+	got := discoverContextPaths(cmd, nil)
+	if len(got) != 2 || got[0] != pathA || got[1] != pathB {
+		t.Errorf("got %v, want [%q %q]", got, pathA, pathB)
+	}
+	if !strings.Contains(out.String(), "context: "+pathA+", "+pathB+" (discovered)") {
+		t.Errorf("expected a discovery announcement naming both paths, got %q", out.String())
+	}
+}
+
+func TestDiscoverContextPathsFallsBackToSingleLocalFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile("restoregap.local.yml", []byte("version: 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd, _ := newTestCmd()
+	got := discoverContextPaths(cmd, nil)
+	if len(got) != 1 || got[0] != "restoregap.local.yml" {
+		t.Errorf("got %v, want [restoregap.local.yml]", got)
+	}
+}
+
+func TestDiscoverContextPathsNothingFound(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cmd, out := newTestCmd()
+	got := discoverContextPaths(cmd, nil)
+	if got != nil {
+		t.Errorf("got %v, want nil when nothing is discoverable", got)
+	}
+	if out.Len() != 0 {
+		t.Errorf("nothing discovered must announce nothing, got %q", out.String())
+	}
+}
+
 func TestDiscoverContextNothingFound(t *testing.T) {
 	t.Chdir(t.TempDir())
 	cmd, out := newTestCmd()
@@ -264,6 +348,44 @@ func TestPreflightExplicitLedgerNotLabeledDefault(t *testing.T) {
 
 	if !strings.Contains(out.String(), "ledger: "+ledgerPath+" (explicit)") {
 		t.Errorf("expected the footer to label an explicit --ledger as explicit, got %q", out.String())
+	}
+}
+
+// TestPreflightRepeatableContextMergesAcrossFiles exercises --context as a
+// repeatable flag end to end through the CLI: a guard declared in one file
+// is satisfied by a proof declared only in a second, passed as two separate
+// --context flags.
+func TestPreflightRepeatableContextMergesAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	intentPath := writeFile(t, dir, "intent.yml", "version: 2\naction: delete_file\npath: /x/app.db\n")
+	guardPath := writeFile(t, dir, "guard.yml", `version: 2
+guards:
+  - id: app-db-guard
+    kind: guard
+    match: {paths: ["/x/app.db"]}
+    requires: {proofs: [app-db-recovery]}
+    enforcement: block
+`)
+	proofPath := writeFile(t, dir, "proof.yml", `version: 2
+proofs:
+  - id: app-db-recovery
+    status: validated
+    observed_at: "2026-08-20T00:00:00Z"
+`)
+
+	cmd := newPreflightCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{
+		"--intent", intentPath, "--format", "json", "--as-of", "2026-08-20T12:00:00Z",
+		"--context", guardPath, "--context", proofPath,
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v (%s)", err, out.String())
+	}
+	if !strings.Contains(out.String(), `"verdict": "pass"`) {
+		t.Errorf("expected pass (proof from the second --context satisfies the guard from the first), got %q", out.String())
 	}
 }
 

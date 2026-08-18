@@ -23,10 +23,17 @@ import (
 // Request is the full preflight input surface, mapped 1:1 from CLI flags and
 // reused by the MCP server tools.
 type Request struct {
-	DiffPath      string
-	DiffRoot      string // repo root; makes repo-relative diff paths absolute
-	IntentPath    string
-	ContextPath   string
+	DiffPath   string
+	DiffRoot   string // repo root; makes repo-relative diff paths absolute
+	IntentPath string
+	// ContextPaths is repeatable: real deployments keep one context file per
+	// drill (its proof-writing timer rewrites that file, so co-mingling
+	// several drills in one file fights the timer that owns it) — preflight
+	// needs to see all of them to gate on the whole machine's declared
+	// guards, not just whichever single file happened to be passed. Zero
+	// paths means the built-in default policy, same as an empty ContextPath
+	// used to mean.
+	ContextPaths  []string
 	LedgerPath    string
 	Actor         string
 	IntentActor   string
@@ -63,7 +70,7 @@ func Run(_ context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("preflight: --intent or --diff is required")
 	}
 
-	ctxSpec, err := loadContext(req.ContextPath)
+	ctxSpec, err := loadContext(req.ContextPaths)
 	if err != nil {
 		return nil, err
 	}
@@ -167,16 +174,17 @@ func openInput(path string) (io.Reader, func() error, error) {
 	return f, f.Close, nil
 }
 
-// loadContext loads an explicit context file, or falls back to the
-// built-in zero-config default when none was supplied. An explicitly
-// supplied context — even an empty `version: 2` document — REPLACES the
-// default; it is never merged with it (docs/ARCHITECTURE.md §Compatibility
-// stance, point 2).
-func loadContext(path string) (contextspec.Context, error) {
-	if path == "" {
+// loadContext loads and merges every declared context file (contextspec.
+// LoadAll — union of guards/facts/proofs/drills, duplicate ids across files
+// are an error), or falls back to the built-in zero-config default when
+// none was supplied. Explicitly supplied context files — even a single
+// empty `version: 2` document — REPLACE the default; it is never merged
+// with them (docs/ARCHITECTURE.md §Compatibility stance, point 2).
+func loadContext(paths []string) (contextspec.Context, error) {
+	if len(paths) == 0 {
 		return contextspec.Default(), nil
 	}
-	ctxSpec, err := contextspec.Load(path)
+	ctxSpec, err := contextspec.LoadAll(paths)
 	if err != nil {
 		return contextspec.Context{}, fmt.Errorf("preflight: %w", err)
 	}

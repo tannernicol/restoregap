@@ -6,6 +6,19 @@ each such change is called out here.
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-08-17
+
+Found by dogfooding on the author's own estate the same day 0.9.0 was cut:
+thirteen green drills lived in one file each, and the gate read one file, so a
+coding agent deleting the money database passed with no findings.
+
+- `preflight`/`status --context` is now repeatable and merges every declared
+  file's guards/facts/proofs/drills (`contextspec.LoadAll`); a duplicate id
+  across files is a hard error naming both, never a silent last-wins. The
+  MCP server applies the same `$RESTOREGAP_CONTEXT`/`restoregap.local.yml`
+  discovery when a tool call omits `context_path`, instead of silently
+  falling through to the built-in default policy.
+
 ## [0.9.0] — 2026-08-17
 
 First tagged release. Everything before this shipped from `main` and reported
@@ -38,6 +51,8 @@ First tagged release. Everything before this shipped from `main` and reported
 - `restoregap mcp serve` — the same gates as MCP tools for coding agents.
 - `restoregap evidence ingest|export` — the drill record as a self-contained
   file for whoever asks whether you *test* restores.
+- `docs/walkthrough.md` carries the full transcript; the README first screen is
+  one sentence, the demo, and a quick start.
 - One static binary per platform (linux/darwin × amd64/arm64) with a
   `checksums.txt`; the README demo is recorded from `demo/setup.sh` so the
   gif cannot drift from what the CLI prints.

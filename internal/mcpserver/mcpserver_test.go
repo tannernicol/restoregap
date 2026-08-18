@@ -111,6 +111,104 @@ func TestCallToolDrillLintBadContextPath(t *testing.T) {
 	}
 }
 
+// mcpFallbackGuardYAML declares a guard on /x/app.db with no proof
+// declared to satisfy it — an intent deleting /x/app.db must BLOCK when
+// this file is the loaded context, and PASS under the built-in default
+// policy (which knows nothing about /x/app.db at all).
+const mcpFallbackGuardYAML = `version: 2
+guards:
+  - id: app-db-guard
+    kind: guard
+    match: {paths: ["/x/app.db"]}
+    requires: {proofs: [app-db-recovery]}
+    enforcement: block
+`
+
+func preflightVerdict(t *testing.T, text string) string {
+	t.Helper()
+	var out struct {
+		Verdict string `json:"verdict"`
+	}
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		t.Fatalf("unmarshal preflight_intent result: %v (raw: %s)", err, text)
+	}
+	return out.Verdict
+}
+
+// TestPreflightToolFallsBackToDiscoveredContextWhenOmitted is the MCP-side
+// case of the bug this feature fixes: a tool call that omits context_path
+// must not silently fall through to the built-in toy policy when a real
+// context is discoverable in the working directory — it must find and use
+// it, same as the CLI would.
+func TestPreflightToolFallsBackToDiscoveredContextWhenOmitted(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "restoregap.local.yml"), []byte(mcpFallbackGuardYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	text, err := callTool(context.Background(), "preflight_intent", toolArgs{
+		Intent: "version: 2\naction: delete_file\npath: /x/app.db\n",
+		AsOf:   "2026-08-20T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("callTool: %v", err)
+	}
+	if got := preflightVerdict(t, text); got != "block" {
+		t.Errorf("verdict = %q, want block (the discovered restoregap.local.yml declares this guard) — got %s", got, text)
+	}
+}
+
+// TestPreflightToolNoContextPathAndNothingDiscoverableUsesBuiltInDefault
+// pins the pre-existing zero-config fallback: when context_path is omitted
+// AND nothing is discoverable in the working directory, preflight still
+// falls all the way back to the built-in default policy rather than
+// erroring — this must be unaffected by the new discovery fallback.
+func TestPreflightToolNoContextPathAndNothingDiscoverableUsesBuiltInDefault(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	text, err := callTool(context.Background(), "preflight_intent", toolArgs{
+		Intent: "version: 2\naction: delete_file\npath: /x/app.db\n",
+		AsOf:   "2026-08-20T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("callTool: %v", err)
+	}
+	// The built-in default policy declares nothing about /x/app.db, so this
+	// passes — proving the fallback did NOT invent a block from nowhere and
+	// did NOT error just because nothing was discoverable.
+	if got := preflightVerdict(t, text); got != "pass" {
+		t.Errorf("verdict = %q, want pass (built-in default policy has no opinion on /x/app.db) — got %s", got, text)
+	}
+}
+
+// TestPreflightToolExplicitContextPathIsNeverOverriddenByDiscovery: an
+// explicit context_path must win even when a different file is also
+// discoverable in the working directory — discovery is a fallback for the
+// omitted case only, never a replacement for what the caller asked for.
+func TestPreflightToolExplicitContextPathIsNeverOverriddenByDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	// A discoverable file that would BLOCK if (wrongly) used instead of the
+	// explicit one.
+	if err := os.WriteFile(filepath.Join(dir, "restoregap.local.yml"), []byte(mcpFallbackGuardYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	explicitPath := writeContext(t, "version: 2\n") // empty v2 context: no guards at all
+
+	text, err := callTool(context.Background(), "preflight_intent", toolArgs{
+		Intent:      "version: 2\naction: delete_file\npath: /x/app.db\n",
+		ContextPath: explicitPath,
+		AsOf:        "2026-08-20T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("callTool: %v", err)
+	}
+	if got := preflightVerdict(t, text); got != "pass" {
+		t.Errorf("verdict = %q, want pass (the explicit empty context, not the discoverable blocking one) — got %s", got, text)
+	}
+}
+
 // TestServeDrillLintOverJSONRPC: an end-to-end round trip through the actual
 // stdio protocol (tools/list then tools/call), not just the callTool helper.
 func TestServeDrillLintOverJSONRPC(t *testing.T) {

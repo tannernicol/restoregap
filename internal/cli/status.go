@@ -22,23 +22,16 @@ func newStatusCmd() *cobra.Command {
 		Long: "Gathers guards, proof freshness, and the recovery inventory into one report. --context may be\n" +
 			"repeated to view several context files as one machine: real deployments often keep one context\n" +
 			"file per drill (its proof-writing timer rewrites that file, so co-mingling several drills in one\n" +
-			"file fights the timer that owns it). Every loaded file's guards/proofs/drills are aggregated;\n" +
-			"a duplicate id across files is never silently merged — the last-loaded file wins and a warning\n" +
-			"prints to stderr. Omit --context entirely and status tries $RESTOREGAP_CONTEXT, then\n" +
-			"./restoregap.local.yml, then ./restoregap.yml; only when none of those exists does it fall back to\n" +
-			"the built-in zero-config default policy.",
+			"file fights the timer that owns it). Every loaded file's guards/proofs/drills are aggregated by\n" +
+			"union; a duplicate id across files is an error naming both files, never a silent merge. Omit\n" +
+			"--context entirely and status tries $RESTOREGAP_CONTEXT (which may itself hold a colon-separated\n" +
+			"list), then ./restoregap.local.yml, then ./restoregap.yml; only when none of those exists does it\n" +
+			"fall back to the built-in zero-config default policy.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if len(req.ContextPaths) == 0 {
-				if discovered := discoverContext(cmd, ""); discovered != "" {
-					req.ContextPaths = []string{discovered}
-				}
-			}
+			req.ContextPaths = discoverContextPaths(cmd, req.ContextPaths)
 			s, err := status.Gather(req)
 			if err != nil {
 				return err
-			}
-			for _, w := range s.Warnings {
-				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), w)
 			}
 			rendered, err := s.Render(req.Format)
 			if err != nil {
@@ -53,8 +46,8 @@ func newStatusCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringArrayVar(&req.ContextPaths, "context", nil,
-		"path to restoregap.yml / restoregap.local.yml; repeatable to view several context files as one machine "+
-			"(default when omitted entirely: "+contextDiscoveryHelp+"; falls back further to the built-in zero-config policy)")
+		"path to restoregap.yml / restoregap.local.yml; "+contextDiscoveryHelpRepeatable+
+			" (when omitted entirely: "+contextDiscoveryHelp+"; falls back further to the built-in zero-config policy)")
 	f.StringVar(&req.LedgerPath, "ledger", "", "path to the decision ledger (JSONL)")
 	f.StringVar(&req.Format, "format", "text", "output format: text or html")
 	f.StringVar(&req.AsOf, "as-of", "", "evaluate freshness as of this RFC3339 time")

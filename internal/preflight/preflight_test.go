@@ -80,6 +80,81 @@ func TestRunRecordsLedgerDecision(t *testing.T) {
 	}
 }
 
+// multiCtxGuardYAML declares a guard on /x/app.db that requires a proof
+// this file does NOT itself declare — multiCtxProofYAML does, in a
+// separate file, exactly the split a real deployment uses (one file per
+// drill, since each drill's proof-writing timer owns and rewrites its own
+// file).
+const multiCtxGuardYAML = `version: 2
+guards:
+  - id: app-db-guard
+    kind: guard
+    match: {paths: ["/x/app.db"]}
+    requires: {proofs: [app-db-recovery]}
+    enforcement: block
+`
+
+const multiCtxProofYAML = `version: 2
+proofs:
+  - id: app-db-recovery
+    status: validated
+    observed_at: "2026-08-20T00:00:00Z"
+`
+
+// TestRunMultiContextMergesGuardAndProofAcrossFiles is the bug this feature
+// exists to fix, reproduced directly: a guard in one context file requires
+// a proof declared only in a second file. Loading both must merge them and
+// PASS; loading only the guard's file must BLOCK — proving preflight never
+// silently treats a real, satisfied guard as ungated just because its proof
+// lives in a context file it wasn't told about.
+func TestRunMultiContextMergesGuardAndProofAcrossFiles(t *testing.T) {
+	intentPath := writeTemp(t, "intent.yml", "version: 2\naction: delete_file\npath: /x/app.db\n")
+	pathA := writeTemp(t, "a.yml", multiCtxGuardYAML)
+	pathB := writeTemp(t, "b.yml", multiCtxProofYAML)
+
+	t.Run("both contexts merged: proof declared in the other file satisfies the guard, PASS", func(t *testing.T) {
+		res, err := Run(context.Background(), Request{
+			Format: "json", IntentPath: intentPath, ContextPaths: []string{pathA, pathB}, AsOf: "2026-08-20T12:00:00Z",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.ExitCode != 0 {
+			t.Fatalf("exit = %d, want 0 (pass): %s", res.ExitCode, res.Rendered)
+		}
+		var out struct {
+			Verdict string `json:"verdict"`
+		}
+		if err := json.Unmarshal(res.Rendered, &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Verdict != "pass" {
+			t.Errorf("verdict = %q, want pass", out.Verdict)
+		}
+	})
+
+	t.Run("only the guard's file loaded: proof undeclared, BLOCK", func(t *testing.T) {
+		res, err := Run(context.Background(), Request{
+			Format: "json", IntentPath: intentPath, ContextPaths: []string{pathA}, AsOf: "2026-08-20T12:00:00Z",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.ExitCode != 1 {
+			t.Fatalf("exit = %d, want 1 (block): %s", res.ExitCode, res.Rendered)
+		}
+		var out struct {
+			Verdict string `json:"verdict"`
+		}
+		if err := json.Unmarshal(res.Rendered, &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Verdict != "block" {
+			t.Errorf("verdict = %q, want block — a proven recovery declared elsewhere must never gate nothing just because this run only saw one of its files", out.Verdict)
+		}
+	})
+}
+
 // rdsMissingEvidenceTFPlan is a Terraform plan replacing a prod RDS
 // instance with no --evidence supplied at all: recovery.Build always emits
 // a single "terraform.rds.restore-proof-missing" issue at index 0 for this

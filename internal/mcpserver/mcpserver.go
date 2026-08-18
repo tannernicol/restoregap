@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/tannernicol/restoregap/internal/contextspec"
+	"github.com/tannernicol/restoregap/internal/discovery"
 	"github.com/tannernicol/restoregap/internal/drill"
 	"github.com/tannernicol/restoregap/internal/ledger"
 	"github.com/tannernicol/restoregap/internal/preflight"
@@ -62,7 +63,8 @@ func str(desc string) map[string]any { return map[string]any{"type": "string", "
 
 func toolDefs() []toolDef {
 	common := map[string]any{
-		"context_path":   str("path to restoregap.yml / restoregap.local.yml (omit for the built-in default policy)"),
+		"context_path": str("path to restoregap.yml / restoregap.local.yml (omit to discover $RESTOREGAP_CONTEXT / " +
+			"./restoregap.local.yml / ./restoregap.yml, else the built-in default policy)"),
 		"ledger_path":    str("append-only decision ledger (JSONL); the only path tools write to"),
 		"actor":          str("acting identity (default agent/mcp)"),
 		"context_window": str("execution context, e.g. coding-agent"),
@@ -221,7 +223,7 @@ func callTool(ctx context.Context, name string, a toolArgs) (string, error) {
 // out to keep callTool itself under the gocyclo threshold.
 func preflightTool(ctx context.Context, name string, a toolArgs) (string, error) {
 	req := preflight.Request{
-		ContextPath: a.ContextPath, LedgerPath: a.LedgerPath, Actor: a.Actor,
+		ContextPaths: contextPathsFor(a.ContextPath), LedgerPath: a.LedgerPath, Actor: a.Actor,
 		ContextWindow: a.ContextWindow, AsOf: a.AsOf, Format: "json",
 	}
 	var err error
@@ -238,6 +240,22 @@ func preflightTool(ctx context.Context, name string, a toolArgs) (string, error)
 		return "", err
 	}
 	return string(result.Rendered), nil
+}
+
+// contextPathsFor resolves the MCP tool's single context_path argument into
+// the []string preflight.Request now takes. An explicit path is used
+// unchanged. An omitted one falls back to the same $RESTOREGAP_CONTEXT /
+// ./restoregap.local.yml / ./restoregap.yml discovery the CLI uses
+// (internal/discovery), tried BEFORE preflight.Run's own built-in
+// zero-config default — without this, a tool call that omits context_path
+// silently evaluates against the toy built-in policy even on a machine that
+// has a real declared context sitting right next to it, gating nothing that
+// context actually protects.
+func contextPathsFor(explicit string) []string {
+	if explicit != "" {
+		return []string{explicit}
+	}
+	return discovery.ContextPaths()
 }
 
 // drillLintTool is callTool's drill_lint case, split out to keep callTool

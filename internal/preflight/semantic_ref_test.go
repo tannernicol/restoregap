@@ -80,7 +80,7 @@ func TestSemanticReferenceCases(t *testing.T) {
 			req.ContextWindow = flagValue(cmd, "--context-window")
 			req.AsOf = flagValue(cmd, "--as-of")
 			if strings.Contains(cmd, "--context ") {
-				req.ContextPath = convertV1Context(t, filepath.Join(dir, "restoregap.local.yml"))
+				req.ContextPaths = []string{convertV1Context(t, filepath.Join(dir, "restoregap.local.yml"))}
 			}
 
 			result, err := Run(context.Background(), req)
