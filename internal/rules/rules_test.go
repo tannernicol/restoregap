@@ -206,3 +206,71 @@ guards:
 		t.Errorf("non-matching actor: got %d findings, want 0 (AND semantics require both command and actor to match)", got)
 	}
 }
+
+// TestGuardMatchesAncestorSubtreeDelete covers the dogfood bug where a guard
+// on a file was not fired by an intent to delete or move the DIRECTORY above
+// it — the directory delete destroys the guarded file without naming it.
+func TestGuardMatchesAncestorSubtreeDelete(t *testing.T) {
+	yaml := `version: 2
+guards:
+  - id: nas-key
+    kind: lifeline
+    match:
+      paths: ["/home/user/.ssh/id_ed25519_nas"]
+    requires:
+      proofs: ["nas-key-recovery"]
+`
+	ctx, err := contextspec.Parse(stringsReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	blocks := func(ci intent.ChangeIntent) bool {
+		return len(Evaluate([]intent.ChangeIntent{ci}, ctx, fixedNow)) == 1
+	}
+	cases := []struct {
+		name string
+		ci   intent.ChangeIntent
+		want bool
+	}{
+		{"delete the guarded file itself", intent.ChangeIntent{Action: intent.ActionDeleteFile, Paths: []string{"/home/user/.ssh/id_ed25519_nas"}}, true},
+		{"delete the parent directory", intent.ChangeIntent{Action: intent.ActionDeleteFile, Paths: []string{"/home/user/.ssh"}}, true},
+		{"delete a grandparent directory", intent.ChangeIntent{Action: intent.ActionDeleteFile, Paths: []string{"/home/user"}}, true},
+		{"move the parent directory", intent.ChangeIntent{Action: intent.ActionMoveFile, Paths: []string{"/home/user/.ssh"}}, true},
+		{"modify the parent directory is NOT a subtree destroyer", intent.ChangeIntent{Action: intent.ActionModifyFile, Paths: []string{"/home/user/.ssh"}}, false},
+		{"a sibling directory does not match", intent.ChangeIntent{Action: intent.ActionDeleteFile, Paths: []string{"/home/user/.config"}}, false},
+		{"a prefix that is not a path boundary does not match", intent.ChangeIntent{Action: intent.ActionDeleteFile, Paths: []string{"/home/user/.ss"}}, false},
+	}
+	for _, c := range cases {
+		if got := blocks(c.ci); got != c.want {
+			t.Errorf("%s: blocked=%v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestAncestorMatchResourceExplainsItself: the finding text names both the
+// directory the operator asked to delete and the guarded path underneath, so
+// a refused directory delete is legible.
+func TestAncestorMatchResourceExplainsItself(t *testing.T) {
+	yaml := `version: 2
+guards:
+  - id: nas-key
+    kind: lifeline
+    match:
+      paths: ["/home/user/.ssh/id_ed25519_nas"]
+    requires:
+      proofs: ["nas-key-recovery"]
+`
+	ctx, err := contextspec.Parse(stringsReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	ci := intent.ChangeIntent{Action: intent.ActionDeleteFile, Paths: []string{"/home/user/.ssh"}}
+	findings := Evaluate([]intent.ChangeIntent{ci}, ctx, fixedNow)
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings, want 1", len(findings))
+	}
+	res := findings[0].Resource
+	if !strings.Contains(res, "/home/user/.ssh") || !strings.Contains(res, "/home/user/.ssh/id_ed25519_nas") {
+		t.Errorf("resource = %q, want it to name both the deleted dir and the guarded path", res)
+	}
+}

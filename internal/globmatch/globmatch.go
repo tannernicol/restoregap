@@ -65,6 +65,59 @@ func MatchPathAny(patterns []string, name string) bool {
 	return false
 }
 
+// IsAncestor reports whether intentPath is a proper ancestor directory of
+// every concrete path guardPattern can match: guardPattern's longest literal
+// segment prefix lies at or under intentPath. It exists for destructive
+// actions (delete_file, move_file) where removing or relocating intentPath
+// destroys anything a guard declared beneath it, even though the intent
+// never names the guarded path directly — MatchPath alone only catches the
+// case where the intent names the guarded path (or a glob covering it)
+// exactly. Both sides are home-normalized and path-cleaned first, so
+// "~/.ssh" and "/home/user/.ssh" compare equal and a trailing slash or "."
+// segment does not break the match.
+func IsAncestor(intentPath, guardPattern string) bool {
+	pathSegs := cleanSegments(intentPath)
+	litSegs, hasWildcard := literalPrefix(cleanSegments(guardPattern))
+	if len(pathSegs) == 0 || len(pathSegs) > len(litSegs) {
+		return false
+	}
+	for i, s := range pathSegs {
+		if s != litSegs[i] {
+			return false
+		}
+	}
+	// A fully literal guard path is destroyed by an intent strictly ABOVE it
+	// (deleting /a/b/c is not deleting the *directory* /a/b/c's children —
+	// that is the exact-match case MatchPath already covers). A guard glob
+	// (e.g. /a/b/*) is destroyed by an intent at OR above its literal prefix,
+	// because the wildcard already reaches below that prefix.
+	return len(pathSegs) < len(litSegs) || hasWildcard
+}
+
+// literalPrefix returns the leading segments of a path glob up to (not
+// including) its first wildcard segment — "**", or any segment containing a
+// shell glob metacharacter — and whether any wildcard segment was found. A
+// pattern with no wildcard segments returns all of segs (the guard's literal
+// path in full) and false.
+func literalPrefix(segs []string) ([]string, bool) {
+	for i, s := range segs {
+		if s == "**" || strings.ContainsAny(s, "*?[") {
+			return segs[:i], true
+		}
+	}
+	return segs, false
+}
+
+// cleanSegments home-expands, path-cleans (dropping "." segments, "//", and
+// a trailing slash), and splits p into path segments for ancestor
+// comparison.
+func cleanSegments(p string) []string {
+	if p == "" {
+		return nil
+	}
+	return splitSegments(path.Clean(ExpandHome(p)))
+}
+
 func splitSegments(s string) []string {
 	if s == "" {
 		return []string{}

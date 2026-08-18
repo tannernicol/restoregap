@@ -10,6 +10,7 @@
 package rules
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/tannernicol/restoregap/internal/contextspec"
@@ -91,7 +92,7 @@ func guardMatches(g contextspec.Guard, ci intent.ChangeIntent) (matched bool, re
 	m := g.Match
 	dims := []dimension{
 		{len(m.Paths) > 0, func() (string, bool) {
-			return firstMatch(m.Paths, ci.AllPaths(), globmatch.MatchPathAny)
+			return matchGuardPaths(m.Paths, ci)
 		}},
 		{len(m.Commands) > 0, func() (string, bool) {
 			if ci.Command == "" || !globmatch.MatchAny(m.Commands, ci.Command) {
@@ -131,6 +132,32 @@ func guardMatches(g contextspec.Guard, ci intent.ChangeIntent) (matched bool, re
 		resource = primaryResource(ci)
 	}
 	return matched, resource
+}
+
+// matchGuardPaths reports whether any guard path matches the intent. Beyond
+// the ordinary glob match (the intent names the guarded path, or a glob that
+// covers it), a destructive-subtree action (delete_file, move_file) also
+// matches a guard whose declared path lies BENEATH an intent path: deleting
+// or moving a directory destroys everything under it, so a guard on
+// /home/user/.ssh/id_ed25519 must fire on an intent to delete /home/user/.ssh
+// even though that file is never named. The returned resource spells out why,
+// so the finding explains a directory delete it refused.
+func matchGuardPaths(guardPaths []string, ci intent.ChangeIntent) (string, bool) {
+	intentPaths := ci.AllPaths()
+	if res, ok := firstMatch(guardPaths, intentPaths, globmatch.MatchPathAny); ok {
+		return res, true
+	}
+	if !intent.DestroysSubtree(ci.Action) {
+		return "", false
+	}
+	for _, ip := range intentPaths {
+		for _, gp := range guardPaths {
+			if globmatch.IsAncestor(ip, gp) {
+				return fmt.Sprintf("%s contains guarded path %s", ip, gp), true
+			}
+		}
+	}
+	return "", false
 }
 
 // firstMatch returns the first candidate matching any pattern via the given

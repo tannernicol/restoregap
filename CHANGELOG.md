@@ -6,6 +6,11 @@ each such change is called out here.
 
 ## [Unreleased]
 
+- `preflight` now blocks deleting or moving a **directory above** a guarded
+  path: `rm -rf ~/.ssh` fires a guard on `~/.ssh/id_ed25519` even though the
+  key is never named (a subtree delete destroys it). Applies to `delete_file`
+  and `move_file`, not `modify_file`; the finding names both paths.
+
 ## [0.9.2] — 2026-08-17
 
 The launch follow-ups, each one traceable to a real run on the author's machine.

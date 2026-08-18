@@ -40,6 +40,24 @@ var validActions = map[Action]bool{
 	ActionRemovePkg:     true,
 }
 
+// subtreeDestroyers are the actions that remove or relocate everything
+// beneath their declared path(s), not just the path itself. Guard path
+// matching (internal/rules.guardMatches) uses this to also match a guard
+// whose declared path is a descendant of the intent's path — deleting or
+// moving a directory destroys the guarded file under it even though the
+// intent never names that file directly. modify_file is deliberately
+// excluded: editing an existing path does not destroy its descendants.
+var subtreeDestroyers = map[Action]bool{
+	ActionDeleteFile: true,
+	ActionMoveFile:   true,
+}
+
+// DestroysSubtree reports whether a, if applied to a directory, destroys or
+// relocates everything beneath it.
+func DestroysSubtree(a Action) bool {
+	return subtreeDestroyers[a]
+}
+
 // ChangeIntent is the normalized, engine-facing description of one proposed
 // change, whether it came from an action-intent YAML file or a diff hunk.
 type ChangeIntent struct {

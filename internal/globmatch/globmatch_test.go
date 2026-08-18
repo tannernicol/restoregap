@@ -75,3 +75,38 @@ func TestMatchPathExpandsHome(t *testing.T) {
 		}
 	}
 }
+
+func TestIsAncestor(t *testing.T) {
+	cases := []struct {
+		intentPath, guardPattern string
+		want                     bool
+	}{
+		// parent / grandparent of a guarded file
+		{"/home/user/.ssh", "/home/user/.ssh/id_ed25519", true},
+		{"/home/user", "/home/user/.ssh/id_ed25519", true},
+		// the guarded path itself is not a *proper* ancestor (exact match is
+		// MatchPath's job, not IsAncestor's)
+		{"/home/user/.ssh/id_ed25519", "/home/user/.ssh/id_ed25519", false},
+		// prefix must end at a path boundary
+		{"/home/user/.ss", "/home/user/.ssh/id_ed25519", false},
+		// sibling
+		{"/home/user/.config", "/home/user/.ssh/id_ed25519", false},
+		// home expansion + a trailing slash / "." segment on either side
+		{"~/.ssh", "/home/user/.ssh/id_ed25519", false}, // different home unless HOME=/home/user; boundary/normalize case below
+		{"/home/user/.ssh/", "/home/user/.ssh/id_ed25519", true},
+		{"/home/user/./.ssh", "/home/user/.ssh/id_ed25519", true},
+		// guard glob: ancestor matches the glob's literal prefix
+		{"/home/user", "/home/user/.ssh/*", true},
+		{"/home/user/.ssh", "/home/user/.ssh/*", true},
+		{"/home/user/.config", "/home/user/.ssh/*", false},
+		{"/home/user/backups", "/home/user/**", false}, // below the prefix — MatchPath handles this, not IsAncestor
+		{"/home/user", "/home/user/**", true},          // at the prefix, wildcard reaches below
+		// empty intent path never an ancestor
+		{"", "/home/user/.ssh/id_ed25519", false},
+	}
+	for _, c := range cases {
+		if got := IsAncestor(c.intentPath, c.guardPattern); got != c.want {
+			t.Errorf("IsAncestor(%q,%q) = %v, want %v", c.intentPath, c.guardPattern, got, c.want)
+		}
+	}
+}
