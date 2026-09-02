@@ -37,9 +37,11 @@ func Execute(args []string) error {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.PersistentFlags().Bool("verbose", false, "print full discovered-context file lists instead of a summary (status, preflight)")
 	root.SetArgs(args)
 	root.AddCommand(newPreflightCmd(), newStatusCmd(), newLedgerCmd(), newMCPCmd(),
-		newEvidenceCmd(), newContextCmd())
+		newEvidenceCmd(), newContextCmd(), newProtectCheckCmd(),
+		newDoraCmd(), newParityDrillCmd())
 	for _, build := range extraCommands {
 		root.AddCommand(build())
 	}
@@ -55,6 +57,7 @@ func Execute(args []string) error {
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  restoregap drill --context <file>        # prove a recovery for real, in a sandbox")
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  restoregap preflight --help              # gate a risky change on that proof")
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  restoregap status                        # unified recovery-chain view")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "preflight decides whether a guarded change is allowed — pair it with your agent's own deny rules or sandbox as the net")
 		return nil
 	}
 	return root.Execute()

@@ -16,7 +16,7 @@ Set Theme "Catppuccin Mocha"
 Set TypingSpeed 35ms
 
 Hide
-Type "cd /tmp/rg-demo && export PATH=$PWD/bin:$PATH RESTOREGAP_LEDGER=$PWD/ledger.jsonl PS1='$ ' && clear"
+Type "cp docs/examples/preflight-hook.sh /tmp/rg-demo/bin/preflight-hook.sh && chmod +x /tmp/rg-demo/bin/preflight-hook.sh && cd /tmp/rg-demo && export PATH=$PWD/bin:$PATH RESTOREGAP_LEDGER=$PWD/ledger.jsonl PS1='$ ' && clear"
 Enter
 Show
 
@@ -35,7 +35,10 @@ Sleep 800ms
 Type "restoregap drill propose proj/app.db --source backup/app.db > restoregap.local.yml"
 Enter
 Sleep 1500ms
-Type "restoregap preflight --intent rm-app-db.yml    # an agent wants to delete app.db"
+Type "# a coding agent tries: rm proj/app.db  (Claude Code PreToolUse hook → restoregap preflight)"
+Enter
+Sleep 600ms
+Type `echo '{"tool_name":"Bash","tool_input":{"command":"rm proj/app.db"}}' | preflight-hook.sh; echo "exit=$?"`
 Enter
 Sleep 4500ms
 Type "clear"
@@ -47,6 +50,6 @@ Sleep 3500ms
 Type "# 3. Gate — the same change is allowed now, and refused again the day that proof expires."
 Enter
 Sleep 800ms
-Type "restoregap preflight --intent rm-app-db.yml"
+Type `echo '{"tool_name":"Bash","tool_input":{"command":"rm proj/app.db"}}' | preflight-hook.sh; echo "exit=$?"`
 Enter
 Sleep 6s

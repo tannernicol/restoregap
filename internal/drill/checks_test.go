@@ -333,13 +333,34 @@ func requireGit(t *testing.T) {
 	}
 }
 
+// scrubbedGitEnv is os.Environ() with GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE
+// removed, plus extra appended. These tests run `git -C <fixture dir> ...`
+// expecting -C to pick the repo, but GIT_DIR beats -C — and the pre-push
+// gate runs `go test` from inside a git hook, where the real repo's GIT_DIR
+// is already set in the environment. Setting it to "" in cmd.Env does not
+// unset it for git (an empty value is still a value); the entry must be
+// absent entirely.
+func scrubbedGitEnv(extra ...string) []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		switch {
+		case strings.HasPrefix(kv, "GIT_DIR="),
+			strings.HasPrefix(kv, "GIT_WORK_TREE="),
+			strings.HasPrefix(kv, "GIT_INDEX_FILE="):
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, extra...)
+}
+
 func gitInit(t *testing.T, dir string) {
 	t.Helper()
 	run := func(args ...string) {
 		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 		// Hermetic: the developer's global git config (core.hooksPath with a
 		// commit-msg policy hook, signing, templates) must not reach a fixture.
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+		cmd.Env = scrubbedGitEnv("GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
 			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)

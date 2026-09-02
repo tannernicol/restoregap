@@ -39,8 +39,12 @@ const (
 	ProofPresent      ProofStatus = "present"
 	ProofStale        ProofStatus = "stale"
 	ProofContradicted ProofStatus = "contradicted"
-	ProofNotRequired  ProofStatus = "not_required"
-	ProofUnknown      ProofStatus = "unknown"
+	// ProofUnreachable: the recovery source could not be reached, so nothing
+	// was proven. It blocks exactly like contradicted (see Decide) — the
+	// distinction is for the report and remediation, never the gate.
+	ProofUnreachable ProofStatus = "unreachable"
+	ProofNotRequired ProofStatus = "not_required"
+	ProofUnknown     ProofStatus = "unknown"
 )
 
 // Enforcement is an assurance contract's declared strictness.
@@ -63,7 +67,7 @@ func Decide(risk RiskClass, proof ProofStatus, enforcement Enforcement) Verdict 
 	switch proof {
 	case ProofPresent:
 		return VerdictPass
-	case ProofMissing, ProofStale, ProofContradicted, ProofUnknown:
+	case ProofMissing, ProofStale, ProofContradicted, ProofUnreachable, ProofUnknown:
 		if enforcement == EnforceWarn {
 			return VerdictWarn
 		}

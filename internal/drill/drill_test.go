@@ -415,3 +415,102 @@ func TestRunSandboxDir(t *testing.T) {
 		t.Errorf("sandbox %q is not under SandboxDir %q", got, sandboxRoot)
 	}
 }
+
+// ---- source-unreachable classification (B16) ----------------------------
+//
+// "The source could not be reached" and "the recovery ran and did not
+// verify" must never collapse into one status: the first means the NAS was
+// asleep, the second means the copy is bad. These tests pin which engine
+// failures land on which side, per the tiebreak rule: unreachable only when
+// no recovery/verification was attempted at all, or when the failure output
+// carries a source-reachability signature; everything else stays disputed.
+
+func TestLooksLikeUnreachableSource(t *testing.T) {
+	cases := []struct {
+		out  string
+		want bool
+	}{
+		{"cat: /backups/nas-host/creds.tar.gz.gpg: No such file or directory", true},
+		{"rsync: [Receiver] mkdir /backups/nas-host failed: Permission denied (13)", true},
+		{"ssh: connect to host nas port 22: Connection refused", true},
+		{"curl: (28) Connection timed out after 30001 milliseconds", true},
+		{"ssh: Could not resolve hostname nas.lan: Name or service not known", true},
+		{"mount.nfs: mount point /mnt/backups does not exist", true},
+		{"cp: cannot stat '/mnt/backups/x': Stale file handle", true},
+		{"gpg: decryption failed: Bad session key", false},
+		{"restore script: checksum mismatch after unpack", false},
+		{"some totally unrelated crash", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := looksLikeUnreachableSource([]byte(c.out)); got != c.want {
+			t.Errorf("looksLikeUnreachableSource(%q) = %v, want %v", c.out, got, c.want)
+		}
+	}
+}
+
+func TestDrillClassifiesSourceUnreachable(t *testing.T) {
+	dir := t.TempDir()
+	artifact := writeFile(t, dir, "artifact", "content\n")
+
+	// A recovery command that fails while reporting the source missing —
+	// the exact NAS-outage shape — is unreachable: the drill could not even
+	// try, so nothing was proven.
+	res := Runner{}.Run(Spec{
+		Proof:    "nas-source",
+		Artifact: artifact,
+		Recover:  "cat /nonexistent/recovery/source.gpg > \"$RG_TARGET\"",
+	})
+	if res.Verified || res.Err == nil {
+		t.Fatalf("must fail closed, verified=%v err=%v", res.Verified, res.Err)
+	}
+	if !res.SourceUnreachable {
+		t.Errorf("a recover failure naming the source missing must classify unreachable, err=%v", res.Err)
+	}
+
+	// A recovery command that fails for a non-reachability reason (a broken
+	// script, a bad key) was ATTEMPTED — it stays on the disputed side.
+	res = Runner{}.Run(Spec{
+		Proof:    "bad-decrypt",
+		Artifact: artifact,
+		Recover:  "echo 'gpg: decryption failed: Bad session key' >&2; exit 2",
+	})
+	if res.Verified || res.Err == nil {
+		t.Fatalf("must fail closed, verified=%v err=%v", res.Verified, res.Err)
+	}
+	if res.SourceUnreachable {
+		t.Error("a recover failure with no source-reachability signature must NOT classify unreachable")
+	}
+
+	// A command that exits 0 but produces nothing ran a "recovery" and got
+	// garbage back — disputed, never unreachable.
+	res = Runner{}.Run(Spec{Proof: "silent-noop", Artifact: artifact, Recover: "true"})
+	if res.Verified || res.Err == nil {
+		t.Fatalf("must fail closed, verified=%v err=%v", res.Verified, res.Err)
+	}
+	if res.SourceUnreachable {
+		t.Error("an exited-0-but-empty recovery is a bad artifact, not an unreachable source")
+	}
+
+	// Failures before any recovery is attempted (unreadable live artifact,
+	// unusable sandbox) proved nothing either — unreachable.
+	res = Runner{}.Run(Spec{
+		Proof:    "no-artifact",
+		Artifact: filepath.Join(dir, "does-not-exist"),
+		Recover:  "true",
+	})
+	if res.Err == nil || !res.SourceUnreachable {
+		t.Errorf("a pre-recovery failure proves nothing; want unreachable, err=%v", res.Err)
+	}
+	res = Runner{SandboxDir: filepath.Join(dir, "no-such-parent-dir")}.Run(Spec{
+		Proof:    "bad-sandbox",
+		Artifact: artifact,
+		Recover:  "true",
+	})
+	if res.Err == nil {
+		t.Fatal("an unusable sandbox parent must fail closed")
+	}
+	if !res.SourceUnreachable {
+		t.Errorf("a sandbox-creation failure attempts no recovery; want unreachable, err=%v", res.Err)
+	}
+}

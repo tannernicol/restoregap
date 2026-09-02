@@ -54,6 +54,12 @@ func TestLevelOf(t *testing.T) {
 			wantReason: "disputed",
 		},
 		{
+			name:       "unreachable proof",
+			proof:      Proof{Status: ProofRecordUnreachable, ObservedAt: &observed, Verified: false},
+			wantLevel:  LevelDeclared,
+			wantReason: "unreachable",
+		},
+		{
 			name:       "stale proof",
 			proof:      Proof{Status: ProofRecordStale, ObservedAt: &observed, Verified: true, Measurements: &Measurements{Checks: passing("byte_identical")}},
 			wantLevel:  LevelDeclared,

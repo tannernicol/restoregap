@@ -45,6 +45,19 @@ func (r Report) Markdown() []byte {
 }
 
 func writeBanner(b *strings.Builder, r Report) {
+	if r.GateState == "broken" {
+		b.WriteString("# GATE BROKEN\n")
+		b.WriteString("Restore Gap could not complete this gate. Treat this as blocked until the gate is repaired.\n")
+		if r.BrokenReason != "" {
+			fmt.Fprintf(b, "- **Could not run:** %s\n", r.BrokenReason)
+		}
+		for _, c := range r.Checks {
+			if c.Outcome == "broken" {
+				fmt.Fprintf(b, "- **Broken check:** `%s` (%dms)\n", c.ID, c.DurationMS)
+			}
+		}
+		return
+	}
 	verdict := strings.ToUpper(r.Verdict)
 	fmt.Fprintf(b, "# %s\n", verdict)
 	b.WriteString(summarySentence(r.Verdict) + "\n")

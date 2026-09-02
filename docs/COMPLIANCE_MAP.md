@@ -1,5 +1,13 @@
 # Compliance & Cyber-Insurance Control Map
 
+## Positioning
+
+The evidence packet is a by-product of the gate, not the product: the compliance
+mappings in `docs/COMPLIANCE_MAP.md` are primary-source-verified, `direct` vs
+`supporting` strength is always labeled, and Restore Gap never overclaims a
+control — but the buyer is the engineer who wants a seatbelt, not the auditor
+who wants a report.
+
 Maps restoregap evidence types to the framework controls and underwriting
 questions that drive purchases. Every control ID below was verified against
 the cited source on **2026-07-16**; anything not verifiable from a primary

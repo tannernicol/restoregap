@@ -85,6 +85,33 @@ func TestHashEntryIgnoresHashField(t *testing.T) {
 	}
 }
 
+// TestV2DecisionWithoutNewFieldsStillVerifies pins the optional-field
+// compatibility rule: adding execution metadata to a v2 payload must not
+// change the canonical bytes or hash of a v2 entry that never had it.
+func TestV2DecisionWithoutNewFieldsStillVerifies(t *testing.T) {
+	e := Entry{
+		Schema: 2, ID: "legacy", CreatedAt: time.Unix(0, 0).UTC(), EntryType: EntryDecision, Actor: "agent/test",
+		Payload: Payload{Decision: &DecisionPayload{Verdict: "block", Actor: "agent/test"}}, Prev: GenesisHash,
+	}
+	h, err := hashEntry(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Hash = h
+	if got := VerifyEntries([]Entry{e}); !got.OK {
+		t.Errorf("legacy v2 entry no longer verifies: %s", got.Reason)
+	}
+	canonical, err := canonicalize(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, absent := range []string{"gate_state", "broken_reason", "duration_ms", "tool_version", "checks"} {
+		if bytes.Contains(canonical, []byte(absent)) {
+			t.Errorf("legacy canonical form unexpectedly contains %s: %s", absent, canonical)
+		}
+	}
+}
+
 func TestValidateNoFloats(t *testing.T) {
 	cases := []struct {
 		name    string

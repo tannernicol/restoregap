@@ -4,6 +4,7 @@
 package rules
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -275,5 +276,77 @@ guards:
 	res := findings[0].Resource
 	if !strings.Contains(res, "/home/user/.ssh") || !strings.Contains(res, "/home/user/.ssh/id_ed25519_nas") {
 		t.Errorf("resource = %q, want it to name both the deleted dir and the guarded path", res)
+	}
+}
+
+// TestEvaluateUnreachableProofBlocksDistinctFromDisputed: an unreachable
+// proof ("the recovery source was not reachable, nothing was proven") must
+// block a guard exactly like a disputed one — but as its own ProofStatus,
+// with remediation that says re-run the drill once the source is reachable
+// instead of treating the copy as bad. require_verified must not be
+// satisfied by it either: the gate never weakens, only the story changes.
+func TestEvaluateUnreachableProofBlocksDistinctFromDisputed(t *testing.T) {
+	newCtx := func(status contextspec.ProofRecordStatus, verified bool) contextspec.Context {
+		t.Helper()
+		yaml := `version: 2
+guards:
+  - id: nas-backed-lifeline
+    kind: lifeline
+    match:
+      paths: ["creds/**"]
+    requires:
+      proofs: [nas-copy]
+proofs:
+  - id: nas-copy
+    status: ` + string(status) + `
+    observed_at: "2026-05-14T00:00:00Z"
+    verified: ` + fmt.Sprintf("%v", verified) + `
+`
+		ctx, err := contextspec.Parse(stringsReader(yaml))
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		return ctx
+	}
+	ci := intent.ChangeIntent{Action: intent.ActionDeleteFile, Paths: []string{"creds/store.tar.gz.gpg"}}
+
+	findings := Evaluate([]intent.ChangeIntent{ci}, newCtx(contextspec.ProofRecordUnreachable, false), fixedNow)
+	if len(findings) != 1 || findings[0].Verdict != engine.VerdictBlock {
+		t.Fatalf("unreachable proof must block, got %+v", findings)
+	}
+	if findings[0].ProofStatus != engine.ProofUnreachable {
+		t.Errorf("proof status = %s, want unreachable", findings[0].ProofStatus)
+	}
+	step := findings[0].RequiredNextStep
+	if !strings.Contains(step, "re-run the drill once the source is reachable") {
+		t.Errorf("required_next_step should carry the reachability remedy, got %q", step)
+	}
+	if !strings.Contains(step, "not evidence of data loss") {
+		t.Errorf("required_next_step must not imply data loss, got %q", step)
+	}
+	if !strings.Contains(findings[0].Proof, "not reachable") {
+		t.Errorf("finding detail should say why: %q", findings[0].Proof)
+	}
+
+	// A lifeline marked require_verified gets the same block from an
+	// unreachable proof — it is not a verified drill product.
+	rv := newCtx(contextspec.ProofRecordUnreachable, false)
+	rv.Guards[0].RequireVerified = true
+	findings = Evaluate([]intent.ChangeIntent{ci}, rv, fixedNow)
+	if len(findings) != 1 || findings[0].Verdict != engine.VerdictBlock {
+		t.Fatalf("unreachable must not satisfy require_verified, got %+v", findings)
+	}
+
+	// The disputed twin blocks too, as its own status with its own remedy —
+	// the two must remain distinguishable to the operator.
+	findings = Evaluate([]intent.ChangeIntent{ci}, newCtx(contextspec.ProofRecordDisputed, false), fixedNow)
+	if len(findings) != 1 || findings[0].Verdict != engine.VerdictBlock {
+		t.Fatalf("disputed proof must keep blocking, got %+v", findings)
+	}
+	if findings[0].ProofStatus != engine.ProofContradicted {
+		t.Errorf("disputed proof status = %s, want contradicted (unchanged)", findings[0].ProofStatus)
+	}
+	if strings.Contains(findings[0].RequiredNextStep, "re-run the drill once the source is reachable") {
+		t.Errorf("disputed remedy must stay the investigate-the-copy path, got %q", findings[0].RequiredNextStep)
 	}
 }

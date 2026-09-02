@@ -6,6 +6,25 @@ package contextspec
 // DefaultOrigin labels findings produced under the zero-config path.
 const DefaultOrigin = "built-in default local lifeline policy"
 
+// SecretPathGlobs are the path patterns the zero-config default treats as
+// secret-material lifelines (SSH/GPG private keys, a `pass`-style password
+// store, age/sops key material). Exported so anything else that needs "is
+// this path a secret store" — internal/bundle's export-time exclusion,
+// docs/SCHEMA.md §Portable signed bundle's "no file under a secret store
+// path is ever included" assertion — matches against this SAME list rather
+// than a second, driftable copy.
+var SecretPathGlobs = []string{
+	"**/.ssh/id_*",
+	"**/.ssh/*_ed25519",
+	"**/.ssh/*_rsa",
+	"**/.ssh/*_ecdsa",
+	"**/authorized_keys",
+	"**/.gnupg/**",
+	"**/.password-store/**",
+	"**/.config/age/**",
+	"**/.config/sops/**",
+}
+
 // Default returns the built-in zero-config lifeline policy: what preflight
 // evaluates against when the caller supplies NO --context. This is a real,
 // separate policy — not "no policy" — mirroring the Python implementation's
@@ -32,17 +51,7 @@ func Default() Context {
 		Version: 2,
 		Origin:  DefaultOrigin,
 		Guards: []Guard{
-			lifeline("default-ssh-private-keys", []string{
-				"**/.ssh/id_*",
-				"**/.ssh/*_ed25519",
-				"**/.ssh/*_rsa",
-				"**/.ssh/*_ecdsa",
-				"**/authorized_keys",
-				"**/.gnupg/**",
-				"**/.password-store/**",
-				"**/.config/age/**",
-				"**/.config/sops/**",
-			}),
+			lifeline("default-ssh-private-keys", SecretPathGlobs),
 			lifeline("default-recovery-bootstrap", []string{
 				"RECOVERY.md",
 				"RUNBOOK.md",

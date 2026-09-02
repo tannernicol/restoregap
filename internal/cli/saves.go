@@ -22,8 +22,9 @@ func newSavesCmd() *cobra.Command {
 	var ledgerPath, format string
 
 	cmd := &cobra.Command{
-		Use:   "saves",
-		Short: "Provable near-misses: block → remediation → pass chains from the ledger",
+		Use:    "saves",
+		Hidden: true,
+		Short:  "Provable near-misses: block → remediation → pass chains from the ledger",
 		Long: "Coalesces raw evaluations per (guard, resource) into episodes and classifies each by how it\n" +
 			"ended: a SAVE (blocked, then passed — the gap was closed), an ACCEPTED RISK (blocked, then\n" +
 			"overridden), or an OPEN BLOCK. Repeated checks of one unfixed gap never count as new saves.",

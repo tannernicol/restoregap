@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!--
+  SPDX-License-Identifier: MIT
+  SPDX-FileCopyrightText: 2026 Tanner Nicol
+
+  restoregap.com landing page — ONE self-contained file.
+  No JavaScript, no external fonts, no CDN: everything inline so the page works
+  offline and cannot leak a visitor to a third party. Colors are the design
+  tokens from ui/dist/restoregap.css (dark theme), copied inline by hand.
+-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Restore Gap restores your backup for real, in a sandbox, checks the result, and refuses the destructive change until that proof exists and is fresh. One static binary, MIT, no account, no phone-home.">
+<meta name="color-scheme" content="dark">
+<title>Restore Gap — prove your recovery works</title>
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiIgd2lkdGg9IjMyIGhlaWdodD0zMiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IlJlc3RvcmUgR2FwIj4KICA8ZyBmaWxsPSJub25lIiBzdHJva2U9IiM3ZmE4OTEiIHN0cm9rZS13aWR0aD0iMi41IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPgogICAgPHBhdGggZD0iTTE2IDNsMTEgMy45djkuNGMwIDYuNy00LjkgMTAuNy0xMSAxMi45LTYuMS0yLjItMTEtNi4yLTExLTEyLjlWNi45eiIvPjxwYXRoIGQ9Ik05LjUgMTYuNWg0TTE4LjUgMTYuNWg0Ii8+CiAgPC9nPgo8L3N2Zz4K">
+<style>
+  /* Design tokens from ui/dist/restoregap.css (dark) — copied inline, no fetch. */
+  :root {
+    --rg-font: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --rg-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+    --rg-bg: #0d1117;
+    --rg-surface: #141a23;
+    --rg-surface-2: #1b2330;
+    --rg-border: #2a3547;
+    --rg-border-strong: #3d4b63;
+    --rg-text: #e6ebf2;
+    --rg-text-muted: #9aa7b8;
+    --rg-text-faint: #6b7789;
+    --rg-accent: #58a6ff;
+    --rg-accent-contrast: #0d1117;
+    --rg-block: #f85149;
+    --rg-block-bg: #3d1a1c;
+    --rg-warn: #e3b341;
+    --rg-pass: #3fb950;
+    --rg-radius: 8px;
+    --rg-radius-sm: 5px;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--rg-bg);
+    color: var(--rg-text);
+    font-family: var(--rg-font);
+    font-size: 16px;
+    line-height: 1.55;
+    overflow-x: clip; /* the page never scrolls sideways; <pre> scrolls itself */
+  }
+
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 0 20px;
+  }
+
+  a { color: var(--rg-accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--rg-accent); outline-offset: 2px; }
+
+  /* Header */
+  .site-header { border-bottom: 1px solid var(--rg-border); }
+  .site-header .wrap {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 20px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 650;
+    letter-spacing: .01em;
+    color: var(--rg-text);
+    font-size: 18px;
+    min-height: 44px;
+  }
+  .brand svg { color: var(--rg-accent); flex: none; }
+  .site-nav { margin-left: auto; }
+  .site-nav ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .site-nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
+    padding: 6px 12px;
+    border-radius: var(--rg-radius-sm);
+    color: var(--rg-text-muted);
+    font-size: 15px;
+  }
+  .site-nav a:hover { color: var(--rg-text); background: var(--rg-surface-2); text-decoration: none; }
+
+  /* Hero */
+  .hero { padding: 56px 0 8px; }
+  .hero h1 {
+    margin: 0 0 16px;
+    font-size: clamp(28px, 7vw, 40px);
+    line-height: 1.2;
+    letter-spacing: -.01em;
+  }
+  .hero .sub {
+    margin: 0 0 28px;
+    font-size: 18px;
+    color: var(--rg-text-muted);
+    max-width: 46rem;
+  }
+  .cta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 0 0 48px;
+  }
+  .cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 10px 20px;
+    border-radius: var(--rg-radius);
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .cta:hover { text-decoration: none; }
+  .cta-primary { background: var(--rg-accent); color: var(--rg-accent-contrast); }
+  .cta-primary:hover { background: #79b8ff; }
+  .cta-ghost { border: 1px solid var(--rg-border-strong); color: var(--rg-text); }
+  .cta-ghost:hover { border-color: var(--rg-accent); }
+
+  /* Sections */
+  section { padding: 40px 0 8px; }
+  h2 {
+    margin: 0 0 16px;
+    font-size: clamp(21px, 5vw, 26px);
+    line-height: 1.3;
+  }
+  section > .wrap > p.lead { color: var(--rg-text-muted); font-size: 17px; }
+
+  /* Demo */
+  .demo-media { margin: 0 0 8px; }
+  .demo-media img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--rg-border);
+    border-radius: var(--rg-radius);
+    background: var(--rg-surface);
+  }
+  figcaption, .caption {
+    color: var(--rg-text-muted);
+    font-size: 14px;
+    margin: 10px 0 0;
+  }
+
+  /* Code blocks */
+  pre {
+    margin: 0;
+    background: var(--rg-surface);
+    border: 1px solid var(--rg-border);
+    border-radius: var(--rg-radius);
+    padding: 14px 16px;
+    overflow-x: auto; /* long lines scroll INSIDE the block */
+    font-family: var(--rg-mono);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--rg-text);;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+  pre code { font: inherit; overflow-wrap: anywhere; }
+  code {
+    font-family: var(--rg-mono);
+    font-size: 0.9em;
+    overflow-wrap: anywhere;
+  }
+  .ok-line { color: var(--rg-pass); }
+  .block-line { color: var(--rg-block); font-weight: 600; }
+  .muted-line { color: var(--rg-text-muted); }
+  .cmd::before { content: "$ "; color: var(--rg-text-faint); }
+
+  /* Cards */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+    gap: 16px;
+    margin: 8px 0 0;
+  }
+  .card {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--rg-surface);
+    border: 1px solid var(--rg-border);
+    border-radius: var(--rg-radius);
+    padding: 16px;
+  }
+  .card h3 { margin: 0; font-size: 17px; }
+  .card h3 code {
+    font-size: 16px;
+    font-weight: 650;
+    color: var(--rg-accent);
+    background: none;
+  }
+  .card .caption { margin: 0; font-size: 13.5px; }
+
+  /* List sections */
+  .fact-list { list-style: none; margin: 0; padding: 0; }
+  .fact-list li {
+    padding: 14px 0;
+    border-top: 1px solid var(--rg-border);
+  }
+  .fact-list li:last-child { border-bottom: 1px solid var(--rg-border); }
+  .fact-list h3 { margin: 0 0 4px; font-size: 16.5px; }
+  .fact-list p { margin: 0; color: var(--rg-text-muted); }
+  .section-link { display: inline-block; margin: 18px 0 0; font-size: 15.5px; }
+
+  /* Agents */
+  .agent-note { color: var(--rg-text-muted); font-size: 17px; }
+  .agent-stack { display: flex; flex-direction: column; gap: 8px; margin: 20px 0 0; }
+
+  /* Install */
+  .install-note { color: var(--rg-text-muted); margin: 14px 0 0; }
+
+  /* Plans */
+  .plans {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+    gap: 16px;
+    margin: 8px 0 0;
+  }
+  .plan {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--rg-surface);
+    border: 1px solid var(--rg-border);
+    border-radius: var(--rg-radius);
+    padding: 20px;
+  }
+  .plan h3 { margin: 0; font-size: 18px; }
+  .plan .plan-sub { margin: -4px 0 4px; color: var(--rg-text-muted); font-size: 14px; }
+  .plan ul { margin: 0; padding-left: 1.2em; color: var(--rg-text-muted); }
+  .plan li { padding: 3px 0; }
+  .plan .plan-cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    margin-top: auto;
+    padding: 10px 16px;
+    border: 1px solid var(--rg-border-strong);
+    border-radius: var(--rg-radius);
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .plan .plan-cta:hover { border-color: var(--rg-accent); text-decoration: none; }
+  .plan-free { border-color: var(--rg-border-strong); }
+  .footnote { color: var(--rg-text-faint); font-size: 13.5px; margin: 12px 0 0; }
+
+  /* Footer */
+  .site-footer { margin-top: 56px; padding: 20px 0 40px; border-top: 1px solid var(--rg-border); }
+  .site-footer p { margin: 0; color: var(--rg-text-muted); font-size: 14px; }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <span class="brand">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">
+        <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M16 3l11 3.9v9.4c0 6.7-4.9 10.7-11 12.9-6.1-2.2-11-6.2-11-12.9V6.9z"/><path d="M9.5 16.5h4M18.5 16.5h4"/>
+        </g>
+      </svg>
+      Restore Gap
+    </span>
+    <nav class="site-nav" aria-label="Site">
+      <ul>
+        <li><a href="#install">Install</a></li>
+        <li><a href="https://github.com/tannernicol/restoregap/blob/main/docs/walkthrough.md">Walkthrough</a></li>
+        <li><a href="#agents">Agents</a></li>
+        <li><a href="https://github.com/tannernicol/restoregap">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <section class="hero" id="top">
+    <div class="wrap">
+      <h1>Prove your recovery works — then refuse the risky change until it does.</h1>
+      <p class="sub">Your nightly backup job says success. Restore Gap restores that backup for real, in a sandbox, checks the result, and refuses the destructive change — yours or your coding agent's — until that proof exists and is fresh. One static binary, MIT, no account, no phone-home.</p>
+      <p class="cta-row">
+        <a class="cta cta-primary" href="#install">Install</a>
+        <a class="cta cta-ghost" href="#demo">Watch the 60-second walkthrough</a>
+      </p>
+    </div>
+  </section>
+
+  <section id="demo">
+    <div class="wrap">
+      <h2>Watch it work</h2>
+      <figure class="demo-media">
+        <img src="demo.gif" width="1080" height="640"
+             alt="Terminal recording: restoregap check reports drift between a live tree and its recovery copy, restoregap drill restores a database into a sandbox and validates it, and restoregap preflight blocks a destructive intent until proof is supplied.">
+        <figcaption>Every frame is real output from the fixture in demo/setup.sh.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="commands">
+    <div class="wrap">
+      <h2>Three commands, each one earning the next</h2>
+      <div class="cards">
+        <div class="card">
+          <h3><code>check</code></h3>
+          <pre><code><span class="cmd">restoregap check proj backup/proj</span>
+tree: 3 live / 2 recovery — 1 MISSING FROM RECOVERY, 2 STALE IN RECOVERY
+<span class="muted-line">  these exist in exactly one place:</span>
+<span class="muted-line">    .env</span>
+<span class="muted-line">  these exist in both but the recovery copy is out of date:</span>
+<span class="muted-line">    app.conf</span>
+<span class="muted-line">    app.db</span></code></pre>
+          <p class="caption">Zero config. Exit 1 on drift. Compares directory trees today; restic, borg and ZFS comparators are built in vote order (issue #2).</p>
+        </div>
+        <div class="card">
+          <h3><code>drill</code></h3>
+          <pre><code><span class="cmd">restoregap drill</span>
+<span class="ok-line">✓ app-db-recovery — data-valid (L3) in 0s: integrity ok; users=95 (>= 90% of live 100 = 90)</span></code></pre>
+          <p class="caption">A real restore into a sandbox with typed checks. Levels are honest: restores (files present) → data-valid (typed checks passed) → serves (booted and answered).</p>
+        </div>
+        <div class="card">
+          <h3><code>preflight</code></h3>
+          <pre><code><span class="cmd">restoregap preflight --intent rm-app-db.yml</span>
+<span class="block-line">BLOCK — Restore Gap blocked this change. Supply proof, change the plan, or record an owner override.</span>
+<span class="muted-line">  - Refresh or supply proof "app-db-recovery", or record an owner override before proceeding.</span></code></pre>
+          <p class="caption">Fail-closed. Every verdict, proof and owner override lands in a hash-chained ledger you can verify.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="why">
+    <div class="wrap">
+      <h2>What a "backup exists" check cannot tell you</h2>
+      <ul class="fact-list">
+        <li>
+          <h3>Existing is not restorable</h3>
+          <p>A backup that cannot be restored is a file, not a safety net.</p>
+        </li>
+        <li>
+          <h3>Unreachable is not failed — and neither is stale</h3>
+          <p>The author's own credential store: 1,303 live entries vs 1,300 sealed → reported as drift, not "backup OK".</p>
+        </li>
+        <li>
+          <h3>A proof has a half-life</h3>
+          <p>Proofs expire; attestations nobody re-observes go cold.</p>
+        </li>
+        <li>
+          <h3>Direction matters</h3>
+          <p>Newer-in-live vs newer-in-recovery need opposite fixes.</p>
+        </li>
+        <li>
+          <h3>Races are real</h3>
+          <p>A drill 25 seconds before the nightly regen fails honestly and wrongly.</p>
+        </li>
+      </ul>
+      <p><a class="section-link" href="https://github.com/tannernicol/restoregap/blob/main/docs/why-not-a-script.md">The full list, each one a bug found in dogfood → docs/why-not-a-script.md</a></p>
+    </div>
+  </section>
+
+  <section id="agents">
+    <div class="wrap">
+      <h2>Built for the riskiest operator: your coding agent</h2>
+      <p class="agent-note">A PreToolUse hook turns <code>rm</code>, <code>mv</code>, <code>truncate</code>, <code>dd</code>, <code>shred</code>, <code>git push --force</code>, <code>terraform destroy</code> and <code>dropdb</code> into intents and asks preflight before the shell runs. Restore Gap is the reason to allow a guarded change; your agent's own deny rules or sandbox are the general net.</p>
+      <div class="agent-stack">
+        <pre><code><span class="cmd">echo '{"tool_name":"Bash","tool_input":{"command":"rm proj/app.db"}}' | preflight-hook.sh</span>
+<span class="block-line"># BLOCK</span>
+<span class="cmd">echo $?  <span class="muted-line"># 2 — the agent's rm never runs</span></span></code></pre>
+      </div>
+      <p><a class="section-link" href="https://github.com/tannernicol/restoregap/blob/main/docs/agent-gate.md">How the agent gate works → docs/agent-gate.md</a></p>
+      <p>Same gates over MCP: <code>restoregap mcp serve</code>.</p>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <h2>Install</h2>
+      <pre><code><span class="cmd">curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.9.2/scripts/install.sh</span>
+<span class="cmd">less install.sh &amp;&amp; sh install.sh   <span class="muted-line"># pinned tag; verifies checksums; ~/.local/bin; never sudo</span></span></code></pre>
+      <p class="install-note">Linux and macOS, amd64 and arm64. Every release ships checksums.txt and SBOMs; builds are reproducible. Or: <code>go install github.com/tannernicol/restoregap/cmd/restoregap@latest</code></p>
+    </div>
+  </section>
+
+  <section id="plans">
+    <div class="wrap">
+      <h2>Free forever — and what a paid layer would be</h2>
+      <div class="plans">
+        <div class="plan plan-free">
+          <h3>Free</h3>
+          <p class="plan-sub">$0 forever</p>
+          <ul>
+            <li>the whole binary — check, drill, preflight, ledger, MCP</li>
+            <li>runs offline, no account</li>
+            <li>nothing withheld to sell later</li>
+          </ul>
+        </div>
+        <div class="plan">
+          <h3>Hosted</h3>
+          <p class="plan-sub">not built yet</p>
+          <ul>
+            <li>drift over months</li>
+            <li>proofs across all your machines in one view</li>
+            <li>a recovery proof a third party can verify without shelling into your box</li>
+          </ul>
+          <a class="plan-cta" href="https://github.com/tannernicol/restoregap/issues/1">Say if you'd pay → interest-check issue</a>
+        </div>
+      </div>
+      <p class="footnote">It gets built only if enough people say so.</p>
+    </div>
+  </section>
+
+  <section id="dogfood">
+    <div class="wrap">
+      <h2>Used on its author's own machines</h2>
+      <p class="lead">Every timer, drill and guard on this site's author's estate runs through Restore Gap: 39 proofs — 16 restored for real, 23 attested — re-checked hourly to daily, expiring in 30 days.</p>
+      <pre><code><span class="cmd">restoregap explain secret-store-recovery</span>
+secret-store-recovery — restores (restored into a sandbox, files present)
+<span class="muted-line">  status      present · observed 2026-08-24T19:19:20Z · expires 2026-09-23T19:19:20Z (in 29d)</span>
+<span class="muted-line">  last drill  2026-08-24T19:19:20Z · RTO 200ms</span>
+<span class="ok-line">    ✓ files=1310 (&gt;= 1200); must_exist ok</span>
+<span class="ok-line">    ✓ live store and recovery copy agree</span>
+<span class="ok-line">    ✓ kit-only chain holds: kit keys decrypt kit store to the working restic password</span>
+<span class="muted-line">satisfies   secret-store-data (block)</span></code></pre>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <p>MIT · <a href="https://github.com/tannernicol/restoregap/blob/main/SECURITY.md">Security policy (SECURITY.md)</a> · <a href="https://github.com/tannernicol/restoregap/issues">Issues</a> · restoregap.com · Built by one person; email-only support.</p>
+  </div>
+</footer>
+
+</body>
+</html>

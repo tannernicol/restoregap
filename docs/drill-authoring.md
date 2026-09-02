@@ -302,7 +302,10 @@ still exist, without performing a recovery. Run via `sh -c` with only
 `RG_RECOVERY_SOURCE` set (`RG_SANDBOX`/`RG_TARGET` are unset — there is no
 recovery in progress). **Exit 0 means the source is still alive**; nonzero
 means it's gone. `restoregap drill --pins-only` runs every declared
-`pin_check`: a failure flips that proof to `disputed` immediately; a success
+`pin_check`: a failure flips that proof to
+`unreachable` immediately (the pin attempted nothing but reaching the source,
+so its failure can only mean "could not reach", never "recovered and did not
+verify"); a success
 leaves the existing proof record completely untouched (a pin check is not a
 drill and must never refresh `observed_at` or expiry). A drill with no
 `pin_check` is simply skipped in `--pins-only` mode — silently, but that
@@ -448,7 +451,7 @@ same thing:
 
 | Level | Rung | Earned by |
 |---|---|---|
-| `declared` | L1 | A drill exists in the config, but there's no current live verified proof — never drilled, or the last proof expired, went stale, was disputed (e.g. a failed `pin_check`), or simply never verified. |
+| `declared` | L1 | A drill exists in the config, but there's no current live verified proof — never drilled, or the last proof expired, went stale, was disputed (a recovery that ran and did not verify), went unreachable (the recovery source could not be reached — e.g. a failed `pin_check`), or simply never verified. |
 | `restores` | L2 | A verified drill whose passing checks include `byte_identical`, `file_tree`, and/or `command` — recovery reconstructs validated content. |
 | `data-valid` | L3 | A verified drill that also includes a passing `sqlite`, `git`, and/or `key_fingerprint` check — the recovered data opens and its own invariants hold (or, for keys, is provably the right key material by fingerprint), not just "bytes exist". |
 | `serves` | L4 | A verified drill that also includes a passing `serve` check — the artifact boots as a real service and answers. |

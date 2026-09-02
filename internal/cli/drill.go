@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -17,7 +18,9 @@ import (
 
 	"github.com/tannernicol/restoregap/internal/contextspec"
 	"github.com/tannernicol/restoregap/internal/drill"
+	"github.com/tannernicol/restoregap/internal/hostid"
 	"github.com/tannernicol/restoregap/internal/ledger"
+	"github.com/tannernicol/restoregap/internal/policy"
 )
 
 // newDrillCmd runs every declared drill and records the outcome as a proof.
@@ -28,16 +31,23 @@ import (
 // outcomes — byte-identity by default, or whatever validate: checks and RTO/RPO
 // budgets the drill declares.
 //
-// A failure is recorded as `disputed` rather than silently left alone. A drill
-// that used to pass and now does not is exactly the state that must be loud —
-// leaving the old passing proof in place would mean the guard keeps clearing
-// changes on evidence that has since been contradicted.
+// A failure is recorded rather than silently left alone, in one of two honest
+// flavors. A drill that ran and did not verify (a check or budget failed, the
+// artifact came back wrong) records `disputed` — that state must be loud,
+// because leaving the old passing proof in place would mean the guard keeps
+// clearing changes on evidence that has since been contradicted. A drill whose
+// recovery SOURCE could not be reached (missing mount, connection refused,
+// permission denied on the source, timeout), and every pin_check failure,
+// records `unreachable` instead: nothing was proven either way, and reporting
+// that as "disputed" would read as backup corruption when the truth is the NAS
+// was asleep. Both statuses fail closed identically — this distinction is
+// about the report, never the gate.
 //
 // --pins-only runs a cheaper, more frequent check: for each drill that declares
 // pin_check, prove the pinned recovery source still exists WITHOUT performing a
-// recovery. A pin failure flips the proof to disputed immediately; a pin success
-// leaves the existing proof record completely untouched — a pin check is not a
-// drill and must never refresh observed_at or expiry.
+// recovery. A pin failure flips the proof to unreachable immediately; a pin
+// success leaves the existing proof record completely untouched — a pin check
+// is not a drill and must never refresh observed_at or expiry.
 //
 // --lint statically checks every declared drill without running or writing
 // anything — see internal/drill.Lint. It is the step an agent authoring a new
@@ -192,7 +202,7 @@ func runFullDrillCmd(cmd *cobra.Command, contextPath string, drills []contextspe
 		return fmt.Errorf("drill: recording proofs: %w", err)
 	}
 
-	appendDrillLedgerEntries(cmd.ErrOrStderr(), ledgerPath, actor, "drill", results, drills)
+	appendDrillLedgerEntries(cmd.ErrOrStderr(), ledgerPath, contextPath, actor, "drill", results, drills)
 
 	if err := checkDrillsVerified(results); err != nil {
 		cmd.SilenceUsage = true
@@ -202,8 +212,10 @@ func runFullDrillCmd(cmd *cobra.Command, contextPath string, drills []contextspe
 }
 
 // runPinsOnlyCmd runs pin_check for every drill that declares one. Failing
-// pins rewrite their proof to disputed (reusing recordDrillProofs); passing
-// pins leave their proof untouched. Every attempted pin still gets a ledger
+// pins rewrite their proof to unreachable (reusing recordDrillProofs) — a pin
+// check attempts nothing but reaching the source, so its failure can only ever
+// mean "could not reach", never "recovered and did not verify"; passing pins
+// leave their proof untouched. Every attempted pin still gets a ledger
 // telemetry entry, pass or fail.
 func runPinsOnlyCmd(cmd *cobra.Command, contextPath string, drills []contextspec.Drill, only, ledgerPath, actor string) error {
 	results, err := runPinChecks(cmd.OutOrStdout(), drills, only)
@@ -219,15 +231,15 @@ func runPinsOnlyCmd(cmd *cobra.Command, contextPath string, drills []contextspec
 	}
 	if len(failed) > 0 {
 		if err := recordDrillProofs(contextPath, failed, drills, 0, nil, "pin_check"); err != nil {
-			return fmt.Errorf("drill --pins-only: recording disputed proofs: %w", err)
+			return fmt.Errorf("drill --pins-only: recording unreachable proofs: %w", err)
 		}
 	}
 
-	appendDrillLedgerEntries(cmd.ErrOrStderr(), ledgerPath, actor, "pin_check", results, drills)
+	appendDrillLedgerEntries(cmd.ErrOrStderr(), ledgerPath, contextPath, actor, "pin_check", results, drills)
 
 	if len(failed) > 0 {
 		cmd.SilenceUsage = true
-		return fmt.Errorf("drill --pins-only: %d pinned recovery source(s) are gone — proofs recorded as disputed", len(failed))
+		return fmt.Errorf("drill --pins-only: %d pinned recovery source(s) could not be reached — proofs recorded as unreachable; re-run the drill once the source is reachable", len(failed))
 	}
 	return nil
 }
@@ -326,14 +338,17 @@ func runPinChecks(out io.Writer, drills []contextspec.Drill, only string) ([]dri
 // RG_SANDBOX/RG_TARGET unset — it proves the pinned source is still
 // reachable, never that a recovery works. It never returns Err: a nonzero
 // exit is the pin failing, not the command failing to run one, so it always
-// resolves to a Verified true/false verdict.
+// resolves to a Verified true/false verdict. A failed pin is by definition a
+// reachability failure — no recovery was attempted — so the result is marked
+// SourceUnreachable and records as status "unreachable", never "disputed".
 func runPinCheck(d contextspec.Drill) drill.Result {
 	res := drill.Result{Proof: d.Proof}
 	c := exec.Command("sh", "-c", d.PinCheck)
 	c.Env = append(os.Environ(), "RG_RECOVERY_SOURCE="+d.RecoverySource)
 	out, err := c.CombinedOutput()
 	if err != nil {
-		res.Detail = fmt.Sprintf("pinned recovery source vanished: %s", pinCheckFirstLine(out))
+		res.SourceUnreachable = true
+		res.Detail = fmt.Sprintf("could not reach the pinned recovery source: %s", pinCheckFirstLine(out))
 		return res
 	}
 	res.Verified = true
@@ -354,31 +369,48 @@ func pinCheckFirstLine(b []byte) string {
 	return s
 }
 
-// parseDrillSigningKey decodes a hex ed25519 seed into a signer. It returns a
+// parseDrillSigningKey decodes a hex ed25519 seed into a signer via
+// contextspec.ParseSigningKeySeed (shared with `bundle export
+// --signing-key` so the two commands can never drift on what counts as a
+// valid key), wrapping its error with this command's own name. It returns a
 // nil signer (and no error) when signingKey is empty, so verified proofs are
 // simply left unsigned.
 func parseDrillSigningKey(signingKey string) (ed25519.PrivateKey, error) {
-	if signingKey == "" {
-		return nil, nil
-	}
-	seed, err := hex.DecodeString(signingKey)
+	signer, err := contextspec.ParseSigningKeySeed(signingKey)
 	if err != nil {
-		return nil, fmt.Errorf("drill: --signing-key must be hex: %w", err)
+		return nil, fmt.Errorf("drill: %w", err)
 	}
-	if len(seed) != ed25519.SeedSize {
-		return nil, fmt.Errorf("drill: --signing-key must be a %d-byte hex seed, got %d", ed25519.SeedSize, len(seed))
-	}
-	return ed25519.NewKeyFromSeed(seed), nil
+	return signer, nil
 }
 
-// checkDrillsVerified returns an error if any drill result failed to verify.
+// checkDrillsVerified returns an error if any drill result failed to verify,
+// saying WHY in the operator's vocabulary: unreachable results (the source
+// could not be reached, nothing was proven) and disputed results (the
+// recovery ran and did not verify) get separate counts so a transient NAS
+// outage never reads as backup corruption.
 func checkDrillsVerified(results []drill.Result) error {
+	unreachable, disputed := 0, 0
 	for _, r := range results {
-		if !r.Verified {
-			return fmt.Errorf("one or more recoveries did not verify — proofs recorded as disputed")
+		if r.Verified {
+			continue
+		}
+		if r.SourceUnreachable {
+			unreachable++
+		} else {
+			disputed++
 		}
 	}
-	return nil
+	if unreachable == 0 && disputed == 0 {
+		return nil
+	}
+	var parts []string
+	if unreachable > 0 {
+		parts = append(parts, fmt.Sprintf("%d recovery source(s) could not be reached — proofs recorded as unreachable; re-run the drill once the source is reachable (no data loss is implied)", unreachable))
+	}
+	if disputed > 0 {
+		parts = append(parts, fmt.Sprintf("%d recovery(ies) did not verify — proofs recorded as disputed", disputed))
+	}
+	return fmt.Errorf("drill: %s", strings.Join(parts, "; "))
 }
 
 // recordDrillProofs merges results back into the context document, preserving
@@ -423,7 +455,8 @@ func recordDrillProofs(path string, results []drill.Result, drills []contextspec
 // checks actually ran (len(res.Checks) > 0) — a hard engine failure (sandbox
 // creation, an unreadable artifact) and a pin_check result both leave
 // Checks empty, so neither gets a measurements: block or a signature over
-// one, matching the "disputed record drops measurements/signature" rule.
+// one, matching the "non-verified record drops measurements/signature" rule
+// (true for both disputed and unreachable).
 func buildDrillProofEntry(res drill.Result, command string, now time.Time, ttl time.Duration, signer ed25519.PrivateKey) map[string]any {
 	entry := map[string]any{
 		"id":          res.Proof,
@@ -438,9 +471,15 @@ func buildDrillProofEntry(res drill.Result, command string, now time.Time, ttl t
 			entry["expires_at"] = now.Add(ttl).Format(time.RFC3339)
 		}
 	} else {
-		// Contradicted evidence, not merely absent: say so, so a guard
-		// stops clearing changes on it immediately.
-		entry["status"] = "disputed"
+		// Contradicted or unproven evidence, not merely absent: say which, so
+		// a guard stops clearing changes on it immediately AND the operator
+		// can tell "the source was asleep" (unreachable) from "the recovery
+		// ran and did not verify" (disputed) apart.
+		if res.SourceUnreachable {
+			entry["status"] = "unreachable"
+		} else {
+			entry["status"] = "disputed"
+		}
 		entry["verified"] = false
 		if res.PostHash != "" {
 			entry["sha256"] = res.PostHash
@@ -486,32 +525,68 @@ func checksToRaw(checks []contextspec.CheckOutcome) []any {
 func upsertProof(proofs []any, id string, entry map[string]any) []any {
 	for i, p := range proofs {
 		if pm, ok := p.(map[string]any); ok && pm["id"] == id {
+			// Preserve every field the fresh drill entry does not own —
+			// layer:/category:/scope: and any unknown field — the same
+			// round-trip rule every other context-file writer here follows
+			// (taxonomy spec section A).
+			for k, v := range pm {
+				if _, owned := entry[k]; !owned {
+					entry[k] = v
+				}
+			}
 			proofs[i] = entry
+			stampProofHost(entry)
 			return proofs
 		}
 	}
+	stampProofHost(entry)
 	return append(proofs, entry)
 }
 
+// stampProofHost stamps the proof record with the current machine's durable
+// identity: scope.host stays the human-readable hostname default it always
+// was (taxonomy spec section F, never overriding a declared host), and host:
+// {name, id} + epoch: record the machine-id-derived identity and epoch the
+// proof was observed under (docs/SCHEMA.md §Identity & epoch) so a proof
+// imported from another machine or recorded before a reinstall can be told
+// apart from this machine's own fresh evidence.
+func stampProofHost(entry map[string]any) {
+	scope, _ := entry["scope"].(map[string]any)
+	if scope == nil {
+		scope = map[string]any{}
+	}
+	if host, _ := scope["host"].(string); host == "" {
+		if hostname, err := os.Hostname(); err == nil && hostname != "" {
+			scope["host"] = hostname
+			entry["scope"] = scope
+		}
+	}
+	id := hostid.Current()
+	entry["host"] = map[string]any{"name": id.HostName, "id": id.HostID}
+	entry["epoch"] = id.Epoch
+}
+
 // appendDrillLedgerEntries appends one telemetry entry per drill result to
-// ledgerPath, in the given mode. Recovery proof already succeeded or failed
-// by the time this runs — telemetry is secondary, so an append failure
-// prints a loud warning on warnOut instead of failing the command (recovery
-// proof outranks its own history).
-func appendDrillLedgerEntries(warnOut io.Writer, ledgerPath, actor, mode string, results []drill.Result, drills []contextspec.Drill) {
+// ledgerPath, in the given mode, stamped with the host/epoch/policy the run
+// happened under. Recovery proof already succeeded or failed by the time
+// this runs — telemetry is secondary, so an append failure prints a loud
+// warning on warnOut instead of failing the command (recovery proof outranks
+// its own history).
+func appendDrillLedgerEntries(warnOut io.Writer, ledgerPath, contextPath, actor, mode string, results []drill.Result, drills []contextspec.Drill) {
 	if ledgerPath == "" {
 		return
 	}
 	if actor == "" {
 		actor = "human/owner"
 	}
+	stamps := policy.StampOptions([]string{contextPath})
 	budgetsByProof := map[string]contextspec.DrillBudgets{}
 	for _, d := range drills {
 		budgetsByProof[d.Proof] = d.Budgets
 	}
 	for _, res := range results {
 		payload := drillLedgerPayload(res, mode, budgetsByProof[res.Proof])
-		if _, err := ledger.AppendNow(ledgerPath, ledger.EntryDrill, actor, ledger.Payload{Drill: &payload}); err != nil {
+		if _, err := ledger.AppendNow(ledgerPath, ledger.EntryDrill, actor, ledger.Payload{Drill: &payload}, stamps...); err != nil {
 			_, _ = fmt.Fprintf(warnOut, "drill: WARNING: telemetry ledger append failed for %s: %v\n", res.Proof, err)
 		}
 	}

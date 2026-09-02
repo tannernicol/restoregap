@@ -19,6 +19,8 @@ func TestDecide(t *testing.T) {
 		{"missing proof blocks", RiskDataLossUnrecoverable, ProofMissing, EnforceBlock, VerdictBlock},
 		{"stale proof blocks", RiskRecoveryProofGap, ProofStale, EnforceBlock, VerdictBlock},
 		{"contradicted proof blocks", RiskServiceContinuity, ProofContradicted, EnforceBlock, VerdictBlock},
+		{"unreachable proof blocks", RiskDataLossUnrecoverable, ProofUnreachable, EnforceBlock, VerdictBlock},
+		{"unreachable proof only downgrades with warn contract", RiskDataLossUnrecoverable, ProofUnreachable, EnforceWarn, VerdictWarn},
 		{"unknown proof fails closed", RiskCannotProveSafe, ProofUnknown, EnforceBlock, VerdictBlock},
 		{"warn contract downgrades", RiskRecoveryProofGap, ProofMissing, EnforceWarn, VerdictWarn},
 	}

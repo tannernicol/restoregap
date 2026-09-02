@@ -16,23 +16,32 @@ import (
 	"github.com/tannernicol/restoregap/internal/ledger"
 )
 
-// TestMain gives every test in this package an isolated XDG_STATE_HOME for
-// the whole run. Several commands now default --ledger to
-// $XDG_STATE_HOME/restoregap/ledger.jsonl when the flag is omitted, and a
+// TestMain gives every test in this package an isolated XDG_STATE_HOME and
+// XDG_CONFIG_HOME for the whole run. Several commands now default --ledger
+// to $XDG_STATE_HOME/restoregap/ledger.jsonl when the flag is omitted, and a
 // good number of existing tests exercise those commands without passing
 // --ledger — without this they would create ~/.local/state/restoregap on
-// whatever machine runs `go test`. RESTOREGAP_LEDGER/RESTOREGAP_CONTEXT are
+// whatever machine runs `go test`. Context discovery likewise reads
+// $XDG_CONFIG_HOME/restoregap/*.yml as its final tier, so its zero-config
+// fallback tests would load a real machine's context files without an
+// isolated empty config home. RESTOREGAP_LEDGER/RESTOREGAP_CONTEXT are
 // cleared so no test result depends on the outer shell's environment.
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "restoregap-cli-test-state-*")
+	stateDir, err := os.MkdirTemp("", "restoregap-cli-test-state-*")
 	if err != nil {
 		panic(err)
 	}
-	_ = os.Setenv("XDG_STATE_HOME", dir)
+	configDir, err := os.MkdirTemp("", "restoregap-cli-test-config-*")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("XDG_STATE_HOME", stateDir)
+	_ = os.Setenv("XDG_CONFIG_HOME", configDir)
 	_ = os.Unsetenv("RESTOREGAP_LEDGER")
 	_ = os.Unsetenv("RESTOREGAP_CONTEXT")
 	code := m.Run()
-	_ = os.RemoveAll(dir)
+	_ = os.RemoveAll(stateDir)
+	_ = os.RemoveAll(configDir)
 	os.Exit(code)
 }
 
@@ -180,6 +189,161 @@ func TestDiscoverContextPathsFallsBackToSingleLocalFile(t *testing.T) {
 	got := discoverContextPaths(cmd, nil)
 	if len(got) != 1 || got[0] != "restoregap.local.yml" {
 		t.Errorf("got %v, want [restoregap.local.yml]", got)
+	}
+}
+
+// ---- config-directory tier -------------------------------------------------
+
+// newConfigHome points XDG_CONFIG_HOME at a fresh temp dir and returns it,
+// so config-dir tests never read the real ~/.config/restoregap. Files are
+// written under <cfg>/restoregap/ exactly as the tier expects.
+func newConfigHome(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "restoregap"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func writeConfigContext(t *testing.T, cfgHome, name, body string) string {
+	t.Helper()
+	path := filepath.Join(cfgHome, "restoregap", name)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestDiscoverContextPathsConfigDirYieldsEveryFile(t *testing.T) {
+	cfgHome := newConfigHome(t)
+	a := writeConfigContext(t, cfgHome, "a-drill.yml", "version: 2\n")
+	b := writeConfigContext(t, cfgHome, "b-drill.yml", "version: 2\n")
+	c := writeConfigContext(t, cfgHome, "c-drill.yml", "version: 2\n")
+	t.Chdir(t.TempDir()) // no context file in the cwd
+
+	cmd, out := newTestCmd()
+	got := discoverContextPaths(cmd, nil)
+	if len(got) != 3 || got[0] != a || got[1] != b || got[2] != c {
+		t.Errorf("got %v, want all three config-dir files sorted [%q %q %q]", got, a, b, c)
+	}
+	if !strings.Contains(out.String(), "context: "+a+", "+b+", "+c+" (discovered)") {
+		t.Errorf("expected one joined announcement naming every config-dir file, got %q", out.String())
+	}
+}
+
+// TestDiscoverContextPathsCollapsesWhenMoreThanThree: the real deployment
+// shape — one restoregap.local.yml plus a config-dir full of *-drill.yml
+// files — collapses to a one-line summary once there are more than 3, so a
+// 17-file machine (this box's real ~/.config/restoregap has exactly this
+// shape) doesn't dump every path on every run.
+func TestDiscoverContextPathsCollapsesWhenMoreThanThree(t *testing.T) {
+	cfgHome := newConfigHome(t)
+	writeConfigContext(t, cfgHome, "restoregap.local.yml", "version: 2\n")
+	for _, name := range []string{"a-drill.yml", "b-drill.yml", "c-drill.yml", "d-drill.yml"} {
+		writeConfigContext(t, cfgHome, name, "version: 2\n")
+	}
+	t.Chdir(t.TempDir())
+
+	cmd, out := newTestCmd()
+	got := discoverContextPaths(cmd, nil)
+	if len(got) != 5 {
+		t.Fatalf("got %d paths, want 5", len(got))
+	}
+	want := "context: 5 files (restoregap.local.yml + 4 drill files, discovered) — --verbose lists them\n"
+	if out.String() != want {
+		t.Errorf("got %q, want %q", out.String(), want)
+	}
+}
+
+// TestDiscoverContextPathsVerboseListsThemAll: --verbose opts back into the
+// pre-collapse full joined list, above the 3-file threshold.
+func TestDiscoverContextPathsVerboseListsThemAll(t *testing.T) {
+	cfgHome := newConfigHome(t)
+	// Config-dir discovery sorts by base name, so these land in this order:
+	// a-drill.yml, b-drill.yml, c-drill.yml, restoregap.local.yml.
+	aDrill := writeConfigContext(t, cfgHome, "a-drill.yml", "version: 2\n")
+	bDrill := writeConfigContext(t, cfgHome, "b-drill.yml", "version: 2\n")
+	cDrill := writeConfigContext(t, cfgHome, "c-drill.yml", "version: 2\n")
+	local := writeConfigContext(t, cfgHome, "restoregap.local.yml", "version: 2\n")
+	t.Chdir(t.TempDir())
+
+	cmd, out := newTestCmd()
+	cmd.Flags().Bool("verbose", false, "")
+	if err := cmd.Flags().Set("verbose", "true"); err != nil {
+		t.Fatal(err)
+	}
+	got := discoverContextPaths(cmd, nil)
+	if len(got) != 4 {
+		t.Fatalf("got %d paths, want 4", len(got))
+	}
+	want := "context: " + strings.Join([]string{aDrill, bDrill, cDrill, local}, ", ") + " (discovered)\n"
+	if out.String() != want {
+		t.Errorf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestDiscoverContextConfigDirYieldsFirstFileOnly(t *testing.T) {
+	cfgHome := newConfigHome(t)
+	a := writeConfigContext(t, cfgHome, "a-drill.yml", "version: 2\n")
+	writeConfigContext(t, cfgHome, "b-drill.yml", "version: 2\n")
+	t.Chdir(t.TempDir())
+
+	cmd, out := newTestCmd()
+	got := discoverContext(cmd, "")
+	if got != a {
+		t.Errorf("got %q, want the first config-dir file %q — single-context commands take exactly one", got, a)
+	}
+	if !strings.Contains(out.String(), "context: "+a+" (discovered)") {
+		t.Errorf("expected a discovery announcement naming %q, got %q", a, out.String())
+	}
+}
+
+func TestDiscoverContextCwdLocalWinsOverConfigDir(t *testing.T) {
+	cfgHome := newConfigHome(t)
+	writeConfigContext(t, cfgHome, "a-drill.yml", "version: 2\n")
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile("restoregap.local.yml", []byte("version: 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd, _ := newTestCmd()
+	got := discoverContextPaths(cmd, nil)
+	if len(got) != 1 || got[0] != "restoregap.local.yml" {
+		t.Errorf("got %v, want [restoregap.local.yml] — the cwd tier outranks the config dir", got)
+	}
+}
+
+func TestDiscoverContextEnvVarWinsOverConfigDir(t *testing.T) {
+	cfgHome := newConfigHome(t)
+	writeConfigContext(t, cfgHome, "a-drill.yml", "version: 2\n")
+	envPath := filepath.Join(t.TempDir(), "from-env.yml")
+	if err := os.WriteFile(envPath, []byte("version: 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RESTOREGAP_CONTEXT", envPath)
+	t.Chdir(t.TempDir())
+
+	cmd, _ := newTestCmd()
+	got := discoverContextPaths(cmd, nil)
+	if len(got) != 1 || got[0] != envPath {
+		t.Errorf("got %v, want [%q] — $RESTOREGAP_CONTEXT outranks the config dir", got, envPath)
+	}
+}
+
+func TestDiscoverContextExplicitBeatsConfigDirSilently(t *testing.T) {
+	cfgHome := newConfigHome(t)
+	writeConfigContext(t, cfgHome, "a-drill.yml", "version: 2\n")
+	t.Chdir(t.TempDir())
+
+	cmd, out := newTestCmd()
+	if got := discoverContext(cmd, "explicit.yml"); got != "explicit.yml" {
+		t.Errorf("got %q, want the explicit path unchanged", got)
+	}
+	if out.Len() != 0 {
+		t.Errorf("an explicitly passed --context must never be announced, got %q", out.String())
 	}
 }
 
@@ -412,6 +576,33 @@ func TestStatusDiscoversLocalContext(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "built-in default local lifeline policy") {
 		t.Errorf("status should report the discovered file's guards, not the zero-config default; got %q", out.String())
+	}
+}
+
+// TestStatusDiscoversConfigDirContexts is launch-bar item B03's shape: bare
+// `restoregap status` (no flags) from a directory with no context file on a
+// machine whose contexts live in ~/.config/restoregap must see those files —
+// every one of them merged — instead of silently falling back to the
+// built-in zero-config policy.
+func TestStatusDiscoversConfigDirContexts(t *testing.T) {
+	cfgHome := newConfigHome(t)
+	a := writeConfigContext(t, cfgHome, "a-drill.yml", starterContext)
+	b := writeConfigContext(t, cfgHome, "b-drill.yml", "version: 2\n")
+	t.Chdir(t.TempDir())
+
+	cmd := newStatusCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs(nil)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v (%s)", err, out.String())
+	}
+	if !strings.Contains(out.String(), "context: "+a+", "+b+" (discovered)") {
+		t.Errorf("expected status to announce every discovered config-dir context, got %q", out.String())
+	}
+	if strings.Contains(out.String(), "built-in default local lifeline policy") {
+		t.Errorf("bare status on a machine with config-dir contexts must not fall back to the built-in default, got %q", out.String())
 	}
 }
 

@@ -97,40 +97,73 @@ func TestTextHasNoMarkdownSyntax(t *testing.T) {
 	}
 }
 
-// TestTextStartsWithHeadlineThenSummary: verdict headline first, then the
-// summary sentence — same order Markdown's banner uses.
-func TestTextStartsWithHeadlineThenSummary(t *testing.T) {
+// TestTextStartsWithHeadline: verdict and its summary sentence share one
+// dash-joined headline line, e.g. "BLOCK — Restore Gap blocked this
+// change...".
+func TestTextStartsWithHeadline(t *testing.T) {
 	rep := FromFindings(sampleFindings(), engine.VerdictBlock, fixedTime, "agent/claude", "")
 	text := string(rep.Text())
-	if !strings.HasPrefix(text, "BLOCK\n"+summarySentence("block")+"\n") {
-		t.Fatalf("Text must start with the verdict headline then the summary sentence, got:\n%s", text)
+	if !strings.HasPrefix(text, "BLOCK — "+summarySentence("block")+"\n") {
+		t.Fatalf("Text must start with the verdict headline dash-joined to the summary sentence, got:\n%s", text)
 	}
 }
 
-// TestTextNamesGuardResourceProofPerFinding: each finding gets one line
-// naming its guard, resource, and proof status — the information a human
-// needs without a table.
-func TestTextNamesGuardResourceProofPerFinding(t *testing.T) {
+// TestTextHasNextStepBullets: a required next step for a non-pass finding
+// appears as a 2-space "  - " bullet right after the headline, same content
+// Markdown's banner lists.
+func TestTextHasNextStepBullets(t *testing.T) {
 	rep := FromFindings(sampleFindings(), engine.VerdictBlock, fixedTime, "agent/claude", "")
 	text := string(rep.Text())
-	if !strings.Contains(text, "guard") || !strings.Contains(text, "default-ssh-private-keys") {
-		t.Errorf("expected the guard id in the finding line, got:\n%s", text)
+	if !strings.Contains(text, "  - declare a guard\n") {
+		t.Errorf("expected a '  - declare a guard' bullet, got:\n%s", text)
 	}
-	if !strings.Contains(text, "resource") || !strings.Contains(text, "~/.ssh/id_ed25519") {
-		t.Errorf("expected the resource in the finding line, got:\n%s", text)
+}
+
+// TestTextTableHasFiveColumns: the aligned findings table names the same
+// five columns as Markdown's table (Verdict/Risk class/Proof/Guard/
+// Resource), tab-separated instead of pipe-separated.
+func TestTextTableHasFiveColumns(t *testing.T) {
+	rep := FromFindings(sampleFindings(), engine.VerdictBlock, fixedTime, "agent/claude", "")
+	text := string(rep.Text())
+	if !strings.Contains(text, "Verdict") || !strings.Contains(text, "Risk class") ||
+		!strings.Contains(text, "Proof") || !strings.Contains(text, "Guard") || !strings.Contains(text, "Resource") {
+		t.Errorf("expected all five table headers, got:\n%s", text)
 	}
-	if !strings.Contains(text, "proof") || !strings.Contains(text, "missing") {
-		t.Errorf("expected the proof status in the finding line, got:\n%s", text)
+	if !strings.Contains(text, "default-ssh-private-keys") || !strings.Contains(text, "~/.ssh/id_ed25519") {
+		t.Errorf("expected the guard id and resource in the table row, got:\n%s", text)
 	}
-	if !strings.Contains(text, "next: declare a guard") {
-		t.Errorf("expected a next: line for the required next step, got:\n%s", text)
+}
+
+// TestTextDetailSectionNamesGuardResourceProofNext: the Detail section
+// gives each finding its title line, then 2-space-indented Guard/Resource/
+// Proof/Next lines — the information a human needs without a table.
+func TestTextDetailSectionNamesGuardResourceProofNext(t *testing.T) {
+	rep := FromFindings(sampleFindings(), engine.VerdictBlock, fixedTime, "agent/claude", "")
+	text := string(rep.Text())
+	if !strings.Contains(text, "\nDetail\n") {
+		t.Errorf("expected a Detail section header, got:\n%s", text)
+	}
+	if !strings.Contains(text, "cannot prove safe\n") {
+		t.Errorf("expected the finding title as its own line, got:\n%s", text)
+	}
+	if !strings.Contains(text, "  Guard: default-ssh-private-keys\n") {
+		t.Errorf("expected an indented Guard: line, got:\n%s", text)
+	}
+	if !strings.Contains(text, "  Resource: ~/.ssh/id_ed25519\n") {
+		t.Errorf("expected an indented Resource: line, got:\n%s", text)
+	}
+	if !strings.Contains(text, "  Proof: no proof vocabulary\n") {
+		t.Errorf("expected an indented Proof: line, got:\n%s", text)
+	}
+	if !strings.Contains(text, "  Next: declare a guard\n") {
+		t.Errorf("expected an indented Next: line, got:\n%s", text)
 	}
 }
 
 func TestTextNoFindings(t *testing.T) {
 	rep := FromFindings(nil, engine.VerdictPass, fixedTime, "agent/claude", "")
 	text := string(rep.Text())
-	if !strings.HasPrefix(text, "PASS\n") || !strings.Contains(text, "No findings.") {
+	if !strings.HasPrefix(text, "PASS — ") || !strings.Contains(text, "No findings.") {
 		t.Errorf("expected PASS headline and 'No findings.', got:\n%s", text)
 	}
 }

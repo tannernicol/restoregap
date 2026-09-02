@@ -1,0 +1,26 @@
+drills:
+    - artifact: /dev/null
+      proof: seam-parity
+    # Requires restoregap >= the release that adds `parity-drill`.
+      recover: |
+        : no artifact to reconstruct — the gate is what is being exercised
+      recovery_source: /dev/null
+      validate:
+        - run: |
+            restoregap parity-drill --target "$RG_PARITY_TARGET"
+          type: command
+proofs:
+    - command: |
+        : no artifact to reconstruct — the gate is what is being exercised
+      id: seam-parity
+      measurements:
+        checks:
+            - detail: 'command failed: error: unknown command "parity-drill" for "restoregap"'
+              pass: false
+              type: command
+        rpo_seconds: null
+        rto_seconds: 0.00359531
+      observed_at: "2026-08-19T04:42:23Z"
+      status: disputed
+      verified: false
+version: 2

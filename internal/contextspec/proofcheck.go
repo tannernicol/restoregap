@@ -12,6 +12,27 @@ import (
 	"time"
 )
 
+// ParseSigningKeySeed decodes a hex Ed25519 seed into a signer — the one
+// place this decode happens, shared by `restoregap drill --signing-key` and
+// `restoregap bundle export --signing-key` (docs/SCHEMA.md §Portable signed
+// bundle: "reuse the existing proof-signing key material"), so the two
+// commands can never drift on what counts as a valid key. An empty seed
+// yields a nil signer and no error — callers that treat "no key" as "leave
+// it unsigned" rely on that.
+func ParseSigningKeySeed(hexSeed string) (ed25519.PrivateKey, error) {
+	if hexSeed == "" {
+		return nil, nil
+	}
+	seed, err := hex.DecodeString(hexSeed)
+	if err != nil {
+		return nil, fmt.Errorf("--signing-key must be hex: %w", err)
+	}
+	if len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("--signing-key must be a %d-byte hex seed, got %d", ed25519.SeedSize, len(seed))
+	}
+	return ed25519.NewKeyFromSeed(seed), nil
+}
+
 // ProofState is the outcome of checking one required proof or fact against
 // the declared evidence. This is the single vocabulary every freshness and
 // signature check in contextspec reports through — no other package
@@ -24,6 +45,13 @@ const (
 	StateMissing      ProofState = "missing"
 	StateStale        ProofState = "stale"
 	StateContradicted ProofState = "contradicted"
+	// StateUnreachable is the proof-record status "unreachable" as a check
+	// result: the recovery source could not be reached when the drill ran, so
+	// nothing was proven. It sits in the same severity tier as contradicted —
+	// it never satisfies a guard and never satisfies require_verified — but it
+	// keeps its own name so a finding can say "could not try" instead of
+	// "tried and failed".
+	StateUnreachable ProofState = "unreachable"
 )
 
 // CheckResult is the outcome of validating one required proof or fact ID.
@@ -42,8 +70,13 @@ func (c Context) CheckProof(id string, maxProofAgeHours int, requireVerified boo
 	if !ok {
 		return CheckResult{State: StateMissing, Detail: fmt.Sprintf("proof %q is not declared", id)}
 	}
+	if proof.Status == ProofRecordUnreachable {
+		return CheckResult{State: StateUnreachable, Detail: fmt.Sprintf(
+			"proof %q is unreachable: the recovery source was not reachable when the drill last ran, so nothing was proven "+
+				"(no data loss is implied); re-run the drill once the source is reachable", id)}
+	}
 	if proof.Status == ProofRecordDisputed {
-		return CheckResult{State: StateContradicted, Detail: fmt.Sprintf("proof %q is disputed", id)}
+		return CheckResult{State: StateContradicted, Detail: fmt.Sprintf("proof %q is disputed: the recovery ran and did not verify; investigate the copy", id)}
 	}
 	// A guard that demands verification is saying an attestation is not enough:
 	// only a drill that reconstructed the artifact and compared the bytes

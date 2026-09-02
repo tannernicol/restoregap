@@ -33,6 +33,7 @@ func newPreflightCmd() *cobra.Command {
 		Use:   "preflight",
 		Short: "Gate a proposed change on declared recovery invariants and proofs",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			req.ToolVersion = Version
 			// discoverContextPaths leaves req.ContextPaths (nil from the
 			// flag, unless --context was passed at least once) nil when
 			// nothing is discoverable — preflight.Run already treats that as
@@ -40,18 +41,31 @@ func newPreflightCmd() *cobra.Command {
 			// fallback logic is needed here.
 			req.ContextPaths = discoverContextPaths(cmd, req.ContextPaths)
 
-			// A human at an interactive terminal did not ask for markdown
-			// source — render plain text instead, unless they explicitly
-			// picked a format with --format. Piped/redirected/CI output
-			// (agents, MCP, scripts) keeps the existing md default so
-			// nothing that parses this output today breaks.
-			if !cmd.Flags().Changed("format") && isTTYStdout(cmd.OutOrStdout()) {
-				req.Format = "text"
+			// --format defaults to "auto": a human at an interactive
+			// terminal did not ask for markdown source, so auto renders
+			// plain text there; piped/redirected/CI output (agents, MCP,
+			// scripts) keeps the existing markdown rendering so nothing
+			// that parses this output today breaks. "markdown" is accepted
+			// as an explicit alias for the internal "md" format value;
+			// json/html/md pass through unchanged for callers already
+			// pinning one of those.
+			switch req.Format {
+			case "auto":
+				if isTTYStdout(cmd.OutOrStdout()) {
+					req.Format = "text"
+				} else {
+					req.Format = "md"
+				}
+			case "markdown":
+				req.Format = "md"
 			}
 
 			ledgerPath, defaulted, err := resolveLedger(req.LedgerPath)
 			if err != nil {
-				return err
+				// A ledger path that cannot be prepared makes the gate unable
+				// to produce the auditable decision callers rely on. It is a
+				// gate-broken condition, not a malformed user intent.
+				return &ExitError{Code: 3, Message: "GATE BROKEN: resolve ledger: " + err.Error()}
 			}
 			req.LedgerPath = ledgerPath
 
@@ -88,7 +102,7 @@ func newPreflightCmd() *cobra.Command {
 	f.StringVar(&req.IntentActor, "intent-actor", "", "actor recorded inside the intent, if different")
 	f.StringVar(&req.ContextWindow, "context-window", "", "execution context, e.g. git-commit, coding-agent")
 	f.StringVar(&req.CommitSHA, "commit-sha", "", "git commit associated with this change")
-	f.StringVar(&req.Format, "format", "md", "output format: json, md, or html")
+	f.StringVar(&req.Format, "format", "auto", "output format: auto (text on a TTY, markdown otherwise), text, markdown, json, or html")
 	f.StringVar(&req.OutPath, "out", "", "write the report to this path (- for stdout)")
 	f.BoolVar(&req.FailOnWarn, "fail-on-warn", false, "exit non-zero on warnings, not just blocks")
 	f.BoolVar(&req.Plan, "plan", false, "evaluate without recording — for readiness probes and dry runs; a plan is not a decision")

@@ -30,3 +30,6 @@
 # strings the scrub gate hunts (found 2026-08-18 when an export FAILed on it).
 LAUNCH_BAR.md
 scripts/launch-bar.sh
+
+# internal launch prep (numbers re-verification, launch-day checklist) — never exported
+docs/launch/*

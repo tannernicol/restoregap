@@ -4,13 +4,60 @@
 package contextspec
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// CurrentVersion is the newest context schema version this binary
+// understands. A document declaring a version above this is refused
+// immediately and unambiguously (docs/SCHEMA.md §Versioning policy) rather
+// than left to fail confusingly on some unrecognized field a future schema
+// happens to add; a document declaring a version below it is a migration
+// candidate (`restoregap migrate`), not a document Parse/Load ever accepts.
+const CurrentVersion = 2
+
+// UnsupportedVersionError is returned by Parse/Load when a document
+// declares a schema version newer than CurrentVersion. Every caller that
+// lets this propagate unwrapped gets main.go's default "one clear line on
+// stderr, exit 2" — the one existing error contract already satisfies the
+// "refuses ... with one clear line and exit 2" rule; this type exists so a
+// caller that wants to react specifically (rather than just fail) can
+// errors.As for it.
+type UnsupportedVersionError struct {
+	Got int
+}
+
+func (e *UnsupportedVersionError) Error() string {
+	return fmt.Sprintf("context: schema version %d is newer than this restoregap binary understands (max %d) — upgrade restoregap, or run `restoregap migrate` on the host that wrote it if this is a downgrade", e.Got, CurrentVersion)
+}
+
+// PeekVersion is peekVersion, exported for internal/migrate: the one thing
+// it needs to know about a document before deciding whether Load can read
+// it yet, or whether it is a migration candidate.
+func PeekVersion(data []byte) int {
+	return peekVersion(data)
+}
+
+// peekVersion reads just the top-level `version:` field, tolerating any
+// other shape entirely (unknown fields, a v1 document's completely
+// different keys) — the one piece of a document Parse must be able to read
+// before it knows whether the rest is even readable. Absent field or
+// unparseable document both yield version 0, err == nil: it is not this
+// helper's job to say the document is invalid, only to say what it is NOT
+// (a version newer than this binary knows).
+func peekVersion(data []byte) int {
+	var v struct {
+		Version int `yaml:"version"`
+	}
+	_ = yaml.Unmarshal(data, &v)
+	return v.Version
+}
 
 // rawContext mirrors the v2 YAML wire shape (docs/ARCHITECTURE.md §5).
 type rawContext struct {
@@ -19,6 +66,24 @@ type rawContext struct {
 	Facts   []rawFact  `yaml:"facts"`
 	Proofs  []rawProof `yaml:"proofs"`
 	Drills  []rawDrill `yaml:"drills"`
+	Scope   *rawScope  `yaml:"scope"`
+}
+
+// rawScope mirrors Scope's YAML wire shape, shared by the context-file
+// level scope: block and each guard/proof's own scope: override.
+type rawScope struct {
+	Environment string   `yaml:"environment"`
+	System      string   `yaml:"system"`
+	Host        string   `yaml:"host"`
+	Owner       string   `yaml:"owner"`
+	Tags        []string `yaml:"tags"`
+}
+
+func fromRawScope(rs *rawScope) Scope {
+	if rs == nil {
+		return Scope{}
+	}
+	return Scope{Environment: rs.Environment, System: rs.System, Host: rs.Host, Owner: rs.Owner, Tags: rs.Tags}
 }
 
 type rawDrill struct {
@@ -98,6 +163,9 @@ type rawGuard struct {
 	RecoveryCopy     string      `yaml:"recovery_copy"`
 	AlternatePaths   []string    `yaml:"alternate_paths"`
 	RequireVerified  bool        `yaml:"require_verified"`
+	Layer            string      `yaml:"layer"`
+	Category         string      `yaml:"category"`
+	Scope            *rawScope   `yaml:"scope"`
 }
 
 type rawFact struct {
@@ -124,6 +192,29 @@ type rawProof struct {
 	Verified     bool             `yaml:"verified"`
 	Command      string           `yaml:"command"`
 	Measurements *rawMeasurements `yaml:"measurements"`
+	Accepted     *rawAcceptance   `yaml:"accepted"`
+	Layer        string           `yaml:"layer"`
+	Category     string           `yaml:"category"`
+	Scope        *rawScope        `yaml:"scope"`
+	Host         *rawProofHost    `yaml:"host"`
+	Epoch        string           `yaml:"epoch"`
+}
+
+// rawProofHost mirrors ProofHost's YAML wire shape: host: {name: …, id: …}.
+type rawProofHost struct {
+	Name string `yaml:"name"`
+	ID   string `yaml:"id"`
+}
+
+// rawAcceptance mirrors the accepted: block's YAML wire shape. Every field
+// is required once the block is present: an acceptance without a reason or
+// a review date is a rubber stamp, and `restoregap accept` refuses to write
+// one for the same reason parse refuses to load one.
+type rawAcceptance struct {
+	By       string `yaml:"by"`
+	At       string `yaml:"at"`
+	Reason   string `yaml:"reason"`
+	ReviewBy string `yaml:"review_by"`
 }
 
 type rawCheckOutcome struct {
@@ -153,10 +244,22 @@ func Load(path string) (Context, error) {
 	return ctx, nil
 }
 
-// Parse decodes and validates a v2 context document.
+// Parse decodes and validates a v2 context document. A document declaring a
+// version newer than CurrentVersion is refused before its shape is even
+// examined (peekVersion) — a future schema's new fields would otherwise
+// surface as a confusing "field not found" YAML error instead of the plain
+// "upgrade restoregap" one.
 func Parse(r io.Reader) (Context, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return Context{}, fmt.Errorf("context: reading document: %w", err)
+	}
+	if v := peekVersion(data); v > CurrentVersion {
+		return Context{}, &UnsupportedVersionError{Got: v}
+	}
+
 	var raw rawContext
-	dec := yaml.NewDecoder(r)
+	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&raw); err != nil {
 		if err == io.EOF {
@@ -423,7 +526,10 @@ func fromRaw(raw rawContext) (Context, error) {
 		return Context{}, err
 	}
 
-	return Context{Version: raw.Version, Guards: guards, Facts: facts, Proofs: proofs, Drills: drills}, nil
+	return Context{
+		Version: raw.Version, Guards: guards, Facts: facts, Proofs: proofs, Drills: drills,
+		Scope: fromRawScope(raw.Scope),
+	}, nil
 }
 
 func fromRawGuard(g rawGuard) (Guard, error) {
@@ -462,6 +568,9 @@ func fromRawGuard(g rawGuard) (Guard, error) {
 	if g.MaxProofAgeHours < 0 {
 		return Guard{}, fmt.Errorf("%s: max_proof_age_hours must not be negative", g.ID)
 	}
+	if g.Layer != "" && !ValidGuardLayer(g.Layer) {
+		return Guard{}, fmt.Errorf("%s: layer must be one of %s, got %q", g.ID, strings.Join(declarableGuardLayers(), "/"), g.Layer)
+	}
 	return Guard{
 		ID:               g.ID,
 		Kind:             kind,
@@ -473,7 +582,39 @@ func fromRawGuard(g rawGuard) (Guard, error) {
 		RecoveryCopy:     g.RecoveryCopy,
 		AlternatePaths:   g.AlternatePaths,
 		RequireVerified:  g.RequireVerified,
+		Layer:            g.Layer,
+		Category:         g.Category,
+		Scope:            fromRawScope(g.Scope),
 	}, nil
+}
+
+// declarableLayers renders the vocabulary a bad layer: value's error names
+// for a PROOF — every LayerOrder entry except the computed-only
+// LayerUnfiled fallback and the guard-only LayerCrossCutting.
+func declarableLayers() []string {
+	out := make([]string, 0, len(LayerOrder)-2)
+	for _, l := range LayerOrder {
+		if l == LayerUnfiled || l == LayerCrossCutting {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+// declarableGuardLayers renders the vocabulary a bad layer: value's error
+// names for a GUARD — every LayerOrder entry except the computed-only
+// LayerUnfiled fallback (LayerCrossCutting stays, since a guard may
+// declare it).
+func declarableGuardLayers() []string {
+	out := make([]string, 0, len(LayerOrder)-1)
+	for _, l := range LayerOrder {
+		if l == LayerUnfiled {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
 }
 
 func fromRawFact(rf rawFact) (Fact, error) {
@@ -498,18 +639,9 @@ func fromRawProof(rp rawProof) (Proof, error) {
 	if rp.ID == "" {
 		return Proof{}, fmt.Errorf("missing id")
 	}
-	var status ProofRecordStatus
-	switch rp.Status {
-	case "observed":
-		status = ProofRecordObserved
-	case "validated":
-		status = ProofRecordValidated
-	case "stale":
-		status = ProofRecordStale
-	case "disputed":
-		status = ProofRecordDisputed
-	default:
-		return Proof{}, fmt.Errorf("%s: status must be observed/validated/stale/disputed, got %q", rp.ID, rp.Status)
+	status, err := parseProofStatus(rp.ID, rp.Status)
+	if err != nil {
+		return Proof{}, err
 	}
 	if rp.ObservedAt == "" {
 		return Proof{}, fmt.Errorf("%s: observed_at is required", rp.ID)
@@ -526,12 +658,20 @@ func fromRawProof(rp rawProof) (Proof, error) {
 		}
 		expires = &t
 	}
-	var sig *Signature
-	if rp.Signature != nil {
-		if rp.Signature.PublicKey == "" || rp.Signature.Signature == "" {
-			return Proof{}, fmt.Errorf("%s: signature requires both public_key and signature", rp.ID)
-		}
-		sig = &Signature{PublicKeyHex: rp.Signature.PublicKey, SignatureHex: rp.Signature.Signature}
+	sig, err := fromRawSignature(rp.ID, rp.Signature)
+	if err != nil {
+		return Proof{}, err
+	}
+	accepted, err := fromRawAcceptance(rp.ID, rp.Accepted)
+	if err != nil {
+		return Proof{}, err
+	}
+	if rp.Layer != "" && !ValidLayer(rp.Layer) {
+		return Proof{}, fmt.Errorf("%s: layer must be one of %s, got %q", rp.ID, strings.Join(declarableLayers(), "/"), rp.Layer)
+	}
+	var host *ProofHost
+	if rp.Host != nil {
+		host = &ProofHost{Name: rp.Host.Name, ID: rp.Host.ID}
 	}
 	return Proof{
 		ID:           rp.ID,
@@ -544,7 +684,77 @@ func fromRawProof(rp rawProof) (Proof, error) {
 		Verified:     rp.Verified,
 		Command:      rp.Command,
 		Measurements: fromRawMeasurements(rp.Measurements),
+		Accepted:     accepted,
+		Layer:        rp.Layer,
+		Category:     rp.Category,
+		Scope:        fromRawScope(rp.Scope),
+		Host:         host,
+		Epoch:        rp.Epoch,
 	}, nil
+}
+
+// parseProofStatus maps a proof's raw status string onto its ProofRecordStatus
+// enum value, rejecting anything outside the five recognized states.
+func parseProofStatus(id, raw string) (ProofRecordStatus, error) {
+	switch raw {
+	case "observed":
+		return ProofRecordObserved, nil
+	case "validated":
+		return ProofRecordValidated, nil
+	case "stale":
+		return ProofRecordStale, nil
+	case "disputed":
+		return ProofRecordDisputed, nil
+	case "unreachable":
+		return ProofRecordUnreachable, nil
+	default:
+		return "", fmt.Errorf("%s: status must be observed/validated/stale/disputed/unreachable, got %q", id, raw)
+	}
+}
+
+// fromRawSignature converts an optional signature: block, requiring both
+// public_key and signature once the block is present. A nil input yields a
+// nil signature.
+func fromRawSignature(id string, rs *rawSignature) (*Signature, error) {
+	if rs == nil {
+		return nil, nil
+	}
+	if rs.PublicKey == "" || rs.Signature == "" {
+		return nil, fmt.Errorf("%s: signature requires both public_key and signature", id)
+	}
+	return &Signature{PublicKeyHex: rs.PublicKey, SignatureHex: rs.Signature}, nil
+}
+
+// fromRawAcceptance converts and validates an optional accepted: block.
+// A nil input yields a nil acceptance. All four fields are required once
+// the block exists — by, at, reason, review_by — because an acceptance
+// that names nobody, dates nothing, or explains nothing is exactly the
+// unreviewed gap it pretends to close.
+func fromRawAcceptance(proofID string, ra *rawAcceptance) (*Acceptance, error) {
+	if ra == nil {
+		return nil, nil
+	}
+	if ra.By == "" {
+		return nil, fmt.Errorf("%s: accepted.by is required", proofID)
+	}
+	if ra.Reason == "" {
+		return nil, fmt.Errorf("%s: accepted.reason is required — an acceptance without a reason is a rubber stamp", proofID)
+	}
+	if ra.At == "" {
+		return nil, fmt.Errorf("%s: accepted.at is required", proofID)
+	}
+	at, err := time.Parse(time.RFC3339, ra.At)
+	if err != nil {
+		return nil, fmt.Errorf("%s: accepted.at must be RFC3339: %w", proofID, err)
+	}
+	if ra.ReviewBy == "" {
+		return nil, fmt.Errorf("%s: accepted.review_by is required — an acceptance must come up for review", proofID)
+	}
+	reviewBy, err := time.Parse(time.RFC3339, ra.ReviewBy)
+	if err != nil {
+		return nil, fmt.Errorf("%s: accepted.review_by must be RFC3339: %w", proofID, err)
+	}
+	return &Acceptance{By: ra.By, At: at, Reason: ra.Reason, ReviewBy: reviewBy}, nil
 }
 
 // fromRawMeasurements converts an optional measurements: block. A nil input

@@ -48,6 +48,20 @@ func LoadAll(paths []string) (Context, error) {
 				origins[0], merged.Version, p, ctx.Version)
 		}
 
+		// Resolve each guard/proof's scope against ITS OWN file's scope:
+		// default before merging: once every file's entries share one
+		// Context, there is no longer a single file-level default to fall
+		// back to (merged.Scope is deliberately left zero), so the merge
+		// point is the last place a per-file default can still apply.
+		// mergeScope is idempotent against a zero base, so this is a no-op
+		// for entries that already declare every field themselves.
+		for i := range ctx.Guards {
+			ctx.Guards[i].Scope = mergeScope(ctx.Scope, ctx.Guards[i].Scope)
+		}
+		for i := range ctx.Proofs {
+			ctx.Proofs[i].Scope = mergeScope(ctx.Scope, ctx.Proofs[i].Scope)
+		}
+
 		if err := mergeByID("guard", p, ctx.Guards, guardAt, func(g Guard) string { return g.ID }, &merged.Guards); err != nil {
 			return Context{}, err
 		}

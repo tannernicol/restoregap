@@ -4,6 +4,7 @@
 package contextspec
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -62,6 +63,93 @@ func TestParseErrors(t *testing.T) {
 		{"proof bad status", "version: 2\nproofs:\n  - id: p1\n    status: nonsense\n    observed_at: \"2026-05-14T00:00:00Z\"\n"},
 		{"fact missing statement", "version: 2\nfacts:\n  - id: f1\n"},
 		{"unknown top-level key", "version: 2\nbogus_key: true\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := Parse(strings.NewReader(c.yaml)); err == nil {
+				t.Fatalf("expected error for %s", c.name)
+			}
+		})
+	}
+}
+
+// taxonomyYAML declares layer:/category:/scope: on both a guard and a proof,
+// plus a file-level scope: default — the taxonomy spec section A/F schema
+// additions parse.go must accept.
+const taxonomyYAML = `version: 2
+scope:
+  environment: prod
+  system: money
+  owner: tanner
+guards:
+  - id: restic-guard
+    kind: lifeline
+    match:
+      paths: ["/data/money/**"]
+    requires:
+      proofs: [restic-proof]
+    enforcement: block
+    layer: backups-offsite
+    category: restic
+    scope:
+      system: money-db
+proofs:
+  - id: restic-proof
+    status: validated
+    observed_at: "2026-05-14T00:00:00Z"
+    layer: identity-secrets
+    category: ssh-keys
+    scope:
+      host: host-nas
+      tags: ["kit"]
+`
+
+// TestParseTaxonomyFields is the schema-side half of the taxonomy spec
+// (section A): layer:/category: on both guards and proofs, plus scope: at
+// the file, guard, and proof level, must all land in the typed Guard/Proof/
+// Context structs untouched.
+func TestParseTaxonomyFields(t *testing.T) {
+	ctx, err := Parse(strings.NewReader(taxonomyYAML))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if ctx.Scope.Environment != "prod" || ctx.Scope.System != "money" || ctx.Scope.Owner != "tanner" {
+		t.Errorf("file-level Scope = %+v, want environment=prod system=money owner=tanner", ctx.Scope)
+	}
+	if len(ctx.Guards) != 1 {
+		t.Fatalf("got %d guards, want 1", len(ctx.Guards))
+	}
+	g := ctx.Guards[0]
+	if g.Layer != LayerBackupsOffsite || g.Category != "restic" {
+		t.Errorf("guard Layer/Category = %q/%q, want %q/%q", g.Layer, g.Category, LayerBackupsOffsite, "restic")
+	}
+	if g.Scope.System != "money-db" {
+		t.Errorf("guard Scope.System = %q, want its own override %q", g.Scope.System, "money-db")
+	}
+	if len(ctx.Proofs) != 1 {
+		t.Fatalf("got %d proofs, want 1", len(ctx.Proofs))
+	}
+	p := ctx.Proofs[0]
+	if p.Layer != LayerIdentitySecrets || p.Category != "ssh-keys" {
+		t.Errorf("proof Layer/Category = %q/%q, want %q/%q", p.Layer, p.Category, LayerIdentitySecrets, "ssh-keys")
+	}
+	if p.Scope.Host != "host-nas" || len(p.Scope.Tags) != 1 || p.Scope.Tags[0] != "kit" {
+		t.Errorf("proof Scope = %+v, want host=host-nas tags=[kit]", p.Scope)
+	}
+}
+
+// TestParseBadLayerIsAnError: layer: must be one of the fixed vocabulary —
+// an unrecognized value is a parse error, on both guards and proofs, and
+// LayerUnfiled itself (computed-only, never declarable) is also rejected.
+func TestParseBadLayerIsAnError(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{"guard bad layer", "version: 2\nguards:\n  - id: x\n    kind: guard\n    match: {paths: [a]}\n    layer: bogus\n"},
+		{"guard layer unfiled", "version: 2\nguards:\n  - id: x\n    kind: guard\n    match: {paths: [a]}\n    layer: unfiled\n"},
+		{"proof bad layer", "version: 2\nproofs:\n  - id: p1\n    status: validated\n    observed_at: \"2026-05-14T00:00:00Z\"\n    layer: bogus\n"},
+		{"proof layer unfiled", "version: 2\nproofs:\n  - id: p1\n    status: validated\n    observed_at: \"2026-05-14T00:00:00Z\"\n    layer: unfiled\n"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -420,5 +508,82 @@ proofs:
 	}
 	if ctx2.Proofs[0].Measurements != nil {
 		t.Errorf("Measurements = %+v, want nil for a proof with no measurements: block", ctx2.Proofs[0].Measurements)
+	}
+}
+
+// TestParseProofStatusUnreachableAndLegacyDisputed: the new `unreachable`
+// status must parse, and a file written by an older binary — one that only
+// ever wrote observed/validated/stale/disputed — must keep parsing and keep
+// behaving exactly as before (disputed checks as contradicted, both collapse
+// to LevelDeclared). Back-compat is the whole point: a schema addition must
+// not strand every existing context file.
+func TestParseProofStatusUnreachableAndLegacyDisputed(t *testing.T) {
+	yaml := `version: 2
+proofs:
+  - id: nas-backed
+    status: unreachable
+    observed_at: "2026-08-18T00:00:00Z"
+  - id: legacy-disputed
+    status: disputed
+    observed_at: "2026-08-18T00:00:00Z"
+`
+	ctx, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(ctx.Proofs) != 2 {
+		t.Fatalf("got %d proofs, want 2", len(ctx.Proofs))
+	}
+	if ctx.Proofs[0].Status != ProofRecordUnreachable {
+		t.Errorf("nas-backed status = %s, want unreachable", ctx.Proofs[0].Status)
+	}
+	if ctx.Proofs[1].Status != ProofRecordDisputed {
+		t.Errorf("legacy-disputed status = %s, want disputed", ctx.Proofs[1].Status)
+	}
+
+	now := t3339("2026-08-18T12:00:00Z")
+	if got := ctx.CheckProof("nas-backed", 0, false, now); got.State != StateUnreachable {
+		t.Errorf("unreachable proof checks as %s, want unreachable", got.State)
+	}
+	if got := ctx.CheckProof("legacy-disputed", 0, false, now); got.State != StateContradicted {
+		t.Errorf("legacy disputed proof checks as %s, want contradicted (unchanged behavior)", got.State)
+	}
+	level, reason := LevelOf(ctx.Proofs[0], now)
+	if level != LevelDeclared || reason != "unreachable" {
+		t.Errorf("LevelOf(unreachable) = %s/%q, want declared/\"unreachable\"", level, reason)
+	}
+	level, reason = LevelOf(ctx.Proofs[1], now)
+	if level != LevelDeclared || reason != "disputed" {
+		t.Errorf("LevelOf(disputed) = %s/%q, want declared/\"disputed\" (unchanged behavior)", level, reason)
+	}
+}
+
+func TestParseRefusesNewerVersionWithUnsupportedVersionError(t *testing.T) {
+	_, err := Parse(strings.NewReader("version: 3\nsome_future_field: true\n"))
+	if err == nil {
+		t.Fatal("expected an error for a version newer than CurrentVersion")
+	}
+	var uv *UnsupportedVersionError
+	if !errors.As(err, &uv) {
+		t.Fatalf("expected *UnsupportedVersionError, got %T: %v", err, err)
+	}
+	if uv.Got != 3 {
+		t.Errorf("Got = %d, want 3", uv.Got)
+	}
+	if !strings.Contains(err.Error(), "upgrade restoregap") {
+		t.Errorf("expected a one-line upgrade message, got %q", err.Error())
+	}
+}
+
+func TestParseNewerVersionRefusedEvenWithoutUnknownFields(t *testing.T) {
+	// A future version that happens to reuse every current field name would,
+	// pre-peekVersion, sail through strict decode and only fail on the
+	// generic "version must be 2" check further down — still an error, but
+	// this asserts the newer-version case specifically routes through
+	// UnsupportedVersionError, not the older/wrong-version message.
+	_, err := Parse(strings.NewReader("version: 2026\nguards: []\n"))
+	var uv *UnsupportedVersionError
+	if !errors.As(err, &uv) {
+		t.Fatalf("expected *UnsupportedVersionError, got %T: %v", err, err)
 	}
 }

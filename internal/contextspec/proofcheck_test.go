@@ -27,6 +27,7 @@ func TestCheckProof(t *testing.T) {
 			{ID: "fresh", Status: ProofRecordValidated, ObservedAt: &observed},
 			{ID: "disputed", Status: ProofRecordDisputed, ObservedAt: &observed},
 			{ID: "marked-stale", Status: ProofRecordStale, ObservedAt: &observed},
+			{ID: "unreachable", Status: ProofRecordUnreachable, ObservedAt: &observed},
 		},
 	}
 	cases := []struct {
@@ -41,6 +42,7 @@ func TestCheckProof(t *testing.T) {
 		{"fresh, exceeds max age", "fresh", 1, StateStale},
 		{"disputed", "disputed", 0, StateContradicted},
 		{"marked stale", "marked-stale", 0, StateStale},
+		{"unreachable", "unreachable", 0, StateUnreachable},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -49,6 +51,46 @@ func TestCheckProof(t *testing.T) {
 				t.Errorf("CheckProof(%q, %d) = %s (%s), want %s", c.id, c.maxProofAgeHours, got.State, got.Detail, c.want)
 			}
 		})
+	}
+}
+
+// TestCheckProofUnreachableNeverSatisfies: an unreachable proof means "the
+// recovery source could not be reached, nothing was proven" — the NAS-asleep
+// shape. It must never satisfy a guard, and never satisfy require_verified
+// (which accepts only a drill-produced verified proof). Its detail must also
+// read differently from a disputed proof's: reachability remediation, not
+// "investigate the copy", and no implication of data loss.
+func TestCheckProofUnreachableNeverSatisfies(t *testing.T) {
+	now := time.Now()
+	observedAt := now.Add(-time.Hour)
+	ctx := Context{Proofs: []Proof{
+		{ID: "nas-sleeping", Status: ProofRecordUnreachable, ObservedAt: &observedAt},
+		{ID: "corrupt-copy", Status: ProofRecordDisputed, ObservedAt: &observedAt},
+	}}
+
+	got := ctx.CheckProof("nas-sleeping", 0, false, now)
+	if got.State != StateUnreachable {
+		t.Fatalf("unreachable proof state = %s (%s), want unreachable", got.State, got.Detail)
+	}
+	if got := ctx.CheckProof("nas-sleeping", 0, true, now); got.State == StatePresent {
+		t.Fatal("an unreachable proof must never satisfy require_verified")
+	}
+	if !strings.Contains(got.Detail, "not reachable") || !strings.Contains(got.Detail, "re-run the drill") {
+		t.Errorf("unreachable detail should carry reachability remediation, got %q", got.Detail)
+	}
+	if strings.Contains(got.Detail, "investigate the copy") {
+		t.Errorf("unreachable detail must not imply the copy is bad, got %q", got.Detail)
+	}
+
+	disputed := ctx.CheckProof("corrupt-copy", 0, false, now)
+	if disputed.State != StateContradicted {
+		t.Fatalf("disputed proof state = %s, want contradicted (unchanged)", disputed.State)
+	}
+	if !strings.Contains(disputed.Detail, "investigate the copy") {
+		t.Errorf("disputed detail should carry investigate-the-copy remediation, got %q", disputed.Detail)
+	}
+	if disputed.Detail == got.Detail {
+		t.Error("unreachable and disputed must render different detail text")
 	}
 }
 

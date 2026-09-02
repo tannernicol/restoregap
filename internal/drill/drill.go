@@ -60,6 +60,14 @@ type Result struct {
 	Checks     []contextspec.CheckOutcome // declared checks, in order, plus any synthetic budget_rto/budget_rpo failures
 	RTOSeconds float64
 	RPOSeconds *float64 // nil when no check measured freshness
+	// SourceUnreachable marks a failure where the recovery SOURCE could not
+	// be reached/read (missing mount, connection refused, permission denied
+	// on the source, timeout) — or the run never got as far as attempting a
+	// recovery — so nothing was proven either way. The CLI records such a
+	// result as proof status "unreachable", distinct from "disputed" (a
+	// recovery that ran and failed verification). It never changes gating:
+	// both fail closed exactly the same.
+	SourceUnreachable bool
 }
 
 // Runner executes drills. Now is injectable so callers can pin drill time for
@@ -114,6 +122,7 @@ func (r Runner) Run(spec Spec) Result {
 
 	if spec.Proof == "" || spec.Artifact == "" || spec.Recover == "" {
 		res.Err = fmt.Errorf("drill: proof, artifact and recover are all required")
+		res.SourceUnreachable = true // no recovery was attempted; nothing was proven
 		return res
 	}
 
@@ -131,6 +140,10 @@ func (r Runner) Run(spec Spec) Result {
 		h, err := hashFile(spec.Artifact)
 		if err != nil {
 			res.Err = fmt.Errorf("drill %s: cannot read the live artifact %s: %w", spec.Proof, spec.Artifact, err)
+			// The run stopped before any recovery was attempted — nothing was
+			// proven, so this is an "unreachable" result, not a failed
+			// verification.
+			res.SourceUnreachable = true
 			return res
 		}
 		preHash = h
@@ -140,6 +153,7 @@ func (r Runner) Run(spec Spec) Result {
 	sandbox, err := os.MkdirTemp(r.SandboxDir, "restoregap-drill-")
 	if err != nil {
 		res.Err = fmt.Errorf("drill %s: cannot create sandbox: %w", spec.Proof, err)
+		res.SourceUnreachable = true // no recovery was attempted; nothing was proven
 		return res
 	}
 	defer func() { _ = os.RemoveAll(sandbox) }()
@@ -160,6 +174,12 @@ func (r Runner) Run(spec Spec) Result {
 	out, runErr := cmd.CombinedOutput()
 	if runErr != nil {
 		res.Err = fmt.Errorf("drill %s: recovery command failed: %w — %s", spec.Proof, runErr, firstLine(out))
+		// A recovery WAS attempted here, so the default recording is
+		// "disputed" — but when the failure output is a source-reachability
+		// signature (the source mount missing, the connection refused or
+		// timing out, permission denied on the source), the honest report is
+		// that the drill could not even try.
+		res.SourceUnreachable = looksLikeUnreachableSource(out)
 		return res
 	}
 
@@ -352,4 +372,51 @@ func firstLine(b []byte) string {
 		return s[:200]
 	}
 	return s
+}
+
+// unreachableSourceSignatures are the substrings (matched
+// case-insensitively against a failed recovery command's combined output)
+// that mean "the recovery SOURCE could not be reached or read": the source
+// path/mount is missing, the remote refused or timed out, DNS failed, or the
+// process lacked permission to read the source. These are the messages cp,
+// rsync, scp/sftp, rclone, curl, NFS, and the C library emit for exactly
+// those conditions. A recover command that fails for any other reason (a
+// broken script, a bad decrypt key) stays "disputed": a recovery was
+// attempted and the artifact did not come back — the tiebreak rule is that
+// "unreachable" claims nothing more than "the source could not be reached".
+var unreachableSourceSignatures = []string{
+	"no such file or directory", // ENOENT on the source (missing file or mount)
+	"permission denied",         // EACCES on the source
+	"connection refused",        // remote up but rejecting (ECONNREFUSED)
+	"connection timed out",      // network black hole
+	"connection reset",          // link dropped mid-transfer
+	"timed out",                 // generic timeout (rclone/curl/ssh wording)
+	"network is unreachable",    // no route at all
+	"no route to host",
+	"host is down",
+	"could not resolve hostname", // DNS failure (ssh/curl)
+	"name or service not known",  // getaddrinfo failure
+	"temporary failure in name resolution",
+	"mount point",                         // mount(8)/mount.nfs: the source mount is missing or wrong
+	"not mounted",                         // mount(8) wording
+	"transport endpoint is not connected", // NFS after the server vanished
+	"stale file handle",                   // NFS after a server reboot
+}
+
+// looksLikeUnreachableSource reports whether a failed recovery command's
+// output carries one of the source-reachability signatures above. It is a
+// heuristic on free-form command output by necessity — the drill only sees
+// an exit status and bytes — and it deliberately fails toward "disputed"
+// (recovery attempted, outcome unknown-bad) rather than guessing
+// "unreachable", because the two statuses tell the operator different
+// stories and a wrong "unreachable" would dismiss a real verification
+// failure as a network blip.
+func looksLikeUnreachableSource(out []byte) bool {
+	s := strings.ToLower(string(out))
+	for _, sig := range unreachableSourceSignatures {
+		if strings.Contains(s, sig) {
+			return true
+		}
+	}
+	return false
 }

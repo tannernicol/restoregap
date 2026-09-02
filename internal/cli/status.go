@@ -19,6 +19,9 @@ import (
 func newStatusCmd() *cobra.Command {
 	req := status.Request{}
 	var outPath string
+	var last bool
+	var fleetDir string
+	var layers, states, envs, systems, owners, tags []string
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Unified recovery-chain view: guards, proof freshness, ledger health",
@@ -28,15 +31,33 @@ func newStatusCmd() *cobra.Command {
 			"file fights the timer that owns it). Every loaded file's guards/proofs/drills are aggregated by\n" +
 			"union; a duplicate id across files is an error naming both files, never a silent merge. Omit\n" +
 			"--context entirely and status tries $RESTOREGAP_CONTEXT (which may itself hold a colon-separated\n" +
-			"list), then ./restoregap.local.yml, then ./restoregap.yml; only when none of those exists does it\n" +
-			"fall back to the built-in zero-config default policy.",
+			"list), then ./restoregap.local.yml, then ./restoregap.yml, then every *.yml in the user config\n" +
+			"directory ($XDG_CONFIG_HOME/restoregap, or ~/.config/restoregap); only when none of those\n" +
+			"exists does it fall back to the built-in zero-config default policy.\n\n" +
+			"--layer/--state/--env/--system/--owner/--tag (repeatable, text format only) narrow the taxonomy\n" +
+			"tree section to matching proofs — omit all of them to see the full, unfiltered report. --state\n" +
+			"accepts restored/observed/accepted/unreviewed, any of disputed/expired/unreachable/lapsed, or\n" +
+			"the meta-value \"attention\" (matches all four of those at once). A declared proof with both\n" +
+			"observed_at and expires_at reads \"observed\" only while it is still inside its own freshness\n" +
+			"window (max(48h, TTL/7) since it was last observed) — a one-off attestation with a long TTL and\n" +
+			"nothing re-checking it falls back to \"unreviewed\" well before it technically expires.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if fleetDir != "" {
+				return runStatusFleet(cmd, fleetDir, outPath)
+			}
 			req.ContextPaths = discoverContextPaths(cmd, req.ContextPaths)
+			filtered := anyStatusFilterSet(layers, states, envs, systems, owners, tags)
+			if last && req.Format != "text" {
+				return fmt.Errorf("status: --last is text-only")
+			}
 			s, err := status.Gather(req)
 			if err != nil {
 				return err
 			}
-			rendered, err := s.Render(req.Format)
+			if filtered && req.Format != "text" {
+				return fmt.Errorf("status: --layer/--state/--env/--system/--owner/--tag are text-only — html filters client-side via its checkbox chips, json always emits everything for a downstream merge")
+			}
+			rendered, err := renderStatusReport(s, req.Format, last, filtered, status.NewTreeFilter(layers, states, envs, systems, owners, tags))
 			if err != nil {
 				return err
 			}
@@ -52,10 +73,58 @@ func newStatusCmd() *cobra.Command {
 		"path to restoregap.yml / restoregap.local.yml; "+contextDiscoveryHelpRepeatable+
 			" (when omitted entirely: "+contextDiscoveryHelp+"; falls back further to the built-in zero-config policy)")
 	f.StringVar(&req.LedgerPath, "ledger", "", "path to the decision ledger (JSONL)")
-	f.StringVar(&req.Format, "format", "text", "output format: text or html")
+	f.StringVar(&req.Format, "format", "text", "output format: text, html, or json (every proof's full effective layer/category/state/scope)")
 	f.StringVar(&req.AsOf, "as-of", "", "evaluate freshness as of this RFC3339 time")
 	f.StringVar(&outPath, "out", "", "write the report to this path (- for stdout)")
+	f.BoolVar(&last, "last", false, "show the last preflight decision with ordered check durations and tool version")
+	f.StringVar(&fleetDir, "fleet", "", "render the merged fleet view from `bundle merge`'s --out dir in the terminal, instead of this host's own status")
+	f.StringArrayVar(&layers, "layer", nil, "show only this layer's proofs (repeatable; text format only)")
+	f.StringArrayVar(&states, "state", nil, "show only proofs in this state (repeatable; text format only)")
+	f.StringArrayVar(&envs, "env", nil, "show only this scope environment's proofs (repeatable; text format only)")
+	f.StringArrayVar(&systems, "system", nil, "show only this scope system's proofs (repeatable; text format only)")
+	f.StringArrayVar(&owners, "owner", nil, "show only this scope owner's proofs (repeatable; text format only)")
+	f.StringArrayVar(&tags, "tag", nil, "show only proofs carrying this scope tag (repeatable; text format only)")
 	return cmd
+}
+
+// runStatusFleet implements `status --fleet <dir>`: loads a prior `bundle
+// merge`'s fleet.json from dir and renders the exact same layer→category→
+// proof tree fleet.html shows, as a terminal tree instead — the same
+// contract the plain-text taxonomy tree has with the single-host HTML
+// dashboard.
+func runStatusFleet(cmd *cobra.Command, dir, outPath string) error {
+	fleet, err := status.LoadFleet(dir)
+	if err != nil {
+		cmd.SilenceUsage = true
+		return err
+	}
+	rendered := fleet.RenderText()
+	if outPath != "" && outPath != "-" {
+		return os.WriteFile(outPath, rendered, 0o644)
+	}
+	_, err = cmd.OutOrStdout().Write(rendered)
+	return err
+}
+
+// anyStatusFilterSet reports whether any of --layer/--state/--env/--system/
+// --owner/--tag was passed, which switches the report to the filtered
+// taxonomy tree.
+func anyStatusFilterSet(layers, states, envs, systems, owners, tags []string) bool {
+	return len(layers) > 0 || len(states) > 0 || len(envs) > 0 || len(systems) > 0 || len(owners) > 0 || len(tags) > 0
+}
+
+// renderStatusReport renders s per --last/filtered/--format precedence:
+// --last wins outright, then a taxonomy-tree filter, then the plain
+// --format renderer.
+func renderStatusReport(s *status.Summary, format string, last, filtered bool, tf status.TreeFilter) ([]byte, error) {
+	switch {
+	case last:
+		return s.RenderLast(), nil
+	case filtered:
+		return s.RenderTree(tf), nil
+	default:
+		return s.Render(format)
+	}
 }
 
 func newLedgerCmd() *cobra.Command {

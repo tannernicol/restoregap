@@ -7,8 +7,8 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -25,22 +25,10 @@ const (
 	glyphCritical = "✕"
 )
 
-// tick strip and sparkline geometry — the validated reference values from
-// the dashboard spec (4x14px ticks, 2px gaps, a 60x16 sparkline).
-const (
-	tickWidth   = 4
-	tickHeight  = 14
-	tickGap     = 2
-	sparkWidth  = 60
-	sparkHeight = 16
-	// minSparklinePoints is the fewest RTO measurements a sparkline draws;
-	// below this a trend line reads as noise, not a trend.
-	minSparklinePoints = 3
-	// recentRunsShown caps the expanded row detail card's "recent runs"
-	// list — 5 is enough to see a trend without reprinting the whole
-	// (already-visible-as-ticks) history.
-	recentRunsShown = 5
-)
+// toGreenShown caps how many to-green lines the panel shows before folding
+// the rest behind a <details> — a machine with dozens of unreviewed
+// attestations must not push the whole dashboard below its own headline.
+const toGreenShown = 8
 
 // RenderHTML renders the recovery-status dashboard: a dedicated,
 // self-contained page (its own template and CSS) rather than the shared
@@ -80,144 +68,76 @@ type statusPageData struct {
 	VerdictHeadline  string
 	InventorySummary string
 
-	KPITiles []kpiTile
+	// ToGreen is the convergence panel directly under the banner (question
+	// 1, "can I recover right now" — its non-green half): one line per
+	// not-green proof (same lines `restoregap next` prints), the first
+	// toGreenShown visible; ToGreenRest holds the remainder, folded behind a
+	// <details> (ToGreenMore is len(ToGreenRest), precomputed so the
+	// template never does arithmetic). ToGreenTotal is len(ToGreen)+
+	// len(ToGreenRest) — the panel heading's step count. ToGreenNote is the
+	// panel's line when there is nothing to do ("Green. Next expiry: <proof>
+	// on <date>"), set only when ToGreen is empty. ToGreenPrompt is the
+	// `next --prompt` agent brief, folded into its own <details> alongside
+	// the per-item commands already shown — empty whenever ToGreenTotal is
+	// 0 (nothing to fix, nothing to hand an agent).
+	ToGreen       []string
+	ToGreenRest   []string
+	ToGreenMore   int
+	ToGreenTotal  int
+	ToGreenNote   string
+	ToGreenPrompt string
 
-	// HasInventory is false only when there are no declared drills and no
-	// proofs at all — the one case where the two groups below collapse to
-	// a single "nothing yet" line instead of two zero-count headers.
-	HasInventory bool
-	Groups       []groupData
+	// Coverage is question 2 ("what is not protected at all") — the
+	// discover-snapshot coverage block, top uncovered candidates by
+	// consequence, and (when there is something to fix) the Fix-this
+	// remediation prompt.
+	Coverage coverageBlockData
+
+	// Estate is question 3 ("how is my estate organized and where is it
+	// weak") — the unified layer/category/proof tree (and its by-system
+	// regrouping), replacing the old two-group inventory split and the
+	// checkbox-wall taxonomy section with ONE organization of the data,
+	// STATE as the one vocabulary shown everywhere.
+	Estate EstateData
+
+	// LevelLegend explains the recovery ladder once, under the estate heading.
+	LevelLegend []levelLegendItem
 
 	Footer statusFooter
+
+	// RecoveryChain mirrors the plain-text renderer's legacy "Recovery
+	// chain" section (Summary.sections) — the same context/guards/ledger
+	// overview, folded into a closed <details> here rather than left
+	// text-only. The text renderer's other legacy section, "Proofs" (one
+	// line per proof), is deliberately NOT duplicated here: this page
+	// already has a hard rule against a per-proof row for every healthy
+	// proof at scale (buildFooterFreshness's doc comment, and
+	// TestRenderHTMLRealScaleFooterHasNoPerProofRowsForHealthyProofs) —
+	// even closed, a full per-proof dump would be exactly that.
+	RecoveryChain []kvPair
 }
 
-// kpiTile is one of the four recovery-ladder stat tiles.
-type kpiTile struct {
-	Label   string
-	Count   int
-	Meaning string
-	Accent  string // good | neutral | muted
-}
-
-// groupData is one of the inventory's two explicit groups — "Provably
-// recoverable" (level >= restores, strongest first) and "Not proven"
-// (declared, with the gaps callout as its subhead) — rendered through the
-// same row-grid markup via one template block.
-type groupData struct {
-	Title      string
-	Count      int
-	SubMessage string // only "Not proven" sets this (buildGapMessage)
-	Rows       []statusRow
-}
-
-// checkRow is one drill validate: check's outcome, ready for the row detail
-// card: a status glyph, the check type, and its already-human-written
-// detail string ("integrity ok; transactions=2372 (>= 2000)").
-type checkRow struct {
-	Pass   bool
-	Type   string
-	Detail string
-}
-
-// recentRun is one ledger drill entry for the row detail card's "recent
-// runs" list — last recentRunsShown, newest first (History itself stays
-// oldest-to-newest, which is what the tick strip/sparkline need).
-type recentRun struct {
-	When     string
-	Verified bool
-	RTO      string
-}
-
-// statusRow is one recovery-inventory row, pre-rendered for the template:
-// the tick strip/sparkline (if any) are already built as template.HTML, and
-// every field the expandable detail card needs is precomputed here so the
-// template stays free of derivation logic.
-type statusRow struct {
-	LevelLabel string
-	LevelDot   string // declared | restores | data-valid | serves
-	LevelRank  int    // contextspec.RecoveryLevel.Rung(); groups sort by this, never by string
-	Proof      string
-	IsDrilled  bool
-
-	HistorySVG template.HTML
-	HasHistory bool
-	RTO        string
-	SparkSVG   template.HTML
-	HasSpark   bool
-
-	RPO      string
-	ProofAge string
-	// MergedReason is set only for attestation-only (!IsDrilled) rows: the
-	// one explanation ("attested, no drill", "stale", …), shown ONCE in a
-	// single cell spanning History+RTO+RPO — those columns never have
-	// anything to draw for a proof that was never drilled. ProofAge is then
-	// left as emDash rather than repeating the same text a second time.
-	MergedReason string
-
-	// ---- expandable detail card ----
-
-	// Meaning is the one-sentence, level-keyed plain-language line (written
-	// once in levelMeaning) — what this row's current rung actually means.
-	Meaning string
-	Checks  []checkRow
-
-	// Declaration (IsDrilled rows only).
-	RecoverCmd     string
-	RecoverySource string
-	PinCheckCmd    string
-	HasPinCheck    bool
-	BudgetRTO      string
-	BudgetRPO      string
-
-	// Evidence (whenever a proof record exists, either kind of row).
-	ObservedAtDisplay string
-	ExpiresAtDisplay  string
-	ExpiresInDisplay  string
-	SignaturePresent  bool
-	SigPubKeyPrefix   string
-
-	RecentRuns []recentRun
-
-	// NextStepCommand is set only for a drilled row that is not currently
-	// good (declared rung) and has a known source file — the literal
-	// re-drill command.
-	NextStepCommand string
-
-	// Attestation-only (!IsDrilled) rows only.
-	AttestCommand     string
-	AttestEvidenceURL string
-	// ProposeCommand is always set for an attestation-only row: the
-	// conversion-path hint, with a real artifact path when inferArtifactPath
-	// found one, a placeholder otherwise.
-	ProposeCommand string
-}
-
-// levelMeaning is the expandable detail card's plain-language line, written
-// once per rung and keyed by the same declared|restores|data-valid|serves
-// vocabulary as LevelDot — never re-derived per row.
-var levelMeaning = map[string]string{
-	"declared": "Drill declared, but no live verified proof exists yet — nothing has actually " +
-		"been reconstructed and checked.",
-	"restores": "Restored from its recovery source in a sandbox and the recovered bytes matched " +
-		"— the artifact itself comes back.",
-	"data-valid": "Restored and validated: the recovered database or repository opens and its " +
-		"integrity checks hold, not just present bytes.",
-	"serves": "Restored, validated, and booted: the recovered artifact ran as a live process and " +
-		"answered its readiness probes.",
+// kvPair is one plain key/value line — the "Recovery chain" legacy
+// section's shape, without pulling in the internal/report package just for
+// one small key/value dump.
+type kvPair struct {
+	Key   string
+	Value string
 }
 
 // freshnessChip is one proof-freshness state's count ("28 present"),
 // compact enough for a whole footer section — 30+ healthy proofs must never
 // each get their own row (see buildFooterFreshness).
 type freshnessChip struct {
-	Label string // present | expiring | expired | stale | disputed
+	Label string // present | expiring | expired | stale | disputed | unreachable
 	Count int
 	Warn  bool // every state except "present" is a warn-tinted chip
 }
 
-// footerProof is one problem proof (stale/expired/disputed) in the footer's
-// short list — name and state only, no "valid until" detail: with the
-// state already in FreshnessChips, the detail is noise for a footer.
+// footerProof is one problem proof (stale/expired/disputed/unreachable) in
+// the footer's short list — name and state only, no "valid until" detail:
+// with the state already in FreshnessChips, the detail is noise for a
+// footer.
 type footerProof struct {
 	ID     string
 	Status string
@@ -241,14 +161,43 @@ type statusFooter struct {
 // buildStatusPage converts a gathered Summary into template data. Pure and
 // deterministic — no I/O — so it's directly unit-testable without a real
 // ledger or context file.
-func buildStatusPage(s *Summary) statusPageData {
-	rows := make([]statusRow, len(s.Inventory))
-	for i, r := range s.Inventory {
-		rows[i] = buildStatusRow(r)
+// levelLegendItem is one rung of the recovery ladder and what it actually
+// means. Restored after the estate redesign dropped the per-row meaning line:
+// the page still needs to explain what "restores" vs "data-valid" vs "serves"
+// claim, or a reader has to already know the vocabulary to read the estate at
+// all. Rendered ONCE as a collapsed legend instead of repeated on every row —
+// the density the redesign wanted, without losing the explanation.
+type levelLegendItem struct {
+	Level   string
+	Meaning string
+}
+
+var levelMeaning = map[string]string{
+	"declared": "Drill declared, but no live verified proof exists yet — nothing has actually " +
+		"been reconstructed and checked.",
+	"restores": "Restored from its recovery source in a sandbox and the recovered bytes matched " +
+		"— the artifact itself comes back.",
+	"data-valid": "Restored and validated: the recovered database or repository opens and its " +
+		"integrity checks hold, not just present bytes.",
+	"serves": "Restored, validated, and booted: the recovered artifact ran as a live process and " +
+		"answered its readiness probes.",
+}
+
+// buildLevelLegend returns the ladder weakest-first, the order the rungs are
+// climbed.
+func buildLevelLegend() []levelLegendItem {
+	out := make([]levelLegendItem, 0, len(levelMeaning))
+	for _, lvl := range []string{"declared", "restores", "data-valid", "serves"} {
+		out = append(out, levelLegendItem{Level: lvl, Meaning: levelMeaning[lvl]})
 	}
-	recoverable, notProven := splitInventoryGroups(rows)
+	return out
+}
+
+func buildStatusPage(s *Summary) statusPageData {
 	originLabel, originTitle := summarizeOrigin(s.Origin)
 	chips, problems := buildFooterFreshness(s.Proofs)
+	steps := s.NextSteps()
+	toGreenShownLines, toGreenRest, toGreenNote := buildToGreen(s)
 
 	return statusPageData{
 		GeneratedAt:      s.GeneratedAt.UTC().Format(time.RFC3339),
@@ -261,38 +210,64 @@ func buildStatusPage(s *Summary) statusPageData {
 		VerdictLabel:     strings.ToUpper(s.Verdict),
 		VerdictHeadline:  verdictHeadline(s, countDeclared(s.Inventory)),
 		InventorySummary: s.InventorySummary,
-		KPITiles:         buildKPITiles(s.Inventory),
-		HasInventory:     len(s.Inventory) > 0,
-		Groups: []groupData{
-			{Title: "Provably recoverable", Count: len(recoverable), Rows: recoverable},
-			{Title: "Not proven", Count: len(notProven), SubMessage: buildGapMessage(s.Inventory), Rows: notProven},
-		},
+		ToGreen:          toGreenShownLines,
+		ToGreenRest:      toGreenRest,
+		ToGreenMore:      len(toGreenRest),
+		ToGreenTotal:     len(toGreenShownLines) + len(toGreenRest),
+		ToGreenNote:      toGreenNote,
+		ToGreenPrompt:    buildToGreenPrompt(s, steps),
+		Coverage:         buildCoverageBlock(s.Discover),
+		Estate:           buildEstateData(s),
+		LevelLegend:      buildLevelLegend(),
 		Footer: statusFooter{
 			Lifelines: s.Lifelines, Guards: s.Guards,
 			FreshnessChips: chips, ProblemProofs: problems,
 			LedgerEntries: s.LedgerEntries, LedgerOK: s.LedgerOK, LedgerDetail: s.LedgerDetail,
 			LastDecision: s.LastDecision, ExpiringSoon: s.ExpiringSoon,
 		},
+		RecoveryChain: buildRecoveryChainKV(s),
 	}
 }
 
-// splitInventoryGroups partitions rows into "provably recoverable" (level
-// >= restores) and "not proven" (declared), matching Statuspage-style
-// component grouping — an explicit split instead of one sorted table. The
-// recoverable group is re-sorted strongest-first (the opposite of the
-// weakest-first order buildInventory produces for the text renderer/overall
-// gap-first reading); the not-proven group keeps its incoming (proof-id)
-// order.
-func splitInventoryGroups(rows []statusRow) (recoverable, notProven []statusRow) {
-	for _, r := range rows {
-		if r.LevelDot == "declared" {
-			notProven = append(notProven, r)
-		} else {
-			recoverable = append(recoverable, r)
-		}
+// buildToGreenPrompt renders the To-green panel's folded `next --prompt`
+// agent brief — the exact text `restoregap next --prompt` prints — empty
+// whenever there is nothing to do (a green page carries no remediation
+// scaffolding). Host is best-effort (os.Hostname()), the same fallback
+// internal/cli's own promptHeader uses.
+func buildToGreenPrompt(s *Summary, steps []NextStep) string {
+	if len(steps) == 0 {
+		return ""
 	}
-	sort.SliceStable(recoverable, func(i, j int) bool { return recoverable[i].LevelRank > recoverable[j].LevelRank })
-	return recoverable, notProven
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "unknown"
+	}
+	return RenderPrompt(steps, PromptHeader{Host: host, GeneratedAt: s.GeneratedAt, Scope: "all"})
+}
+
+// buildRecoveryChainKV mirrors Summary.sections' "Recovery chain" block
+// (the text renderer's overview: context, guard counts, ledger health,
+// last decision) — the HTML page's closed-by-default parity section.
+func buildRecoveryChainKV(s *Summary) []kvPair {
+	kv := []kvPair{
+		{Key: "Context", Value: s.Origin},
+		{Key: "Guards declared", Value: fmt.Sprintf("%d (%d lifelines, %d guards)", s.Lifelines+s.Guards, s.Lifelines, s.Guards)},
+	}
+	if s.LedgerEntries > 0 || s.LedgerDetail != "" {
+		v := s.LedgerDetail
+		if s.LedgerEntries > 0 {
+			chain := "verified"
+			if !s.LedgerOK {
+				chain = "BROKEN: " + s.LedgerDetail
+			}
+			v = fmt.Sprintf("%d entries · chain %s", s.LedgerEntries, chain)
+		}
+		kv = append(kv, kvPair{Key: "Ledger", Value: v})
+	}
+	if s.LastDecision != "" {
+		kv = append(kv, kvPair{Key: "Last decision", Value: s.LastDecision})
+	}
+	return kv
 }
 
 // countDeclared counts inventory rows at the declared rung — the "not yet
@@ -305,38 +280,6 @@ func countDeclared(rows []InventoryRow) int {
 		}
 	}
 	return n
-}
-
-// buildGapMessage is the "Not proven" group's subhead: split by IsDrilled,
-// since "attested but never drilled" is only true for a proof that never
-// had a drill at all — a declared drill whose proof merely expired or came
-// back disputed WAS drilled, and saying otherwise overclaims in the other
-// direction. Empty when there are no declared rows at all. A zero-count
-// clause is suppressed rather than printed ("0 never drilled" says nothing
-// true).
-func buildGapMessage(rows []InventoryRow) string {
-	neverDrilled, drilledUnproven := 0, 0
-	for _, r := range rows {
-		if r.Level != contextspec.LevelDeclared.String() {
-			continue
-		}
-		if r.IsDrilled {
-			drilledUnproven++
-		} else {
-			neverDrilled++
-		}
-	}
-	if neverDrilled == 0 && drilledUnproven == 0 {
-		return ""
-	}
-	var parts []string
-	if neverDrilled > 0 {
-		parts = append(parts, fmt.Sprintf("%d never drilled", neverDrilled))
-	}
-	if drilledUnproven > 0 {
-		parts = append(parts, fmt.Sprintf("%d drilled but currently unproven", drilledUnproven))
-	}
-	return strings.Join(parts, ", ") + " — these are beliefs, not capabilities."
 }
 
 // summarizeOrigin turns Origin — a single path/label, or joinOrigins's
@@ -355,18 +298,20 @@ func summarizeOrigin(origin string) (label, full string) {
 
 // buildFooterFreshness reduces the (possibly 30+ entry) proof list to a
 // compact state-count summary plus a short list of ONLY the problem proofs
-// (stale/expired/disputed) — a healthy proof gets counted, never its own
-// row. "expiring" is a chip here but not a problem row: it already has its
-// own "Expiring soon" footer tile, so listing it again here would be the
-// same redundancy this rework exists to remove.
+// (stale/expired/disputed/unreachable) — a healthy proof gets counted, never
+// its own row. "expiring" is a chip here but not a problem row: it already
+// has its own "Expiring soon" footer tile, so listing it again here would be
+// the same redundancy this rework exists to remove. "unreachable" stays a
+// distinct label from "disputed" — the whole point of the split is that a
+// sleeping NAS and a corrupt copy must not read the same.
 func buildFooterFreshness(proofs []ProofState) ([]freshnessChip, []footerProof) {
-	order := []string{"present", "expiring", "expired", "stale", "disputed"}
+	order := []string{"present", "expiring", "expired", "stale", "disputed", "unreachable"}
 	counts := make(map[string]int, len(order))
 	var problems []footerProof
 	for _, p := range proofs {
 		counts[p.Status]++
 		switch p.Status {
-		case "stale", "expired", "disputed":
+		case "stale", "expired", "disputed", "unreachable":
 			problems = append(problems, footerProof{ID: p.ID, Status: p.Status})
 		}
 	}
@@ -379,91 +324,14 @@ func buildFooterFreshness(proofs []ProofState) ([]freshnessChip, []footerProof) 
 	return chips, problems
 }
 
-// buildStatusRow renders one inventory row's SVGs and detail-card fields,
-// deciding between the normal History/RTO/RPO columns and an
-// attestation-only row's single merged reason cell. A merged row's
-// ProofAge column is left as emDash — MergedReason already carries that
-// same string once, in the cell where History/RTO/RPO would otherwise sit,
-// and repeating it in ProofAge too is exactly the redundancy that shape
-// exists to avoid.
-func buildStatusRow(r InventoryRow) statusRow {
-	dot := levelDotClass(r.LevelRank)
-	row := statusRow{
-		LevelLabel: r.Level,
-		LevelDot:   dot,
-		LevelRank:  r.LevelRank,
-		Proof:      r.Proof,
-		IsDrilled:  r.IsDrilled,
-		Meaning:    levelMeaning[dot],
-		RecentRuns: recentRunsFromHistory(r.History),
-
-		ObservedAtDisplay: r.ObservedAtDisplay,
-		ExpiresAtDisplay:  r.ExpiresAtDisplay,
-		ExpiresInDisplay:  r.ExpiresInDisplay,
-		SignaturePresent:  r.SignaturePresent,
-		SigPubKeyPrefix:   r.SigPubKeyPrefix,
-	}
-	if !r.IsDrilled {
-		row.MergedReason = r.ProofAge
-		row.ProofAge = emDash
-		row.AttestCommand = r.AttestCommand
-		row.AttestEvidenceURL = r.AttestEvidenceURL
-		row.ProposeCommand = proposeCommand(r)
-		return row
-	}
-	row.RPO = r.RPO
-	row.RTO = r.RTO
-	row.ProofAge = r.ProofAge
-	row.RecoverCmd = r.RecoverCmd
-	row.RecoverySource = r.RecoverySource
-	row.PinCheckCmd = r.PinCheckCmd
-	row.HasPinCheck = r.PinCheckCmd != ""
-	row.BudgetRTO = r.BudgetRTO
-	row.BudgetRPO = r.BudgetRPO
-	row.NextStepCommand = nextStepCommand(r)
-	for _, c := range r.Checks {
-		row.Checks = append(row.Checks, checkRow{Pass: c.Pass, Type: c.Type, Detail: c.Detail})
-	}
-	if svg, ok := renderHistoryStrip(r.History); ok {
-		row.HistorySVG, row.HasHistory = svg, true
-	}
-	if svg, ok := renderSparkline(r.History); ok {
-		row.SparkSVG, row.HasSpark = svg, true
-	}
-	return row
-}
-
-// recentRunsFromHistory takes the last recentRunsShown entries of a
-// proof's (oldest-to-newest) drill history and returns them newest-first —
-// the detail card's "recent runs" list reads top-down as "most recent
-// first", the opposite order from the tick strip/sparkline it sits beside.
-func recentRunsFromHistory(history []RunTick) []recentRun {
-	n := len(history)
-	if n == 0 {
-		return nil
-	}
-	start := 0
-	if n > recentRunsShown {
-		start = n - recentRunsShown
-	}
-	tail := history[start:]
-	out := make([]recentRun, len(tail))
-	for i, t := range tail {
-		out[len(tail)-1-i] = recentRun{
-			When:     t.When.UTC().Format("2006-01-02"),
-			Verified: t.Verified,
-			RTO:      formatMs(t.RTOMs),
-		}
-	}
-	return out
-}
-
-// nextStepCommand is the literal re-drill command shown in a drilled row's
-// detail card, but only when that row is not currently good (declared
-// rung) and its source context file is known — restoregap drill --context
-// requires a real file, so a row with no SourceFile (never realistically
-// reachable for a drilled row: the built-in default declares no drills)
-// gets no command rather than a broken one.
+// nextStepCommand is the literal re-drill command for a drilled row that is
+// not currently good (declared rung) and has a known source context file —
+// restoregap drill --context requires a real file, so a row with no
+// SourceFile (never realistically reachable for a drilled row: the
+// built-in default declares no drills) gets no command rather than a
+// broken one. Used by nextStepCommandFor (next.go) — the single source for
+// `restoregap next`, the To-green panel, and the estate tree's per-row
+// inline next-action all agreeing on the same command.
 func nextStepCommand(r InventoryRow) string {
 	if !r.IsDrilled || r.Level != contextspec.LevelDeclared.String() || r.SourceFile == "" {
 		return ""
@@ -471,44 +339,24 @@ func nextStepCommand(r InventoryRow) string {
 	return fmt.Sprintf("restoregap drill --context %s --proof %s", r.SourceFile, r.Proof)
 }
 
-// proposeCommand is the attestation-only row's conversion-path hint, always
-// present: a real artifact path when inferArtifactPath found one, an
-// <artifact> placeholder otherwise. --source has no way to be inferred (an
-// attestation declares no recovery source at all), so it is always a
-// literal <recovery-source> placeholder for the operator to fill in.
-func proposeCommand(r InventoryRow) string {
-	artifact := "<artifact>"
-	if r.ProposeArtifact != "" {
-		artifact = r.ProposeArtifact
+// buildToGreen renders the convergence panel's lines — exactly what
+// `restoregap next` prints — split into the first toGreenShown (shown) and
+// the remainder (rest, folded behind a <details>) — plus the note that
+// replaces them all when the machine is already green: the next proof
+// expiry on the clock, so "green" still comes with a date. note is empty
+// (and shown non-empty) whenever work is left, and vice versa.
+func buildToGreen(s *Summary) (shown, rest []string, note string) {
+	lines := ToGreenLines(s.NextSteps())
+	if len(lines) == 0 {
+		if s.NextExpiryID != "" {
+			return nil, nil, fmt.Sprintf("Green. Next expiry: %s on %s", s.NextExpiryID, s.NextExpiryAt.UTC().Format(dateOnly))
+		}
+		return nil, nil, "Green."
 	}
-	return fmt.Sprintf("restoregap drill propose %s --source <recovery-source>", artifact)
-}
-
-// buildKPITiles counts inventory rows per recovery rung. The order is
-// fixed: declared (the gap signal) through serves (the loudest win).
-func buildKPITiles(rows []InventoryRow) []kpiTile {
-	counts := make(map[string]int, 4)
-	for _, r := range rows {
-		counts[r.Level]++
+	if len(lines) > toGreenShown {
+		return lines[:toGreenShown], lines[toGreenShown:], ""
 	}
-	return []kpiTile{
-		{
-			Label: "Declared", Count: counts[contextspec.LevelDeclared.String()],
-			Meaning: "drill declared, no live verified proof — not proven", Accent: "muted",
-		},
-		{
-			Label: "Restores", Count: counts[contextspec.LevelRestores.String()],
-			Meaning: "recover produced validated content", Accent: "neutral",
-		},
-		{
-			Label: "Data-valid", Count: counts[contextspec.LevelDataValid.String()],
-			Meaning: "verified, incl. a sqlite/git integrity check", Accent: "neutral",
-		},
-		{
-			Label: "Serves", Count: counts[contextspec.LevelServes.String()],
-			Meaning: "boots and answers probes", Accent: "good",
-		},
-	}
+	return lines, nil, ""
 }
 
 // verdictClass maps a posture to the page's fixed status token.
@@ -555,103 +403,6 @@ func verdictHeadline(s *Summary, declared int) string {
 	}
 }
 
-// levelDotClass maps a row's raw LevelRank (contextspec.RecoveryLevel.Rung())
-// to its badge dot color class, so the template never string-matches the
-// display label to pick a color.
-func levelDotClass(levelRank int) string {
-	switch levelRank {
-	case contextspec.LevelRestores.Rung():
-		return "restores"
-	case contextspec.LevelDataValid.Rung():
-		return "data-valid"
-	case contextspec.LevelServes.Rung():
-		return "serves"
-	default:
-		return "declared"
-	}
-}
-
-// formatMs renders a millisecond duration the way contextspec.FormatRTO
-// renders seconds ("1.1s"), so a tick's title and the RTO column read the
-// same way. Non-positive is "not recorded" (rto_ms is omitempty on the
-// ledger payload), never a misleading "0s".
-func formatMs(ms int64) string {
-	if ms <= 0 {
-		return emDash
-	}
-	return time.Duration(ms * int64(time.Millisecond)).Round(100 * time.Millisecond).String()
-}
-
-// renderHistoryStrip builds the heartbeat tick strip for one proof's drill
-// runs, oldest to newest: one 4x14 rounded rect per run, verified green /
-// not-verified red, a native <title> tooltip carrying the date, outcome,
-// and RTO. Returns ok=false when there is nothing to draw.
-func renderHistoryStrip(ticks []RunTick) (svg template.HTML, ok bool) {
-	if len(ticks) == 0 {
-		return "", false
-	}
-	n := len(ticks)
-	width := n*tickWidth + (n-1)*tickGap
-	var b strings.Builder
-	fmt.Fprintf(&b, `<svg class="rgs-ticks" width="%d" height="%d" viewBox="0 0 %d %d" role="img" aria-label="drill history, %d run(s)">`,
-		width, tickHeight, width, tickHeight, n)
-	for i, t := range ticks {
-		x := i * (tickWidth + tickGap)
-		color, state := "var(--critical)", "not verified"
-		if t.Verified {
-			color, state = "var(--good)", "verified"
-		}
-		title := fmt.Sprintf("%s · %s · %s", t.When.UTC().Format("2006-01-02"), state, formatMs(t.RTOMs))
-		fmt.Fprintf(&b, `<rect x="%d" y="0" width="%d" height="%d" rx="1" fill="%s"><title>%s</title></rect>`,
-			x, tickWidth, tickHeight, color, template.HTMLEscapeString(title))
-	}
-	b.WriteString(`</svg>`)
-	return template.HTML(b.String()), true
-}
-
-// renderSparkline builds a single-series RTO-over-time line for one proof's
-// drill runs, oldest to newest. Only emitted at >= minSparklinePoints
-// measured points; the caller falls back to just the RTO string otherwise.
-func renderSparkline(ticks []RunTick) (svg template.HTML, ok bool) {
-	pts := make([]int64, 0, len(ticks))
-	for _, t := range ticks {
-		if t.RTOMs > 0 {
-			pts = append(pts, t.RTOMs)
-		}
-	}
-	if len(pts) < minSparklinePoints {
-		return "", false
-	}
-	lo, hi := pts[0], pts[0]
-	for _, v := range pts {
-		if v < lo {
-			lo = v
-		}
-		if v > hi {
-			hi = v
-		}
-	}
-	var coords strings.Builder
-	span := hi - lo
-	for i, v := range pts {
-		x := float64(i) * float64(sparkWidth) / float64(len(pts)-1)
-		y := float64(sparkHeight) / 2
-		if span != 0 {
-			y = float64(sparkHeight) - (float64(v-lo)/float64(span))*float64(sparkHeight)
-		}
-		if i > 0 {
-			coords.WriteByte(' ')
-		}
-		fmt.Fprintf(&coords, "%.1f,%.1f", x, y)
-	}
-	title := template.HTMLEscapeString(fmt.Sprintf("RTO trend: min %s, max %s", formatMs(lo), formatMs(hi)))
-	svgStr := fmt.Sprintf(
-		`<svg class="rgs-spark" width="%d" height="%d" viewBox="0 0 %d %d" role="img" aria-label="%s">`+
-			`<polyline points="%s" fill="none" stroke="var(--accent)" stroke-width="2"><title>%s</title></polyline></svg>`,
-		sparkWidth, sparkHeight, sparkWidth, sparkHeight, title, coords.String(), title)
-	return template.HTML(svgStr), true
-}
-
 // inlineMark returns the embedded brand mark for inline placement beside
 // the wordmark text: sized via the rgs-mark CSS class and marked
 // aria-hidden (the wordmark text right beside it already carries the name).
@@ -680,20 +431,44 @@ func faviconDataURI() template.URL {
 	return template.URL("data:image/svg+xml," + r.Replace(strings.TrimSpace(ui.Mark)))
 }
 
+// estateRowTemplate is the ONE row partial the estate tree's two parallel
+// groupings (by-layer, by-system — the "By system"/"By layer" view switch)
+// both render through, so a proof's row markup is defined exactly once
+// however many times it is regrouped. A plain (non-<details>) row on
+// purpose: the mobile gate's `--views 'details'` sweep clicks every
+// <details> on the page cumulatively (it never re-closes one before
+// clicking the next), so a per-proof expandable detail card would let a
+// real, ~40-proof estate open dozens of cards simultaneously and blow the
+// 8,000px height budget. Each row instead shows everything the redesign's
+// question 3 asks for directly — state, id, artifact, level, why — plus,
+// for a genuine gap, its single exact remediation command right there
+// (NextAction, from the SAME nextStepCommandFor `restoregap next` and the
+// To-green panel already use), so nothing about "how do I fix this one" is
+// hidden behind a click at all.
+const estateRowTemplate = `{{define "estateRow"}}
+<div class="rgs-row" data-state="{{.State}}" data-bucket="{{.Bucket}}">
+  <span class="rgs-taxrow">
+    <span class="rgs-taxstate" data-bucket="{{.Bucket}}">{{.State}}</span>
+    <span class="rgs-taxproof"><code>{{.Proof}}</code><span class="rgs-taxsub">{{.Artifact}}</span></span>
+    <span class="rgs-taxlevel">{{.Level}}</span>
+    <span class="rgs-taxwhy">{{.Why}}</span>
+  </span>
+  {{- if .NextAction}}
+  <pre class="rgs-rownext"><code>{{.NextAction}}</code></pre>
+  {{- end}}
+</div>
+{{end}}`
+
 // statusPageTemplate is the ENTIRE HTML dashboard: header, verdict banner,
-// KPI tiles, the two-group recovery inventory (each row a native
-// <details>/<summary> disclosure), the value/integration strip, and the
-// footer. It does not use report.pageTemplate — none of this has a
-// KVSection analog, and reusing that shell would mean bolting custom markup
-// onto a generic key-value dump.
-//
-// The inventory is a CSS-grid "table" (role="table"/"row"/"cell"), not a
-// real <table>: <details> is not valid HTML as a direct <table>/<tbody>
-// child, and a native, zero-JS expand/collapse per row needs <details>. One
-// shared grid-template-columns (.rgs-cols) keeps the header and every row's
-// columns aligned; an attestation-only row's merged cell spans three
-// tracks with grid-column instead of a <td colspan>.
-var statusPageTemplate = template.Must(template.New("status").Parse(`<!doctype html>
+// the to-green convergence panel, the coverage block (question 2: what is
+// not protected at all), the unified estate tree (question 3: how is the
+// estate organized and where is it weak — one layer/category/proof tree,
+// STATE as the one vocabulary, a four-way view switch instead of a wall of
+// per-layer/per-state/per-env/per-system checkboxes), the value/integration
+// strip, and the footer. It does not use report.pageTemplate — none of this
+// has a KVSection analog, and reusing that shell would mean bolting custom
+// markup onto a generic key-value dump.
+var statusPageTemplate = template.Must(template.New("status").Parse(estateRowTemplate + `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -719,133 +494,137 @@ var statusPageTemplate = template.Must(template.New("status").Parse(`<!doctype h
     {{if .InventorySummary}}<span class="rgs-vsub">{{.InventorySummary}}</span>{{end}}
   </section>
 
-  <section class="rgs-kpis">
-    {{- range .KPITiles}}
-    <div class="rgs-tile" data-accent="{{.Accent}}">
-      <div class="rgs-tile-num">{{.Count}}</div>
-      <div class="rgs-tile-label">{{.Label}}</div>
-      <div class="rgs-tile-meaning">{{.Meaning}}</div>
-    </div>
+  <section class="rgs-togreen">
+    {{- if .ToGreen}}
+    <h2>To green: {{.ToGreenTotal}} step{{if ne .ToGreenTotal 1}}s{{end}}</h2>
+    <ol class="rgs-togreen-list">
+      {{- range .ToGreen}}
+      <li><code>{{.}}</code></li>
+      {{- end}}
+    </ol>
+    {{- if .ToGreenRest}}
+    <details class="rgs-togreen-more">
+      <summary>{{.ToGreenMore}} more step{{if ne .ToGreenMore 1}}s{{end}}</summary>
+      <ol class="rgs-togreen-list">
+        {{- range .ToGreenRest}}
+        <li><code>{{.}}</code></li>
+        {{- end}}
+      </ol>
+    </details>
+    {{- end}}
+    {{- if .ToGreenPrompt}}
+    <details class="rgs-togreen-more">
+      <summary>Agent brief (<code>restoregap next --prompt</code>)</summary>
+      <pre class="rgs-promptblock"><code>{{.ToGreenPrompt}}</code></pre>
+    </details>
+    {{- end}}
+    {{- else}}
+    <h2>To green: 0 steps</h2>
+    <p class="rgs-togreen-green">{{.ToGreenNote}}</p>
     {{- end}}
   </section>
 
-  <h2>Recovery inventory</h2>
-  {{- if .HasInventory}}
-  {{- range .Groups}}
-  <h3 class="rgs-group-header">{{.Title}} <span class="rgs-group-count">— {{.Count}}</span></h3>
-  {{- if .SubMessage}}
-  <div class="rgs-gap" data-status="warning">
-    <span aria-hidden="true">⚠</span> <span>{{.SubMessage}}</span>
-  </div>
-  {{- end}}
-  {{- if .Rows}}
-  <div class="rgs-rowgrid" role="table" aria-label="{{.Title}}">
-    <div class="rgs-cols rgs-rowgrid-head" role="row">
-      <div role="columnheader" aria-hidden="true"></div>
-      <div role="columnheader">Level</div>
-      <div role="columnheader">Proof</div>
-      <div role="columnheader">History</div>
-      <div role="columnheader">RTO</div>
-      <div role="columnheader">RPO</div>
-      <div role="columnheader">Proof age</div>
+  {{- if .Coverage.Line}}
+  <section class="rgs-coverage">
+    <h2>Coverage</h2>
+    <p class="rgs-coverage-line">{{.Coverage.Line}}</p>
+    {{- if .Coverage.ShowDetail}}
+    <div class="rgs-covlist">
+      {{- range .Coverage.Top}}
+      <div class="rgs-covrow">
+        <span class="rgs-covkind">{{.Kind}}</span>
+        <span class="rgs-taxproof"><code>{{.Name}}</code><span class="rgs-taxsub">{{.Path}}</span></span>
+        <span class="rgs-covsize">{{.Size}}</span>
+      </div>
+      {{- end}}
     </div>
-    {{- range .Rows}}
-    <details class="rgs-row">
-      <summary class="rgs-cols rgs-row-summary" role="row">
-        <span class="rgs-chevron" aria-hidden="true">&#9656;</span>
-        <span role="cell"><span class="rgs-dot" data-level="{{.LevelDot}}"></span> {{.LevelLabel}}</span>
-        <span role="cell"><code>{{.Proof}}</code></span>
-        {{- if .IsDrilled}}
-        <span role="cell">{{if .HasHistory}}{{.HistorySVG}}{{else}}<span class="rgs-muted">—</span>{{end}}</span>
-        <span role="cell">{{.RTO}}{{if .HasSpark}} {{.SparkSVG}}{{end}}</span>
-        <span role="cell">{{.RPO}}</span>
-        {{- else}}
-        <span role="cell" class="rgs-cell-merged rgs-muted">{{.MergedReason}}</span>
-        {{- end}}
-        <span role="cell">{{.ProofAge}}</span>
-      </summary>
-      <div class="rgs-row-detail">
-        <p class="rgs-meaning">{{.Meaning}}</p>
-        {{- if .IsDrilled}}
-        {{- if .Checks}}
-        <div class="rgs-detail-block">
-          <h4>Checks</h4>
-          {{- range .Checks}}
-          <div class="rgs-check" data-pass="{{.Pass}}"><span aria-hidden="true">{{if .Pass}}✓{{else}}✕{{end}}</span> <code class="rgs-check-type">{{.Type}}</code> — {{.Detail}}</div>
-          {{- end}}
-        </div>
-        {{- end}}
-        <div class="rgs-detail-block">
-          <h4>Declaration</h4>
-          <dl class="rgs-kv">
-            <dt>Recover</dt><dd><code>{{.RecoverCmd}}</code></dd>
-            {{- if .HasPinCheck}}
-            <dt>Pin check</dt><dd><code>{{.PinCheckCmd}}</code></dd>
-            {{- end}}
-            <dt>Recovery source</dt><dd><code>{{.RecoverySource}}</code></dd>
-            <dt>RTO budget</dt><dd>declared {{.BudgetRTO}} · measured {{.RTO}}</dd>
-            <dt>RPO budget</dt><dd>declared {{.BudgetRPO}} · measured {{.RPO}}</dd>
-          </dl>
-        </div>
-        <div class="rgs-detail-block">
-          <h4>Evidence</h4>
-          <dl class="rgs-kv">
-            <dt>Proof id</dt><dd><code>{{.Proof}}</code></dd>
-            <dt>Observed</dt><dd>{{.ObservedAtDisplay}}</dd>
-            <dt>Expires</dt><dd>{{.ExpiresAtDisplay}} ({{.ExpiresInDisplay}})</dd>
-            <dt>Signature</dt><dd>{{if .SignaturePresent}}yes ({{.SigPubKeyPrefix}}…){{else}}no{{end}}</dd>
-          </dl>
-        </div>
-        {{- if .RecentRuns}}
-        <div class="rgs-detail-block">
-          <h4>Recent runs</h4>
-          {{- range .RecentRuns}}
-          <div class="rgs-run">{{.When}} · <span class="rgs-run-verdict" data-pass="{{.Verified}}">{{if .Verified}}✓ verified{{else}}✕ failed{{end}}</span> · {{.RTO}}</div>
-          {{- end}}
-        </div>
-        {{- end}}
-        {{- if .NextStepCommand}}
-        <div class="rgs-detail-block rgs-nextstep">
-          <h4>Next step</h4>
-          <pre><code>{{.NextStepCommand}}</code></pre>
-        </div>
-        {{- end}}
-        {{- else}}
-        <div class="rgs-detail-block">
-          <h4>What this attestation asserts</h4>
-          <dl class="rgs-kv">
-            <dt>Command</dt><dd><code>{{.AttestCommand}}</code></dd>
-            <dt>Evidence URL</dt><dd>{{.AttestEvidenceURL}}</dd>
-          </dl>
-        </div>
-        <div class="rgs-detail-block">
-          <h4>Evidence</h4>
-          <dl class="rgs-kv">
-            <dt>Proof id</dt><dd><code>{{.Proof}}</code></dd>
-            <dt>Observed</dt><dd>{{.ObservedAtDisplay}}</dd>
-            <dt>Expires</dt><dd>{{.ExpiresAtDisplay}} ({{.ExpiresInDisplay}})</dd>
-            <dt>Signature</dt><dd>{{if .SignaturePresent}}yes ({{.SigPubKeyPrefix}}…){{else}}no{{end}}</dd>
-          </dl>
-        </div>
-        <div class="rgs-detail-block rgs-nextstep">
-          <h4>Convert to a real drill</h4>
-          <pre><code>{{.ProposeCommand}}</code></pre>
+    {{- if .Coverage.Rest}}
+    <details class="rgs-cov-more">
+      <summary>{{.Coverage.RestCount}} more uncovered candidate{{if ne .Coverage.RestCount 1}}s{{end}}</summary>
+      <div class="rgs-covlist">
+        {{- range .Coverage.Rest}}
+        <div class="rgs-covrow">
+          <span class="rgs-covkind">{{.Kind}}</span>
+          <span class="rgs-taxproof"><code>{{.Name}}</code><span class="rgs-taxsub">{{.Path}}</span></span>
+          <span class="rgs-covsize">{{.Size}}</span>
         </div>
         {{- end}}
       </div>
     </details>
     {{- end}}
-  </div>
-  {{- else}}
-  <p class="rgs-muted">None.</p>
+    <details class="rgs-fixthis">
+      <summary>Fix this</summary>
+      <p class="rgs-fix-regen">Regenerate: <code>restoregap discover</code></p>
+      <pre class="rgs-promptblock"><code>{{.Coverage.Prompt}}</code></pre>
+    </details>
+    {{- end}}
+  </section>
   {{- end}}
-  {{- end}}
+
+  {{- if .Estate.HasAny}}
+  <section class="rgs-estate">
+    <h2>Recovery estate</h2>
+    <details class="rgs-levels">
+      <summary>What the levels mean</summary>
+      <dl>
+        {{- range .LevelLegend}}
+        <dt>{{.Level}}</dt><dd>{{.Meaning}}</dd>
+        {{- end}}
+      </dl>
+    </details>
+    <div class="rgs-viewswitch">
+      <label class="rgs-view-toggle"><input type="radio" name="rgs-view" id="rgs-view-attention"{{if .Estate.DefaultAttention}} checked{{end}}> Needs attention</label>
+      <label class="rgs-view-toggle"><input type="radio" name="rgs-view" id="rgs-view-all"{{if not .Estate.DefaultAttention}} checked{{end}}> All</label>
+      <label class="rgs-view-toggle"><input type="radio" name="rgs-view" id="rgs-view-system"> By system</label>
+      <label class="rgs-view-toggle"><input type="radio" name="rgs-view" id="rgs-view-layer"> By layer</label>
+    </div>
+
+    <div class="rgs-estate-panel" data-panel="layer">
+      {{- range .Estate.LayerSections}}
+      <details class="rgs-taxlayer" data-group="{{.GroupID}}" data-hasgap="{{.HasGap}}"{{if .Open}} open{{end}}>
+        <summary>{{.Header}}</summary>
+        {{- range .ConflictNotes}}
+        <div class="rgs-conflict">⚠ {{.}}</div>
+        {{- end}}
+        {{- $showCat := .ShowCategoryHeaders}}
+        {{- range .Categories}}
+        {{- if $showCat}}
+        <h4 class="rgs-taxcat">{{.Category}}</h4>
+        {{- end}}
+        {{- range .Rows}}
+        {{template "estateRow" .}}
+        {{- end}}
+        {{- end}}
+      </details>
+      {{- end}}
+    </div>
+
+    <div class="rgs-estate-panel" data-panel="system">
+      {{- range .Estate.SystemSections}}
+      <details class="rgs-taxlayer" data-group="{{.GroupID}}" data-hasgap="{{.HasGap}}"{{if .Open}} open{{end}}>
+        <summary>{{.Header}}</summary>
+        {{- range .ConflictNotes}}
+        <div class="rgs-conflict">⚠ {{.}}</div>
+        {{- end}}
+        {{- $showCat := .ShowCategoryHeaders}}
+        {{- range .Categories}}
+        {{- if $showCat}}
+        <h4 class="rgs-taxcat">{{.Category}}</h4>
+        {{- end}}
+        {{- range .Rows}}
+        {{template "estateRow" .}}
+        {{- end}}
+        {{- end}}
+      </details>
+      {{- end}}
+    </div>
+  </section>
   {{- else}}
   <p class="rgs-muted">No declared drills or proofs yet.</p>
   {{- end}}
 
-  <section class="rgs-integration">
-    <h2>What this proves · how it plugs in</h2>
+  <details class="rgs-integration">
+    <summary><h2 style="display:inline">What this proves · how it plugs in</h2></summary>
     <div class="rgs-integration-cols">
       <div>
         <h3>Any backup tool</h3>
@@ -860,7 +639,7 @@ var statusPageTemplate = template.Must(template.New("status").Parse(`<!doctype h
         <p>Ed25519-signed proofs carry real measurements, expire on a schedule, and land in a hash-chained ledger.</p>
       </div>
     </div>
-  </section>
+  </details>
 
   <section class="rgs-footer-grid">
     <div class="rgs-footer-section">
@@ -898,6 +677,17 @@ var statusPageTemplate = template.Must(template.New("status").Parse(`<!doctype h
       <dl class="rgs-kv"><dt>Proofs</dt><dd>{{.Footer.ExpiringSoon}}</dd></dl>
     </div>
   </section>
+
+  {{- if .RecoveryChain}}
+  <details class="rgs-legacy">
+    <summary>Recovery chain</summary>
+    <dl class="rgs-kv">
+      {{- range .RecoveryChain}}
+      <dt>{{.Key}}</dt><dd>{{.Value}}</dd>
+      {{- end}}
+    </dl>
+  </details>
+  {{- end}}
 
   <footer class="rgs-footnote">Generated by restoregap · self-contained evidence artifact</footer>
 </div>
@@ -955,22 +745,27 @@ code, .rgs-mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, 
 .rgs-vheadline { font-weight: 600; }
 .rgs-vsub { color: var(--text-2); flex-basis: 100%; }
 
-.rgs-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
-.rgs-tile { background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 0.85rem 1rem; }
-.rgs-tile-num { font-size: 1.75rem; font-weight: 700; color: var(--text-1); }
-.rgs-tile[data-accent="good"] .rgs-tile-num { color: var(--good); }
-.rgs-tile[data-accent="muted"] .rgs-tile-num { color: var(--text-2); }
-.rgs-tile-label { font-weight: 600; font-size: 0.85rem; margin-top: 0.2rem; }
-.rgs-tile-meaning { color: var(--text-2); font-size: 0.8rem; margin-top: 0.15rem; }
+.rgs-togreen {
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px;
+  padding: 0.9rem 1.1rem; margin-bottom: 1.25rem;
+}
+.rgs-togreen h2 { margin: 0 0 0.5rem; font-size: 0.95rem; }
+.rgs-togreen-list { margin: 0; padding-left: 1.4rem; font-size: 0.85rem; }
+.rgs-togreen-list li { margin-bottom: 0.25rem; }
+.rgs-togreen-list code { font-size: 0.8rem; }
+.rgs-togreen-more { margin-top: 0.5rem; font-size: 0.85rem; }
+.rgs-togreen-more summary { cursor: pointer; color: var(--text-2); }
+.rgs-togreen-more .rgs-togreen-list { margin-top: 0.5rem; }
+.rgs-togreen-green { margin: 0; color: var(--good); font-weight: 500; }
 
 h2 { font-size: 1.05rem; margin: 1.75rem 0 0.6rem; }
 h3 { font-size: 0.9rem; margin: 0 0 0.4rem; color: var(--text-2); }
 .rgs-warn-title { color: var(--warning); }
 .rgs-muted { color: var(--text-2); }
 
-.rgs-group-header { margin: 1.5rem 0 0.4rem; font-size: 0.95rem; color: var(--text-1); }
-.rgs-group-count { color: var(--text-2); font-weight: 400; }
-
+/* fleet.html's own conflict banner (fleet_html.go's template) also uses
+   .rgs-gap — kept here even though the single-host page no longer has a
+   caller of its own. */
 .rgs-gap {
   display: flex; align-items: baseline; gap: 0.5rem; color: var(--warning);
   background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px;
@@ -978,58 +773,87 @@ h3 { font-size: 0.9rem; margin: 0 0 0.4rem; color: var(--text-2); }
 }
 .rgs-gap span:last-child { color: var(--text-1); }
 
-/* The inventory is a CSS-grid "table", not a real <table>: <details> is
-   invalid as a direct <table>/<tbody> child, and a native, zero-JS
-   expand/collapse per row needs <details>. One shared grid-template-columns
-   keeps the header and every row aligned; it scrolls in its own container
-   on narrow viewports so the page body never scrolls horizontally. */
-.rgs-cols {
-  display: grid;
-  grid-template-columns: 1.1rem 8rem minmax(9rem, 1fr) 6.5rem 6.5rem 5.5rem 9rem;
-  column-gap: 0.75rem;
-  align-items: center;
+/* Question 2 — coverage: what is not protected at all. A plain headline
+   line always; the candidate list, its folded remainder, and the Fix-this
+   remediation prompt appear only when there is something to fix (buildCoverageBlock's
+   ShowDetail) — a green coverage block carries no scaffolding. */
+.rgs-coverage { margin-top: 1.25rem; }
+.rgs-coverage-line { margin: 0 0 0.5rem; font-weight: 500; }
+.rgs-covlist { display: flex; flex-direction: column; gap: 0.15rem; margin-bottom: 0.5rem; }
+.rgs-covrow {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.75rem;
+  padding: 0.25rem 0; border-bottom: 1px dashed var(--line); font-size: 0.85rem;
 }
-.rgs-rowgrid { border: 1px solid var(--line); border-radius: 6px; overflow-x: auto; margin-bottom: 0.5rem; }
-.rgs-rowgrid-head { min-width: 54rem; padding: 0.5rem 0.75rem; background: var(--surface-2); color: var(--text-2); font-weight: 600; font-size: 0.8rem; border-bottom: 1px solid var(--line); }
-.rgs-row { border-bottom: 1px solid var(--line); }
-.rgs-row:last-child { border-bottom: none; }
-.rgs-row-summary {
-  min-width: 54rem; padding: 0.5rem 0.75rem; font-size: 0.85rem; cursor: pointer; list-style: none;
-}
-.rgs-row-summary::-webkit-details-marker { display: none; }
-.rgs-row-summary::marker { content: ""; }
-.rgs-chevron { color: var(--text-2); }
-.rgs-row[open] > .rgs-row-summary .rgs-chevron { transform: rotate(90deg); }
-.rgs-cell-merged { grid-column: span 3; }
+.rgs-covrow:last-child { border-bottom: none; }
+.rgs-covkind { color: var(--text-2); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; min-width: 5rem; }
+.rgs-covsize { color: var(--text-2); }
+.rgs-cov-more { margin: 0.4rem 0; font-size: 0.85rem; }
+.rgs-cov-more summary { cursor: pointer; color: var(--text-2); }
+.rgs-fixthis { margin-top: 0.6rem; font-size: 0.85rem; }
+.rgs-fixthis summary { cursor: pointer; font-weight: 600; }
+.rgs-fix-regen { color: var(--text-2); margin: 0.5rem 0 0; }
 
-.rgs-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 0.3rem; background: var(--text-2); }
-.rgs-dot[data-level="declared"] { background: var(--text-2); }
-.rgs-dot[data-level="restores"] { background: var(--accent); }
-.rgs-dot[data-level="data-valid"] { background: var(--aqua); }
-.rgs-dot[data-level="serves"] { background: var(--good); }
-
-.rgs-ticks, .rgs-spark { vertical-align: middle; }
-
-.rgs-row-detail { padding: 0.25rem 1rem 1rem 2.6rem; font-size: 0.85rem; border-top: 1px dashed var(--line); }
-.rgs-meaning { color: var(--text-1); font-weight: 500; margin: 0.5rem 0 0.9rem; max-width: 46rem; }
-.rgs-detail-block { margin-bottom: 0.85rem; }
-.rgs-detail-block h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-2); margin: 0 0 0.35rem; font-weight: 600; }
-.rgs-check, .rgs-run { padding: 0.1rem 0; }
-.rgs-check[data-pass="true"] span:first-child { color: var(--good); }
-.rgs-check[data-pass="false"] span:first-child { color: var(--critical); }
-/* Text wears text tokens; only the verdict word (with its glyph) carries
-   status color — a fully status-colored line makes dates read as alerts. */
-.rgs-run { color: var(--text-2); }
-.rgs-run-verdict[data-pass="true"] { color: var(--good); }
-.rgs-run-verdict[data-pass="false"] { color: var(--critical); }
-.rgs-nextstep pre, .rgs-detail-block pre {
+/* A discover/next --prompt agent brief can run to dozens of lines — capped
+   and internally scrollable so one expanded <details> can never itself
+   push the page past the mobile gate's 8,000px budget, regardless of how
+   many gaps or uncovered candidates it lists. */
+.rgs-promptblock {
   background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px;
-  padding: 0.5rem 0.7rem; overflow-x: auto; margin: 0;
+  padding: 0.6rem 0.8rem; margin: 0.4rem 0 0; font-size: 0.78rem;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  max-height: 16rem; overflow-y: auto;
 }
-.rgs-nextstep pre code, .rgs-detail-block pre code { font-size: 0.8rem; }
 
+/* Question 3 — the unified estate tree (layer -> category -> proof) and its
+   four-way view switch, replacing the old per-layer/per-state/per-env/
+   per-system checkbox wall. Systems are a VIEW (regrouping the same rows),
+   never a flat chip list. */
+.rgs-estate { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--line); }
+.rgs-viewswitch { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; margin-bottom: 1rem; }
+.rgs-view-toggle {
+  display: inline-flex; align-items: center; gap: 0.4rem; min-height: 36px;
+  padding: 0.3rem 0.8rem; border: 1px solid var(--line); border-radius: 999px;
+  font-size: 0.85rem; color: var(--text-2); cursor: pointer; background: var(--surface-2);
+}
+.rgs-viewswitch input { width: 16px; height: 16px; accent-color: var(--accent); }
+.rgs-view-toggle:has(input:checked) { color: var(--text-1); font-weight: 600; border-color: var(--accent); }
+
+/* Only one of the two panels is ever visible — CSS :has() driven by the
+   view-switch radios, zero JavaScript. The "All" and "By layer" radios
+   share this exact same panel/content; only "By system" swaps it out. */
+.rgs-estate-panel[data-panel="system"] { display: none; }
+body:has(#rgs-view-system:checked) .rgs-estate-panel[data-panel="layer"] { display: none; }
+body:has(#rgs-view-system:checked) .rgs-estate-panel[data-panel="system"] { display: block; }
+/* "Needs attention": hide settled rows (restored/observed/accepted) and
+   collapse away any layer left with no genuine gap — an all-clear layer
+   disappears entirely rather than showing an empty shell. */
+body:has(#rgs-view-attention:checked) .rgs-estate-panel[data-panel="layer"] .rgs-row[data-bucket="restored"],
+body:has(#rgs-view-attention:checked) .rgs-estate-panel[data-panel="layer"] .rgs-row[data-bucket="observed"],
+body:has(#rgs-view-attention:checked) .rgs-estate-panel[data-panel="layer"] .rgs-row[data-bucket="accepted"] { display: none; }
+body:has(#rgs-view-attention:checked) .rgs-estate-panel[data-panel="layer"] .rgs-taxlayer[data-hasgap="false"] { display: none; }
+
+/* Each estate row is a plain element, never a <details> — the mobile
+   gate's --views 'details' sweep clicks every <details> on the page
+   cumulatively (it never re-closes one before the next), so an
+   individually-expandable per-proof card would let a ~40-proof estate open
+   dozens of cards at once and blow the 8,000px height budget. Everything
+   question 3 asks for (state, id, artifact, level, why) is shown directly;
+   a genuine gap's exact remediation command is its own visible line
+   (.rgs-rownext), never behind a click. */
+.rgs-row { border-bottom: 1px dashed var(--line); padding: 0.15rem 0; }
+.rgs-row:last-child { border-bottom: none; }
+.rgs-rownext {
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px;
+  padding: 0.35rem 0.6rem; margin: 0.2rem 0 0.4rem; font-size: 0.78rem;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+/* Static explanatory copy, identical on every render — closed by default
+   so it never competes with actual recovery data for page height. */
 .rgs-integration { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--line); }
-.rgs-integration h2 { margin: 0 0 0.85rem; }
+.rgs-integration summary { cursor: pointer; list-style: none; margin: 0 0 0.85rem; }
+.rgs-integration summary::-webkit-details-marker { display: none; }
+.rgs-integration h2 { margin: 0; }
 .rgs-integration-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1.25rem; }
 .rgs-integration-cols h3 { color: var(--text-1); font-size: 0.88rem; margin: 0 0 0.35rem; }
 .rgs-integration-cols p { color: var(--text-2); font-size: 0.82rem; margin: 0; line-height: 1.5; }
@@ -1047,9 +871,12 @@ h3 { font-size: 0.9rem; margin: 0 0 0.4rem; color: var(--text-2); }
 .rgs-footer-section { min-width: 0; }
 .rgs-kv { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr); gap: 0.15rem 0.75rem; margin: 0; font-size: 0.85rem; }
 .rgs-kv dt { color: var(--text-2); overflow-wrap: anywhere; }
-/* dd values are short state words/counts — anywhere-wrapping breaks them
-   letter-by-letter in a tight column, which reads as "disp/ute/d". */
-.rgs-kv dd { margin: 0; white-space: nowrap; }
+/* dd carries everything from a short state word to a full recover command
+   or evidence URL — nowrap clipped the long ones at a narrow viewport
+   (the fleet mobile gate's "dd.rgs-kv clips" failure). anywhere-wrapping a
+   short word occasionally breaks it mid-syllable ("disp/ute/d"); a clipped,
+   unreadable command is worse. */
+.rgs-kv dd { margin: 0; overflow-wrap: anywhere; }
 .rgs-kv-compact { margin-top: 0.5rem; }
 
 .rgs-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
@@ -1061,14 +888,64 @@ h3 { font-size: 0.9rem; margin: 0 0 0.4rem; color: var(--text-2); }
 
 .rgs-footnote { margin-top: 2rem; color: var(--text-2); font-size: 0.75rem; }
 
+/* Legacy text-renderer parity section (Recovery chain) — closed by
+   default: everything in it already lives elsewhere on the page (the
+   header origin line, Footer's Guards/Ledger tiles), so this is a
+   full-detail fallback, not primary reading, and must not add to the
+   page's default height. */
+.rgs-legacy { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.rgs-legacy summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; color: var(--text-2); list-style: none; }
+.rgs-legacy summary::-webkit-details-marker { display: none; }
+.rgs-legacy dl.rgs-kv { margin-top: 0.75rem; }
+
+/* Taxonomy tree: layer -> category -> proof, with a zero-JavaScript
+   checkbox filter bar (:has() only — see buildFilterCSS) and, on a
+   multi-environment/multi-system estate, a compact roll-up table. */
+.rgs-tax { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--line); }
+.rgs-filterbar { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; margin-bottom: 1rem; }
+.rgs-chip-toggle {
+  display: inline-flex; align-items: center; gap: 0.35rem; min-height: 36px;
+  padding: 0.25rem 0.7rem; border: 1px solid var(--line); border-radius: 999px;
+  font-size: 0.82rem; color: var(--text-2); cursor: pointer; background: var(--surface-2);
+}
+.rgs-chip-toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+.rgs-levels { margin: 0 0 1rem; font-size: 0.85rem; }
+.rgs-levels summary { cursor: pointer; color: var(--text-2); }
+.rgs-levels dl { margin: 0.5rem 0 0; display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 0.75rem; }
+.rgs-levels dt { font-weight: 600; white-space: nowrap; }
+.rgs-levels dd { margin: 0; color: var(--text-2); }
+.rgs-taxlayer { border: 1px solid var(--line); border-radius: 6px; padding: 0.6rem 0.9rem; margin-bottom: 0.6rem; }
+.rgs-taxlayer summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+.rgs-conflict { color: var(--warning); font-size: 0.8rem; margin: 0.4rem 0; }
+.rgs-taxcat { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-2); margin: 0.75rem 0 0.35rem; font-weight: 600; }
+.rgs-taxrow {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.75rem;
+  padding: 0.25rem 0; border-bottom: 1px dashed var(--line); font-size: 0.85rem;
+}
+.rgs-taxrow:last-child { border-bottom: none; }
+/* min-width is deliberately small (not the usual ~12rem "don't shrink
+   below this" pattern): at a narrow viewport, every extra pixel forced
+   here pushes state/level/why onto their own wrapped lines and multiplies
+   total page height across dozens of rows — a long proof id already wraps
+   fine on its own (see .rgs-taxproof code's overflow-wrap), so this only
+   needs to be wide enough to keep a short id from looking cramped. */
+.rgs-taxproof { display: flex; flex-direction: column; gap: 0.1rem; min-width: 6rem; max-width: 100%; }
+.rgs-taxproof code { overflow-wrap: anywhere; }
+/* Artifact is often a full filesystem path with no spaces (a proof id can
+   run just as long) — anywhere-wrapping is the only thing that keeps
+   either from pushing the row off a narrow viewport (the fleet mobile
+   gate's "code right edge at 651px" failure). */
+.rgs-taxsub { color: var(--text-2); font-size: 0.75rem; overflow-wrap: anywhere; }
+.rgs-taxstate { font-weight: 600; }
+.rgs-taxstate[data-bucket="attention"] { color: var(--warning); }
+.rgs-taxstate[data-bucket="unreviewed"] { color: var(--warning); }
+.rgs-taxstate[data-bucket="observed"] { color: var(--accent); }
+.rgs-taxstate[data-bucket="accepted"] { color: var(--accent); }
+.rgs-taxstate[data-bucket="restored"] { color: var(--good); }
+.rgs-taxlevel { color: var(--text-2); }
+.rgs-taxwhy { color: var(--text-2); flex: 1 1 12rem; }
+
 @media print {
   .rgs-shell { max-width: none; }
-  .rgs-rowgrid { overflow-x: visible; border: none; }
-  .rgs-row-summary, .rgs-rowgrid-head { min-width: 0; }
-  /* A collapsed <details> is exactly the "hidden on paper" case the calm
-     design otherwise avoids — force every row's detail card open so a
-     printed/exported page still shows everything. */
-  .rgs-row-detail { display: block !important; }
-  .rgs-chevron { display: none; }
 }
 `

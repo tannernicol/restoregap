@@ -1,0 +1,15 @@
+# Files a delegated worker must not change in the same diff as its work.
+# platform-conform --diff-root enforces this (PLATFORM.md §3); the list
+# protects itself, and PLATFORM_SUPERVISOR=1 is the supervisor's deliberate
+# override. Code is graded by tests — only DECLARATIONS and the machinery
+# that decides what "passing" means are listed here.
+
+internal/contextspec/default.go	the zero-config default policy: what RestoreGap protects when nobody configured it
+internal/drill/lint.go	the rules that decide whether a drill is a real drill
+internal/ledger/canonical.go	ledger canonicalisation — changing it changes what verifies
+internal/ledger/verify.go	ledger chain verification
+.goreleaser.yml	release provenance: SBOMs, checksums, reproducible flags
+.gitea/workflows/**	the server-side gate itself
+.publishignore	what never leaves the private tree
+scripts/scrub-check.sh	the pre-publish secret/identity scrub
+.scrub-denylist.example	the scrub denylist template (the real .scrub-denylist is gitignored — see scripts/scrub-check.sh)

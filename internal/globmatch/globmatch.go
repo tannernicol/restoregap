@@ -5,7 +5,8 @@
 // by contextspec guard matching and the rule engine. It supports two modes:
 //
 //   - Match: single-segment glob (`*`, `?`, `[...]`) via path.Match — used for
-//     commands, packages, actors.
+//     packages and actors, where `/` is a meaningful separator (`agent/*`).
+//   - MatchCommand: flat glob for command lines, where `/` is NOT a separator.
 //   - MatchPath: doublestar-style path glob where `**` matches zero or more
 //     whole path segments and each segment supports `*`/`?`/`[...]` via
 //     path.Match — used for filesystem paths.
@@ -30,6 +31,35 @@ func Match(pattern, name string) bool {
 func MatchAny(patterns []string, name string) bool {
 	for _, p := range patterns {
 		if Match(p, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchCommand reports whether a command line matches a shell glob.
+//
+// A command line is NOT a path, and matching it with path.Match was a real
+// bypass: there, `*` never crosses `/`, so the declared guard `*caddy*` matched
+// `caddy reload` but NOT `/usr/bin/caddy reload`. Every command guard could be
+// evaded simply by invoking the binary by absolute path — the form systemd
+// units and PATH-less contexts are obliged to use. Verified against a live
+// policy on 2026-08-26 for *caddy*, *firewall-cmd* and *tailscale*.
+//
+// The separator is neutralised on BOTH sides so path.Match's glob semantics
+// (`*`, `?`, `[...]`, and its invalid-pattern contract) are reused verbatim
+// while its separator rule cannot apply. NUL cannot occur in a command line
+// read from an intent, so it is a safe stand-in.
+func MatchCommand(pattern, command string) bool {
+	const sep = "\x00"
+	return Match(strings.ReplaceAll(pattern, "/", sep), strings.ReplaceAll(command, "/", sep))
+}
+
+// MatchCommandAny reports whether command matches any of the given patterns.
+// An empty pattern list matches nothing, matching MatchAny's contract.
+func MatchCommandAny(patterns []string, command string) bool {
+	for _, p := range patterns {
+		if MatchCommand(p, command) {
 			return true
 		}
 	}

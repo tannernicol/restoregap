@@ -89,6 +89,53 @@ func TestPreflightForcedTTYExplicitFormatWins(t *testing.T) {
 	}
 }
 
+// TestPreflightExplicitFormatMarkdownAlias: --format markdown is the
+// documented spelling and must render exactly like --format md.
+func TestPreflightExplicitFormatMarkdownAlias(t *testing.T) {
+	withForcedTTY(t, true)
+	dir := t.TempDir()
+	intentPath := writeFile(t, dir, "intent.yml", zeroConfigBlockIntent)
+
+	cmd := newPreflightCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--intent", intentPath, "--format", "markdown"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected a block exit for an undeclared ssh-key delete")
+	}
+	if !strings.HasPrefix(out.String(), "# BLOCK\n") {
+		t.Errorf("--format markdown must render markdown even on a forced TTY, got:\n%s", out.String())
+	}
+}
+
+// TestPreflightExplicitFormatAutoOnTTYRendersText: --format auto passed
+// explicitly must behave exactly like the omitted-flag default (auto is the
+// default value, not a separate code path).
+func TestPreflightExplicitFormatAutoOnTTYRendersText(t *testing.T) {
+	withForcedTTY(t, true)
+	dir := t.TempDir()
+	intentPath := writeFile(t, dir, "intent.yml", zeroConfigBlockIntent)
+
+	cmd := newPreflightCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--intent", intentPath, "--format", "auto"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected a block exit for an undeclared ssh-key delete")
+	}
+	got := out.String()
+	if strings.Contains(got, "|") || strings.Contains(got, "#") || strings.Contains(got, "**") {
+		t.Errorf("--format auto on a forced TTY must render plain text, got:\n%s", got)
+	}
+	if !strings.HasPrefix(got, "BLOCK — ") {
+		t.Errorf("expected the dash-joined BLOCK headline, got:\n%s", got)
+	}
+}
+
 // TestPreflightPlanFlagSkipsLedger: an explicit --ledger path must not be
 // created at all when --plan is passed, through the real CLI flag surface
 // (internal/preflight has the Request-level coverage; this is the wiring).

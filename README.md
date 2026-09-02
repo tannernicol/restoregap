@@ -9,17 +9,27 @@
 
 ![restoregap: check finds the stale copy, drill proves the restore, preflight refuses the change until it does](demo/demo.gif)
 
-Your backups exist. Your access is proven. The restore can still be dead — and
-only a drill finds out. Restore Gap finds the copy that quietly went stale,
-restores it for real to prove it, and gates the destructive change (yours or
-your coding agent's) on that proof. One static binary, no account, no
-phone-home. For anyone who runs their own machines and lets scripts or agents
-change them. Not a backup tool, not monitoring, not a compliance dashboard.
+Your nightly backup job says *success*. Restore Gap restores that backup for
+real, in a sandbox, checks the result, and refuses the destructive change —
+yours or your coding agent's — until that proof exists and is fresh. One
+static binary, MIT, no account, no phone-home. Built for people who run their
+own machines and let scripts or agents change them.
 
 ## Quick start
 
 ```console
 $ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.9.2/scripts/install.sh && sh install.sh   # pinned tag; verifies checksums
+
+# Try it on the bundled fixture: a project, a "backup" that quietly went stale, an agent about to delete the db
+$ demo/setup.sh /tmp/rg-demo && cd /tmp/rg-demo
+
+# The proof — a real restore in a sandbox, which diff can't give you:
+$ restoregap drill propose proj/app.db --source backup/app.db > restoregap.local.yml
+$ restoregap preflight --intent rm-app-db.yml   # BLOCK — proof "app-db-recovery" missing        (exit 1)
+$ restoregap drill                              # ✓ app-db-recovery — data-valid (L3): integrity ok; users=95 (>= 90% of live 100)
+$ restoregap preflight --intent rm-app-db.yml   # PASS — and BLOCK again the day that proof expires (exit 0)
+
+# The zero-config front door — what exists in exactly one place (copy/rsync-style backups):
 $ restoregap check proj backup/proj          # zero config, exit 1 on drift — a project and its stale "backup"
 tree: 3 live / 2 recovery — 1 MISSING FROM RECOVERY, 2 STALE IN RECOVERY
   these exist in exactly one place:
@@ -30,35 +40,37 @@ tree: 3 live / 2 recovery — 1 MISSING FROM RECOVERY, 2 STALE IN RECOVERY
 next: turn this into a proof — restoregap drill propose proj
 ```
 
-Then turn the drifting copy into a proof, and gate the change on it:
-
-```console
-$ restoregap drill propose proj/app.db --source backup/app.db > restoregap.local.yml
-$ restoregap preflight --intent rm-app-db.yml   # BLOCK — proof "app-db-recovery" missing        (exit 1)
-$ restoregap drill                              # ✓ app-db-recovery — data-valid (L3): integrity ok; users=95 (>= 90% of live 100)
-$ restoregap preflight --intent rm-app-db.yml   # PASS — and BLOCK again the day that proof expires (exit 0)
-```
+`check` compares directory trees today (and a secret-store shape). If your
+recovery copy is a restic, borg, or ZFS target, it can't see inside it yet —
+say which one you use on [the comparators issue](https://github.com/tannernicol/restoregap/issues/2)
+and it gets built in order of votes.
 
 Every line above is real output from the fixture in `demo/setup.sh`. Full
 transcript, the intent file, and the ledger: **[docs/walkthrough.md](docs/walkthrough.md)**.
+
+## Five words
+
+- **proof** — a recorded, expiring result of a real restore (byte-identical or typed checks) with its RTO/RPO.
+- **drill** — the sandboxed restore that produces a proof; `drill propose` writes one from a live artifact.
+- **guard** — a rule naming what must be proven before a matching change is allowed.
+- **change / intent** — the thing about to happen: an intent file, a diff, or a Terraform plan; agents send it over MCP.
+- **ledger** — the append-only, hash-chained record of every verdict, proof, and override.
 
 ## What it does
 
 | Rung | Command | Claim it lets you make |
 |---|---|---|
 | Drift | `restoregap check <live> <recovery>` | "these entries exist in exactly one place" — zero config, exit 1 on drift, `--exclude` (or `.restoregapignore` in `<live>`) drops known-noisy globs before comparing |
-| Proof | `restoregap drill` (+ `drill propose`, `--lint`, `--calibrate`) | "this restored, byte-identically or by typed checks, inside its RTO/RPO budget" |
+| Proof | `restoregap drill` (+ `drill propose`) | "this restored, byte-identically or by typed checks, inside its RTO/RPO budget" |
 | Gate | `restoregap preflight` (intent / diff / Terraform plan) | "this change is refused until that proof exists and is fresh" |
-| Posture | `restoregap status`, `restoregap saves` | guards, proof freshness, ledger health; provable near-misses |
-| Zero-config safety | built in | SSH keys & recovery bundles blocked even with NO config |
-| Agents | `restoregap mcp serve` | the same gates over MCP (8 tools, including drill_lint) |
-| Evidence | `restoregap evidence ingest` / `evidence export --framework soc2` | the drill record, exported for whoever asks whether you *test* restores |
 
-The evidence packet is a by-product of the gate, not the product: the compliance
-mappings in `docs/COMPLIANCE_MAP.md` are primary-source-verified, `direct` vs
-`supporting` strength is always labeled, and Restore Gap never overclaims a
-control — but the buyer is the engineer who wants a seatbelt, not the auditor
-who wants a report.
+With no config at all, SSH keys and recovery bundles are already guarded.
+Why this is a tool and not a 40-line script: [docs/why-not-a-script.md](docs/why-not-a-script.md).
+Agents get the same gates over MCP: `restoregap mcp serve` — see
+[docs/agent-gate.md](docs/agent-gate.md). Restore Gap is the reason to
+allow a guarded change; your agent's deny rules or sandbox are the general
+net — see the shape table in
+[docs/examples/preflight-hook.sh](docs/examples/preflight-hook.sh).
 
 ## Install
 
@@ -105,8 +117,12 @@ it, say so on [the interest-check issue](https://github.com/tannernicol/restoreg
 and say what "all your machines" means for you (2? 20?). That number decides
 whether it gets built.
 
+Already running it on more than one host? `bundle export` + `bundle merge` gets you
+that fleet view today, free — see [docs/ENTERPRISE.md](docs/ENTERPRISE.md).
+
 ## Docs
 
 [Walkthrough](docs/walkthrough.md) · [Authoring drills](docs/drill-authoring.md) ·
-[Architecture](docs/ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) ·
+[Architecture](docs/ARCHITECTURE.md) · [Evidence & compliance map](docs/COMPLIANCE_MAP.md) ·
+[Contributing](CONTRIBUTING.md) ·
 [Security](SECURITY.md) · [Changelog](CHANGELOG.md) · MIT.

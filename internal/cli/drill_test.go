@@ -290,8 +290,14 @@ func TestPinsOnlyPassLeavesProofByteIdenticallyUntouched(t *testing.T) {
 	}
 }
 
-func TestPinsOnlyFailFlipsProofToDisputed(t *testing.T) {
-	path := writeContext(t, fmt.Sprintf(pinsOnlyYAML, "echo 'source gone' >&2; exit 1"))
+// TestPinsOnlyFailRecordsUnreachableNotDisputed: a pin_check attempts
+// nothing but reaching the pinned source, so when the source path does not
+// exist (the 2026-08-18 NAS-outage shape) the recorded status must be
+// `unreachable` — "could not even try" — never `disputed`, which is reserved
+// for a recovery that ran and did not verify. The command still exits
+// non-zero: the distinction changes the report, never the gate.
+func TestPinsOnlyFailRecordsUnreachableNotDisputed(t *testing.T) {
+	path := writeContext(t, fmt.Sprintf(pinsOnlyYAML, "test -f \"$RG_RECOVERY_SOURCE\""))
 
 	cmd := newDrillCmd()
 	var out bytes.Buffer
@@ -308,17 +314,23 @@ func TestPinsOnlyFailFlipsProofToDisputed(t *testing.T) {
 		t.Fatalf("expected 1 proof, got %d", len(reloaded.Proofs))
 	}
 	p := reloaded.Proofs[0]
-	if p.Status != contextspec.ProofRecordDisputed || p.Verified {
-		t.Errorf("proof should be disputed/unverified after a failed pin, got status=%s verified=%v", p.Status, p.Verified)
+	if p.Status != contextspec.ProofRecordUnreachable || p.Verified {
+		t.Errorf("proof should be unreachable/unverified after a failed pin, got status=%s verified=%v", p.Status, p.Verified)
 	}
 	if p.Measurements != nil {
-		t.Error("a disputed pin-check record must not carry measurements")
+		t.Error("an unreachable pin-check record must not carry measurements")
 	}
 	if p.Signature != nil {
-		t.Error("a disputed pin-check record must not carry a signature")
+		t.Error("an unreachable pin-check record must not carry a signature")
 	}
 	if !strings.Contains(out.String(), "pin FAILED") {
 		t.Errorf("expected a pin-FAILED line, got %q", out.String())
+	}
+	if !strings.Contains(out.String(), "could not reach") {
+		t.Errorf("the failing pin line must say the source could not be reached, got %q", out.String())
+	}
+	if strings.Contains(out.String(), "disputed") {
+		t.Errorf("an unreachable pin failure must never read as disputed, got %q", out.String())
 	}
 }
 
@@ -340,6 +352,105 @@ drills:
 	}
 	if out.String() != "" {
 		t.Errorf("expected no output for an all-skipped run, got %q", out.String())
+	}
+}
+
+// ---- full-drill recording: disputed vs unreachable ------------------------
+//
+// The recording rule under test, end to end through the real command: a
+// recovery that RAN and failed (a declared check, or a declared budget) is
+// `disputed`; a recovery whose SOURCE could not be reached is `unreachable`.
+// All of these exit non-zero — the statuses differ, the gate does not.
+
+// runFullDrill executes `restoregap drill` (full run) on a context built
+// from one drills: entry and returns the recorded proof plus the combined
+// output.
+func runFullDrill(t *testing.T, drillsYAML string) (contextspec.Proof, string, error) {
+	t.Helper()
+	path := writeContext(t, fmt.Sprintf("version: 2\ndrills:\n%s", drillsYAML))
+	cmd := newDrillCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--context", path})
+	err := cmd.Execute()
+	reloaded := loadContext(t, path)
+	if len(reloaded.Proofs) != 1 {
+		t.Fatalf("expected 1 recorded proof, got %d (err=%v, out=%s)", len(reloaded.Proofs), err, out.String())
+	}
+	return reloaded.Proofs[0], out.String(), err
+}
+
+// TestFullDrillFailedCheckRecordsDisputed: the recovery ran, the artifact
+// came back, and a declared check failed — the classic "your copy is bad".
+func TestFullDrillFailedCheckRecordsDisputed(t *testing.T) {
+	dir := t.TempDir()
+	artifact := writeFile(t, dir, "artifact", "content\n")
+	recover := fmt.Sprintf("cat %s > \"$RG_TARGET\"", artifact)
+	p, out, err := runFullDrill(t, fmt.Sprintf(`  - proof: p
+    artifact: %s
+    recover: %s
+    validate:
+      - type: command
+        run: "exit 1"
+`, artifact, recover))
+	if err == nil {
+		t.Fatal("a failed declared check must exit non-zero")
+	}
+	if p.Status != contextspec.ProofRecordDisputed || p.Verified {
+		t.Errorf("a failed check records disputed, got status=%s verified=%v", p.Status, p.Verified)
+	}
+	if !strings.Contains(out, "disputed") {
+		t.Errorf("operator output should name the disputed recording, got %q", out)
+	}
+}
+
+// TestFullDrillMissedBudgetRecordsDisputed: the recovery ran and its checks
+// passed, but a declared RTO budget was blown — measured against real
+// telemetry, so still a verified-failure, still disputed.
+func TestFullDrillMissedBudgetRecordsDisputed(t *testing.T) {
+	dir := t.TempDir()
+	artifact := writeFile(t, dir, "artifact", "content\n")
+	recover := fmt.Sprintf("cat %s > \"$RG_TARGET\"", artifact)
+	p, out, err := runFullDrill(t, fmt.Sprintf(`  - proof: p
+    artifact: %s
+    recover: %s
+    budgets: { rto: 1ns }
+`, artifact, recover))
+	if err == nil {
+		t.Fatal("a missed budget must exit non-zero")
+	}
+	if p.Status != contextspec.ProofRecordDisputed || p.Verified {
+		t.Errorf("a missed budget records disputed, got status=%s verified=%v", p.Status, p.Verified)
+	}
+	if !strings.Contains(out, "disputed") {
+		t.Errorf("operator output should name the disputed recording, got %q", out)
+	}
+}
+
+// TestFullDrillUnreachableSourceRecordsUnreachable: the recover command
+// fails because the source is missing — nothing was attempted that could
+// verify anything. The recorded status and the operator output must both say
+// unreachable, and neither may say disputed.
+func TestFullDrillUnreachableSourceRecordsUnreachable(t *testing.T) {
+	dir := t.TempDir()
+	artifact := writeFile(t, dir, "artifact", "content\n")
+	p, out, err := runFullDrill(t, fmt.Sprintf(`  - proof: p
+    artifact: %s
+    recovery_source: /nonexistent/recovery/source.gpg
+    recover: cat "$RG_RECOVERY_SOURCE" > "$RG_TARGET"
+`, artifact))
+	if err == nil {
+		t.Fatal("an unreachable source must exit non-zero")
+	}
+	if p.Status != contextspec.ProofRecordUnreachable || p.Verified {
+		t.Errorf("a source-unreachable failure records unreachable, got status=%s verified=%v", p.Status, p.Verified)
+	}
+	if !strings.Contains(out, "unreachable") {
+		t.Errorf("operator output should say the source could not be reached, got %q", out)
+	}
+	if strings.Contains(out, "disputed") {
+		t.Errorf("a source-unreachable failure must not read as disputed, got %q", out)
 	}
 }
 
@@ -403,7 +514,7 @@ func TestAppendDrillLedgerEntries(t *testing.T) {
 	drills := []contextspec.Drill{{Proof: "p1", Budgets: contextspec.DrillBudgets{RTO: time.Minute, RPO: time.Hour}}}
 
 	var warn bytes.Buffer
-	appendDrillLedgerEntries(&warn, ledgerPath, "agent/claude", "drill", results, drills)
+	appendDrillLedgerEntries(&warn, ledgerPath, "ctx.yml", "agent/claude", "drill", results, drills)
 	if warn.Len() != 0 {
 		t.Errorf("unexpected warning: %s", warn.String())
 	}
@@ -440,7 +551,7 @@ func TestAppendDrillLedgerEntriesNonFatalOnFailure(t *testing.T) {
 	badPath := filepath.Join(t.TempDir(), "no-such-dir", "ledger.jsonl")
 	results := []drill.Result{{Proof: "p1", Verified: true}}
 	var warn bytes.Buffer
-	appendDrillLedgerEntries(&warn, badPath, "", "drill", results, nil)
+	appendDrillLedgerEntries(&warn, badPath, "", "", "drill", results, nil)
 	if !strings.Contains(warn.String(), "WARNING") || !strings.Contains(warn.String(), "p1") {
 		t.Errorf("expected a loud warning naming the proof, got %q", warn.String())
 	}
@@ -448,7 +559,7 @@ func TestAppendDrillLedgerEntriesNonFatalOnFailure(t *testing.T) {
 
 func TestAppendDrillLedgerEntriesSkippedWhenNoLedgerPath(t *testing.T) {
 	var warn bytes.Buffer
-	appendDrillLedgerEntries(&warn, "", "", "drill", []drill.Result{{Proof: "p1"}}, nil)
+	appendDrillLedgerEntries(&warn, "", "", "", "drill", []drill.Result{{Proof: "p1"}}, nil)
 	if warn.Len() != 0 {
 		t.Errorf("no --ledger flag means no telemetry attempt at all, got %q", warn.String())
 	}
@@ -602,5 +713,71 @@ func TestDrillLintUnknownProofErrors(t *testing.T) {
 	cmd.SetArgs([]string{"--context", path, "--lint", "--proof", "nope"})
 	if err := cmd.Execute(); err == nil {
 		t.Fatal("an unknown --proof value must error")
+	}
+}
+
+// TestRecordDrillProofsPreservesTaxonomyFieldsAndStampsHost (taxonomy spec
+// sections A and F): a re-drill rewrites the drilled proof's own fields but
+// must round-trip everything it does not own — layer:/category:/scope: —
+// and stamp scope.host with the current hostname when the proof declares
+// no host of its own (never overriding one it does declare).
+func TestRecordDrillProofsPreservesTaxonomyFieldsAndStampsHost(t *testing.T) {
+	dir := t.TempDir()
+	artifact := filepath.Join(dir, "artifact")
+	if err := os.WriteFile(artifact, []byte("same\n"), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	recover := fmt.Sprintf("cat %s > \"$RG_TARGET\"", artifact)
+	path := writeContext(t, fmt.Sprintf(`version: 2
+drills:
+  - proof: widget-recovery
+    artifact: %s
+    recover: %s
+proofs:
+  - id: widget-recovery
+    status: observed
+    observed_at: "2026-01-01T00:00:00Z"
+    layer: data-apps
+    category: widgets
+    scope:
+      environment: prod
+      system: money
+`, artifact, recover))
+	ctx := loadContext(t, path)
+
+	results, err := runDrills(&bytes.Buffer{}, ctx.Drills, "", "")
+	if err != nil {
+		t.Fatalf("runDrills: %v", err)
+	}
+	if err := recordDrillProofs(path, results, ctx.Drills, 0, nil, "drill"); err != nil {
+		t.Fatalf("recordDrillProofs: %v", err)
+	}
+
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		t.Skipf("hostname unavailable on this machine, cannot assert the host stamp")
+	}
+
+	reloaded := loadContext(t, path)
+	var drilled *contextspec.Proof
+	for i := range reloaded.Proofs {
+		if reloaded.Proofs[i].ID == "widget-recovery" {
+			drilled = &reloaded.Proofs[i]
+		}
+	}
+	if drilled == nil {
+		t.Fatal("widget-recovery proof missing after drill")
+	}
+	if !drilled.Verified {
+		t.Fatalf("drill did not verify: %+v", drilled)
+	}
+	if drilled.Layer != "data-apps" || drilled.Category != "widgets" {
+		t.Errorf("a re-drill must not drop the proof's declared layer/category, got %q/%q", drilled.Layer, drilled.Category)
+	}
+	if drilled.Scope.Environment != "prod" || drilled.Scope.System != "money" {
+		t.Errorf("a re-drill must not drop the proof's declared scope fields, got %+v", drilled.Scope)
+	}
+	if drilled.Scope.Host != host {
+		t.Errorf("scope.host = %q, want the current hostname %q", drilled.Scope.Host, host)
 	}
 }

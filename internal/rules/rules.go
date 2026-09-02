@@ -98,7 +98,7 @@ func guardMatches(g contextspec.Guard, ci intent.ChangeIntent) (matched bool, re
 			return matchGuardPaths(m.Paths, ci)
 		}},
 		{len(m.Commands) > 0, func() (string, bool) {
-			if ci.Command == "" || !globmatch.MatchAny(m.Commands, ci.Command) {
+			if ci.Command == "" || !globmatch.MatchCommandAny(m.Commands, ci.Command) {
 				return "", false
 			}
 			return ci.Command, true

@@ -32,12 +32,28 @@ type Finding struct {
 
 // Report is the full rendered preflight outcome.
 type Report struct {
-	Schema        int       `json:"schema"`
-	Verdict       string    `json:"verdict"`
+	Schema  int    `json:"schema"`
+	Verdict string `json:"verdict"`
+	// GateState is "ran" for a completed evaluation and "broken" when a
+	// required gate check could not run. It is omitted for reports emitted by
+	// older callers, preserving their JSON shape.
+	GateState     string    `json:"gate_state,omitempty"`
+	BrokenReason  string    `json:"broken_reason,omitempty"`
+	Checks        []Check   `json:"checks,omitempty"`
+	DurationMS    int64     `json:"duration_ms,omitempty"`
 	Findings      []Finding `json:"findings"`
 	EvaluatedAt   time.Time `json:"evaluated_at"`
 	Actor         string    `json:"actor"`
 	ContextWindow string    `json:"context_window,omitempty"`
+}
+
+// Check is one preflight execution stage rendered for a human or a machine.
+// It mirrors ledger.DecisionCheckRecord without importing ledger into the
+// presentation package.
+type Check struct {
+	ID         string `json:"id"`
+	Outcome    string `json:"outcome"`
+	DurationMS int64  `json:"duration_ms"`
 }
 
 // FromFindings builds a Report from decided findings plus run metadata.

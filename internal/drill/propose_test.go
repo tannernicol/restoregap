@@ -463,10 +463,12 @@ func gitCommit(t *testing.T, dir, name, content string) {
 
 // gitCmd runs git hermetically: the developer's global/system git config
 // (core.hooksPath with a commit-msg policy hook, signing, templates) must not
-// reach a test fixture.
+// reach a test fixture, and GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE — which
+// beat `-C` — must not leak in from a pre-push hook's own git invocation
+// (scrubbedGitEnv, checks_test.go).
 func gitCmd(args ...string) *exec.Cmd {
 	cmd := exec.Command("git", args...)
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	cmd.Env = scrubbedGitEnv("GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 	return cmd
 }
 

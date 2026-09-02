@@ -89,6 +89,19 @@ type Guard struct {
 	// artifacts you cannot afford to lose, only the second one is worth
 	// blocking on.
 	RequireVerified bool
+	// Layer is this guard's recovery-domain classification (see the Layer*
+	// constants) — empty when never classified. A proof this guard requires
+	// inherits Layer as its own effective layer when the proof declares
+	// none itself (EffectiveProofLayer).
+	Layer string
+	// Category is a free-form subgroup within Layer (e.g. "ssh-keys" within
+	// identity-secrets). Optional; never validated against a fixed
+	// vocabulary the way Layer is.
+	Category string
+	// Scope carries this guard's organizational axes (environment/system/
+	// host/owner/tags), overriding the declaring context file's Scope
+	// default field by field.
+	Scope Scope
 }
 
 // Fact is a reviewed, provenanced statement of ground truth a guard may
@@ -113,6 +126,14 @@ const (
 	ProofRecordValidated ProofRecordStatus = "validated"
 	ProofRecordStale     ProofRecordStatus = "stale"
 	ProofRecordDisputed  ProofRecordStatus = "disputed"
+	// ProofRecordUnreachable records that the recovery SOURCE could not be
+	// reached when the drill or pin_check ran (missing mount, connection
+	// refused, permission denied on the source, timeout) — so nothing was
+	// proven either way. It is deliberately NOT "disputed": disputed means a
+	// recovery was performed and its verification genuinely failed. Both
+	// statuses fail closed for gating identically; only the report differs
+	// ("could not try" must never read as "your copy is corrupt").
+	ProofRecordUnreachable ProofRecordStatus = "unreachable"
 )
 
 // Signature is an optional Ed25519 signature over a proof record, verified
@@ -120,6 +141,26 @@ const (
 type Signature struct {
 	PublicKeyHex string
 	SignatureHex string
+}
+
+// Acceptance is an owner's reasoned decision to stop carrying a proof as a
+// gap: this one will not be drilled (or re-drilled) within the review
+// window, and that is accepted WITH a reason rather than left as silence.
+// It is recorded on the proof itself so it travels with the context file
+// the proof lives in, and it always carries a review date — an acceptance
+// that never comes up for review is a gap that learned to hide.
+type Acceptance struct {
+	By       string    // who accepted, e.g. owner/tanner
+	At       time.Time // when the acceptance was recorded
+	Reason   string    // why this proof will not be drilled — required, never blank
+	ReviewBy time.Time // when the acceptance lapses and the proof counts as unreviewed again
+}
+
+// Active reports whether the acceptance still applies at now. A lapsed
+// acceptance is not an error state to hide: the proof simply returns to the
+// unreviewed bucket, with the lapse visible in the inventory.
+func (a *Acceptance) Active(now time.Time) bool {
+	return a != nil && now.Before(a.ReviewBy)
 }
 
 // Proof is a declared piece of evidence a guard's Requires.Proofs may name.
@@ -141,6 +182,39 @@ type Proof struct {
 	// Measurements is set only for proofs a drill produced with typed
 	// validate checks; nil for byte-identical-only and non-drill proofs.
 	Measurements *Measurements
+	// Accepted records an owner's reasoned acceptance that this proof will
+	// not be drilled within its review window — the deliberate alternative
+	// to leaving an undrillable proof as a permanent gap. Nil when no
+	// acceptance is recorded.
+	Accepted *Acceptance
+	// Layer is this proof's own recovery-domain classification, if declared
+	// directly on the proof. Empty means "not set here" — EffectiveProofLayer
+	// then falls back to the guard(s) requiring this proof, then "unfiled".
+	Layer string
+	// Category is a free-form subgroup within Layer, own-declared only (no
+	// fixed vocabulary).
+	Category string
+	// Scope carries this proof's own organizational axes, overriding the
+	// declaring context file's Scope default field by field.
+	Scope Scope
+	// Host is the durable machine identity that recorded this proof
+	// (internal/hostid): name plus a stable machine-id-derived id. Nil on
+	// proofs written before host stamping, or hand-authored ones.
+	Host *ProofHost
+	// Epoch is the epoch id (machine id + root filesystem UUID) the proof
+	// was recorded under. Empty means unstamped; status treats a non-empty
+	// epoch that differs from the current machine's as "from a previous
+	// epoch — re-drill".
+	Epoch string
+}
+
+// ProofHost is the host block a proof record carries: {name, id}. A separate
+// type from hostid.Identity so contextspec keeps its zero-dependency stance —
+// the shape is the portability contract (docs/SCHEMA.md), the derivation
+// lives in internal/hostid.
+type ProofHost struct {
+	Name string `json:"name"`
+	ID   string `json:"id"`
 }
 
 // DrillFreshness names the sqlite column a drill reads to measure RPO: how
@@ -255,6 +329,22 @@ type Measurements struct {
 	Checks     []CheckOutcome
 }
 
+// Scope carries the organizational axes of a recovery estate — "N users, X
+// systems, M environments" — orthogonal to Layer (the recovery-domain axis).
+// Every field is a free-form string except Tags. A context file's own Scope
+// sets the default for every guard/proof it declares; a guard or proof may
+// override any individual field (EffectiveScope merges field by field, never
+// wholesale). Host defaults to the current hostname when a proof is written
+// by drill/attest and declares no host of its own — the seam a later
+// machine-id stamp (bead tanner-jyzp) will harden.
+type Scope struct {
+	Environment string   `json:"environment"`
+	System      string   `json:"system"`
+	Host        string   `json:"host"`
+	Owner       string   `json:"owner"`
+	Tags        []string `json:"tags,omitempty"`
+}
+
 // Context is a fully parsed and validated restoregap context document.
 type Context struct {
 	Version int
@@ -265,6 +355,9 @@ type Context struct {
 	// Origin describes where this context came from, for evidence
 	// rendering: "built-in default local lifeline policy" or a file path.
 	Origin string
+	// Scope is this file's default organizational scope, applied to every
+	// guard/proof it declares that does not override a given field.
+	Scope Scope
 }
 
 // GuardByID returns a guard by id, if declared.

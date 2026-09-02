@@ -4,13 +4,15 @@
 // Package mcpserver exposes restoregap to agents over MCP (newline-delimited
 // JSON-RPC 2.0 on stdio). The seven capabilities ported from the Python
 // server — preflight_intent, preflight_diff, acknowledge_risk,
-// explain_decision, required_proof, ledger_query, story — plus one Go-only
-// addition, drill_lint. Tools write only to the ledger path the caller
-// supplies — never to system state, and NEVER by running a declared drill:
-// a drill executes a user-declared shell command (recover, validate checks,
-// pin_check), so letting an MCP tool trigger one would make this an exec
-// service reachable by anything that can speak the protocol. drill_lint is
-// static and read-only on purpose; `restoregap drill` stays CLI-only.
+// explain_decision, required_proof, ledger_query, story — plus three
+// Go-only additions, drill_lint, next_steps, and discover. Tools write only
+// to the ledger path the caller supplies — never to system state, and NEVER
+// by running a declared drill: a drill executes a user-declared shell
+// command (recover, validate checks, pin_check), so letting an MCP tool
+// trigger one would make this an exec service reachable by anything that
+// can speak the protocol. drill_lint, next_steps, and discover are all
+// static/read-only on purpose; `restoregap drill`, `restoregap accept`, and
+// discover's own on-disk snapshot writes all stay CLI-only.
 package mcpserver
 
 import (
@@ -21,12 +23,16 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/tannernicol/restoregap/internal/contextspec"
+	"github.com/tannernicol/restoregap/internal/discover"
 	"github.com/tannernicol/restoregap/internal/discovery"
 	"github.com/tannernicol/restoregap/internal/drill"
 	"github.com/tannernicol/restoregap/internal/ledger"
+	"github.com/tannernicol/restoregap/internal/policy"
 	"github.com/tannernicol/restoregap/internal/preflight"
+	"github.com/tannernicol/restoregap/internal/status"
 )
 
 type rpcRequest struct {
@@ -64,6 +70,10 @@ func schema(required []string, props map[string]any) map[string]any {
 
 func str(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 
+func boolean(desc string) map[string]any {
+	return map[string]any{"type": "boolean", "description": desc}
+}
+
 func toolDefs() []toolDef {
 	common := map[string]any{
 		"context_path": str("path to restoregap.yml / restoregap.local.yml (omit to discover $RESTOREGAP_CONTEXT / " +
@@ -85,8 +95,9 @@ func toolDefs() []toolDef {
 		{"acknowledge_risk", "Record an owner-approved override for a blocked decision in the ledger.", schema([]string{"ledger_path", "decision_id", "acknowledgement", "owner"}, map[string]any{
 			"ledger_path": str("ledger to append to"), "decision_id": str("finding/decision id being overridden"),
 			"acknowledgement": str("owner statement"), "owner": str("who approves"),
-			"reason": str("test-environment | false-positive | disposable-test-data | emergency | other"),
-			"actor":  str("recording actor"),
+			"reason":     str("test-environment | false-positive | disposable-test-data | emergency | other"),
+			"actor":      str("recording actor"),
+			"expires_in": str("how long the override stays active, e.g. 720h (default 30d, maximum 90d — an override is an exception with a deadline, never an amnesty)"),
 		})},
 		{"explain_decision", "Explain a recorded decision from the ledger.", schema([]string{"ledger_path"}, map[string]any{
 			"ledger_path": str("ledger to read"), "decision_id": str("finding/decision id"), "entry_id": str("ledger entry id")})},
@@ -108,6 +119,33 @@ func toolDefs() []toolDef {
 			schema([]string{"context_path"}, map[string]any{
 				"context_path": str("v2 context file with a drills: block"),
 			})},
+		// next_steps is read-only: it reports the same not-green proofs
+		// `restoregap next` does, each with its exact remediation command —
+		// it never runs a drill or writes an acceptance itself.
+		{"next_steps", "The path to green: every declared proof that is not green, worst first, each with its " +
+			"effective layer/category, state, why, the exact command that moves it, its source context file, " +
+			"and its artifact/evidence path. Same data as `restoregap next --format json`.",
+			schema([]string{"context_path"}, map[string]any{
+				"context_path": str("path to restoregap.yml / restoregap.local.yml (omit to discover, same as the other tools)"),
+				"layer":        str("only this layer's gaps, e.g. identity-secrets (omit for every layer)"),
+			})},
+		// discover is read-only in the strongest sense: unlike `restoregap
+		// discover` on the CLI, this tool NEVER writes or rotates the
+		// on-disk snapshot — it only reads whatever the CLI (run by a human
+		// or a timer) already saved, to compute the new-since-last-scan
+		// diff. It cannot mark anything covered; coverage is recomputed
+		// fresh from context_path's declared drills/guards on every call.
+		{"discover", "Enumerate recovery candidates on this host (containers, databases, unbacked repos, " +
+			"service state, plus the machine-id/package-manifest/etc-config floor) and diff them against " +
+			"declared drills/guards — same data as `restoregap discover --format json`. Never writes the " +
+			"on-disk snapshot itself (the CLI does); only reads it to report what changed since the last " +
+			"real scan.",
+			schema(nil, map[string]any{
+				"context_path": str("path to restoregap.yml / restoregap.local.yml (omit to discover, same as the other tools)"),
+				"all":          boolean("include covered candidates too (default: only the gaps)"),
+				"trend":        boolean("also include the last scans' coverage-trend rows, oldest first"),
+				"prompt":       boolean("return the ready-to-hand agent brief (same text as `restoregap discover --prompt`) instead of JSON"),
+			})},
 	}
 }
 
@@ -127,6 +165,11 @@ type toolArgs struct {
 	Owner           string `json:"owner"`
 	Reason          string `json:"reason"`
 	Resource        string `json:"resource"`
+	ExpiresIn       string `json:"expires_in"`
+	Layer           string `json:"layer"`
+	All             bool   `json:"all"`
+	Trend           bool   `json:"trend"`
+	Prompt          bool   `json:"prompt"`
 }
 
 // Serve runs the stdio server until EOF.
@@ -197,16 +240,7 @@ func callTool(ctx context.Context, name string, a toolArgs) (string, error) {
 	case "preflight_intent", "preflight_diff":
 		return preflightTool(ctx, name, a)
 	case "acknowledge_risk":
-		if a.LedgerPath == "" || a.DecisionID == "" || a.Acknowledgement == "" || a.Owner == "" {
-			return "", fmt.Errorf("acknowledge_risk requires ledger_path, decision_id, acknowledgement, owner")
-		}
-		entry, err := ledger.AppendNow(a.LedgerPath, ledger.EntryOverride, a.Actor, ledger.Payload{Override: &ledger.OverridePayload{
-			FindingID: a.DecisionID, ApprovedBy: a.Owner, Reason: nonEmpty(a.Reason, "other"), Acknowledgement: a.Acknowledgement,
-		}})
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("override recorded: entry %s for decision %s (owner %s)", entry.ID, a.DecisionID, a.Owner), nil
+		return acknowledgeRiskTool(a)
 	case "explain_decision", "required_proof", "ledger_query", "story":
 		if a.LedgerPath == "" {
 			return "", fmt.Errorf("%s requires ledger_path", name)
@@ -218,8 +252,120 @@ func callTool(ctx context.Context, name string, a toolArgs) (string, error) {
 		return renderLedgerTool(name, entries, a)
 	case "drill_lint":
 		return drillLintTool(a)
+	case "next_steps":
+		return nextStepsTool(a)
+	case "discover":
+		return discoverTool(a)
 	}
 	return "", fmt.Errorf("unknown tool %q", name)
+}
+
+// nextStepsTool is callTool's next_steps case: the same not-green-proof
+// data `restoregap next --format json` prints, read-only — it gathers
+// status and reports; it never drills or writes an acceptance.
+func nextStepsTool(a toolArgs) (string, error) {
+	s, err := status.Gather(status.Request{ContextPaths: contextPathsFor(a.ContextPath)})
+	if err != nil {
+		return "", err
+	}
+	steps := s.NextSteps()
+	if a.Layer != "" {
+		steps = status.FilterNextSteps(steps, status.NewTreeFilter([]string{a.Layer}, nil, nil, nil, nil, nil))
+	}
+	if steps == nil {
+		steps = []status.NextStep{}
+	}
+	encoded, err := json.MarshalIndent(steps, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+// discoverTool is callTool's discover case: runs discover.Collect with
+// NoSave always true (this tool must never write to system state — see the
+// package doc comment at the top of this file) and returns the resulting
+// Report as JSON, filtered to only-uncovered unless a.All is set. Coverage
+// comes straight from context_path's declared drills/guards via
+// discover.Collect; this function has no way to override it.
+func discoverTool(a toolArgs) (string, error) {
+	ctx, err := loadDiscoverContext(contextPathsFor(a.ContextPath))
+	if err != nil {
+		return "", err
+	}
+	report, err := discover.Collect(discover.Options{Context: ctx, NoSave: true})
+	if err != nil {
+		return "", err
+	}
+	if a.Prompt {
+		return discover.RenderPrompt(report, a.All, "all"), nil
+	}
+	resp := *report
+	if !a.All {
+		resp.Candidates = uncoveredOnly(report.Candidates)
+	}
+	result := struct {
+		discover.Report
+		Trend []discover.HistoryRow `json:"trend,omitempty"`
+	}{Report: resp}
+	if a.Trend {
+		result.Trend = recentTrend()
+	}
+	encoded, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+// uncoveredOnly filters candidates to the ones not yet covered AND not
+// suppressed as noise — the gaps an agent asking "what am I missing"
+// actually needs. A suppressed candidate (a browser profile cache, an
+// archived project's leftover database) is exactly the noise that makes a
+// gap list get ignored; all=true (discoverTool) bypasses this filter
+// entirely, same as the CLI's --all.
+func uncoveredOnly(candidates []discover.Candidate) []discover.Candidate {
+	out := make([]discover.Candidate, 0, len(candidates))
+	for _, c := range candidates {
+		if !c.Covered && !c.Suppressed {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// recentTrend reads the last discover.TrendDisplayLimit rows of scan
+// history, or nil when there is no state dir or no history yet — never an
+// error, since trend is an optional enrichment of a successful discover
+// call.
+func recentTrend() []discover.HistoryRow {
+	stateDir, err := discover.DefaultStateDir()
+	if err != nil {
+		return nil
+	}
+	rows, err := discover.ReadHistory(stateDir)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	if len(rows) > discover.TrendDisplayLimit {
+		rows = rows[len(rows)-discover.TrendDisplayLimit:]
+	}
+	return rows
+}
+
+// loadDiscoverContext loads and merges every declared context path via
+// policy.Merge (same semantics as status.Gather's own loadMerged and
+// internal/cli's discover command), falling back to the built-in
+// zero-config default when no context is discoverable.
+func loadDiscoverContext(paths []string) (contextspec.Context, error) {
+	if len(paths) == 0 {
+		return contextspec.Default(), nil
+	}
+	ctx, _, err := policy.Merge(paths)
+	if err != nil {
+		return contextspec.Context{}, fmt.Errorf("discover: %w", err)
+	}
+	return ctx, nil
 }
 
 // preflightTool is callTool's preflight_intent/preflight_diff case, split
@@ -362,8 +508,17 @@ func explainDecision(b *strings.Builder, rec ledger.FindingRecord, e ledger.Entr
 }
 
 func requiredProof(b *strings.Builder, rec ledger.FindingRecord) {
-	fmt.Fprintf(b, "decision %s (guard %s): proof status %s — satisfy the guard's declared proofs/facts in the context file, then re-run preflight; or record an owner override via acknowledge_risk\n",
-		rec.FindingID, rec.GuardID, rec.ProofStatus)
+	// An agent asking "what would make this pass" must get the remedy that
+	// matches WHY it blocked: an unreachable proof needs the source back and
+	// a drill re-run (nothing was proven — no data loss implied), while any
+	// other status needs the evidence itself satisfied.
+	remedy := "satisfy the guard's declared proofs/facts in the context file, then re-run preflight; or record an owner override via acknowledge_risk"
+	if rec.ProofStatus == "unreachable" {
+		remedy = "the recovery source was not reachable when the drill last ran, so nothing was proven (no data loss is implied); " +
+			"re-run the drill once the source is reachable, then re-run preflight; or record an owner override via acknowledge_risk"
+	}
+	fmt.Fprintf(b, "decision %s (guard %s): proof status %s — %s\n",
+		rec.FindingID, rec.GuardID, rec.ProofStatus, remedy)
 }
 
 func ledgerQuery(b *strings.Builder, e ledger.Entry, rec ledger.FindingRecord) {
@@ -400,4 +555,37 @@ func nonEmpty(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// acknowledgeRiskTool records an owner-approved override. Split out of
+// callTool so the deadline rule (NewOverridePayload) reads as its own step
+// rather than one branch of a growing switch.
+func acknowledgeRiskTool(a toolArgs) (string, error) {
+	if a.LedgerPath == "" || a.DecisionID == "" || a.Acknowledgement == "" || a.Owner == "" {
+		return "", fmt.Errorf("acknowledge_risk requires ledger_path, decision_id, acknowledgement, owner")
+	}
+	// Every new override goes through NewOverridePayload so the deadline
+	// rule is enforced at the WRITE path, not only in the reader: this is
+	// the only place overrides are created, and building the payload here
+	// by hand is exactly how "dated override" would have degraded back
+	// into a permanent amnesty.
+	var expiresIn time.Duration
+	if a.ExpiresIn != "" {
+		d, perr := time.ParseDuration(a.ExpiresIn)
+		if perr != nil {
+			return "", fmt.Errorf("acknowledge_risk: expires_in must be a duration like 720h: %w", perr)
+		}
+		expiresIn = d
+	}
+	payload, err := ledger.NewOverridePayload(a.DecisionID, a.Owner, nonEmpty(a.Reason, "other"), expiresIn, time.Now().UTC())
+	if err != nil {
+		return "", fmt.Errorf("acknowledge_risk: %w", err)
+	}
+	payload.Acknowledgement = a.Acknowledgement
+	entry, err := ledger.AppendNow(a.LedgerPath, ledger.EntryOverride, a.Actor, ledger.Payload{Override: payload})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("override recorded: entry %s for decision %s (owner %s), expires %s",
+		entry.ID, a.DecisionID, a.Owner, payload.ExpiresAt.Format(time.RFC3339)), nil
 }

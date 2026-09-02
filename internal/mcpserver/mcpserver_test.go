@@ -12,7 +12,28 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/tannernicol/restoregap/internal/ledger"
 )
+
+// TestMain gives every test in this package an isolated XDG_CONFIG_HOME for
+// the whole run. Context discovery reads $XDG_CONFIG_HOME/restoregap/*.yml
+// as its final tier, so the "nothing discoverable" tests below would load a
+// real machine's context files (this homelab's ~/.config/restoregap holds
+// fifteen of them) without it. RESTOREGAP_CONTEXT is cleared so no test
+// result depends on the outer shell's environment.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "restoregap-mcp-test-config-*")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("XDG_CONFIG_HOME", dir)
+	_ = os.Unsetenv("RESTOREGAP_CONTEXT")
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 func writeContext(t *testing.T, yaml string) string {
 	t.Helper()
@@ -251,5 +272,67 @@ func TestServeDrillLintOverJSONRPC(t *testing.T) {
 	text, _ := block["text"].(string)
 	if !strings.Contains(text, "no problems found") {
 		t.Errorf("unexpected text: %q", text)
+	}
+}
+
+// TestAcknowledgeRiskAlwaysDatesTheOverride pins the rule at the WRITE path:
+// the only place overrides are created must produce a dated one (default 30d,
+// max 90d, reason required), because a permanent override is the amnesty the
+// deadline exists to prevent.
+func TestAcknowledgeRiskAlwaysDatesTheOverride(t *testing.T) {
+	dir := t.TempDir()
+	lp := filepath.Join(dir, "ledger.jsonl")
+	out, err := callTool(context.Background(), "acknowledge_risk", toolArgs{
+		LedgerPath: lp, DecisionID: "f1", Acknowledgement: "I accept", Owner: "tanner",
+	})
+	if err != nil {
+		t.Fatalf("acknowledge_risk: %v", err)
+	}
+	if !strings.Contains(out, "expires ") {
+		t.Fatalf("override must report its deadline, got %q", out)
+	}
+	entries, err := ledger.ReadAll(lp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := entries[len(entries)-1]
+	if last.Payload.Override == nil || last.Payload.Override.ExpiresAt == nil {
+		t.Fatal("a newly recorded override must carry expires_at")
+	}
+	if got := time.Until(*last.Payload.Override.ExpiresAt); got > ledger.DefaultOverrideExpiry+time.Minute {
+		t.Errorf("default expiry = %s, want <= %s", got, ledger.DefaultOverrideExpiry)
+	}
+	// Beyond the maximum is refused, not silently clamped.
+	if _, err := callTool(context.Background(), "acknowledge_risk", toolArgs{
+		LedgerPath: lp, DecisionID: "f2", Acknowledgement: "a", Owner: "tanner", ExpiresIn: "5000h",
+	}); err == nil {
+		t.Error("expires_in beyond the maximum must be refused")
+	}
+}
+
+// TestRequiredProofUnreachableCarriesDistinctRemedy: an agent asking why a
+// decision blocked gets the remedy that matches the reason. For an
+// unreachable proof that is "bring the source back and re-run the drill
+// (nothing was proven, no data loss implied)" — never the generic
+// satisfy-the-evidence text, and never a hint that the copy is corrupt.
+func TestRequiredProofUnreachableCarriesDistinctRemedy(t *testing.T) {
+	var unreach, generic strings.Builder
+	requiredProof(&unreach, ledger.FindingRecord{FindingID: "f1", GuardID: "g", ProofStatus: "unreachable"})
+	requiredProof(&generic, ledger.FindingRecord{FindingID: "f1", GuardID: "g", ProofStatus: "contradicted"})
+
+	if !strings.Contains(unreach.String(), "re-run the drill once the source is reachable") {
+		t.Errorf("unreachable remedy should say to re-run once reachable, got %q", unreach.String())
+	}
+	if !strings.Contains(unreach.String(), "no data loss is implied") {
+		t.Errorf("unreachable remedy must say no data loss is implied, got %q", unreach.String())
+	}
+	if strings.Contains(unreach.String(), "satisfy the guard's declared proofs/facts") {
+		t.Errorf("unreachable remedy must not be the generic satisfy-evidence text, got %q", unreach.String())
+	}
+	if !strings.Contains(generic.String(), "satisfy the guard's declared proofs/facts") {
+		t.Errorf("non-unreachable statuses keep the generic remedy, got %q", generic.String())
+	}
+	if unreach.String() == generic.String() {
+		t.Error("unreachable and contradicted must render different remedies")
 	}
 }

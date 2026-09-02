@@ -18,7 +18,7 @@ import (
 // required proof/fact via contextspec, derives a RiskClass from the guard's
 // kind, and calls engine.Decide for the final verdict.
 func decide(m MatchResult, ctx contextspec.Context, now time.Time) engine.Finding {
-	proofStatus, risk, detail := checkRequirements(m, ctx, now)
+	proofStatus, risk, detail, unreachable := checkRequirements(m, ctx, now)
 	enforcement := mapEnforcement(m.Enforcement)
 	verdict := engine.Decide(risk, proofStatus, enforcement)
 
@@ -33,7 +33,7 @@ func decide(m MatchResult, ctx contextspec.Context, now time.Time) engine.Findin
 		Verdict:          verdict,
 		Title:            title(m, verdict),
 		Proof:            detail,
-		RequiredNextStep: requiredNextStep(m, verdict, ctx),
+		RequiredNextStep: requiredNextStep(m, verdict, ctx, unreachable),
 	}
 }
 
@@ -41,22 +41,30 @@ func decide(m MatchResult, ctx contextspec.Context, now time.Time) engine.Findin
 // declared proofs/facts and derives the risk class implied by its kind. A
 // lifeline guard with nothing to prove it safe (no requires declared, as in
 // contextspec.Default()) is fail-closed by design: docs/ARCHITECTURE.md
-// §Compatibility stance, point 2.
-func checkRequirements(m MatchResult, ctx contextspec.Context, now time.Time) (engine.ProofStatus, engine.RiskClass, string) {
+// §Compatibility stance, point 2. The final return value lists the required
+// proof ids that came back unreachable, so requiredNextStep can say "re-run
+// the drill once the source is reachable" instead of the generic refresh
+// text — a source that was merely asleep needs different advice than a copy
+// that failed verification.
+func checkRequirements(m MatchResult, ctx contextspec.Context, now time.Time) (engine.ProofStatus, engine.RiskClass, string, []string) {
 	if m.Requires.Empty() {
 		if m.Kind == contextspec.GuardKindLifeline {
 			return engine.ProofMissing, engine.RiskCannotProveSafe,
-				fmt.Sprintf("guard %q matched a declared lifeline resource with no proof vocabulary configured for it", m.GuardID)
+				fmt.Sprintf("guard %q matched a declared lifeline resource with no proof vocabulary configured for it", m.GuardID), nil
 		}
-		return engine.ProofNotRequired, engine.RiskNone, fmt.Sprintf("guard %q is informational; no proof required", m.GuardID)
+		return engine.ProofNotRequired, engine.RiskNone, fmt.Sprintf("guard %q is informational; no proof required", m.GuardID), nil
 	}
 
 	worst := contextspec.StatePresent
 	var details []string
+	var unreachable []string
 	for _, id := range m.Requires.Proofs {
 		res := ctx.CheckProof(id, m.MaxProofAgeHours, m.RequireVerified, now)
 		details = append(details, res.Detail)
 		worst = worstState(worst, res.State)
+		if res.State == contextspec.StateUnreachable {
+			unreachable = append(unreachable, id)
+		}
 	}
 	for _, id := range m.Requires.Facts {
 		res := ctx.CheckFact(id, now)
@@ -66,19 +74,21 @@ func checkRequirements(m MatchResult, ctx contextspec.Context, now time.Time) (e
 
 	proofStatus := mapProofState(worst)
 	if worst == contextspec.StatePresent {
-		return proofStatus, engine.RiskNone, strings.Join(details, "; ")
+		return proofStatus, engine.RiskNone, strings.Join(details, "; "), unreachable
 	}
 	if m.Kind == contextspec.GuardKindLifeline {
-		return proofStatus, engine.RiskDataLossUnrecoverable, strings.Join(details, "; ")
+		return proofStatus, engine.RiskDataLossUnrecoverable, strings.Join(details, "; "), unreachable
 	}
-	return proofStatus, engine.RiskRecoveryProofGap, strings.Join(details, "; ")
+	return proofStatus, engine.RiskRecoveryProofGap, strings.Join(details, "; "), unreachable
 }
 
 // worstState returns the more severe of two proof states, in the priority
-// order contradicted > missing > stale > present.
+// order contradicted/unreachable (same tier — both prove nothing and both
+// block) > missing > stale > present.
 func worstState(a, b contextspec.ProofState) contextspec.ProofState {
 	rank := map[contextspec.ProofState]int{
 		contextspec.StateContradicted: 3,
+		contextspec.StateUnreachable:  3,
 		contextspec.StateMissing:      2,
 		contextspec.StateStale:        1,
 		contextspec.StatePresent:      0,
@@ -97,6 +107,8 @@ func mapProofState(s contextspec.ProofState) engine.ProofStatus {
 		return engine.ProofStale
 	case contextspec.StateContradicted:
 		return engine.ProofContradicted
+	case contextspec.StateUnreachable:
+		return engine.ProofUnreachable
 	default:
 		return engine.ProofMissing
 	}
@@ -120,7 +132,7 @@ func title(m MatchResult, verdict engine.Verdict) string {
 	}
 }
 
-func requiredNextStep(m MatchResult, verdict engine.Verdict, ctx contextspec.Context) string {
+func requiredNextStep(m MatchResult, verdict engine.Verdict, ctx contextspec.Context, unreachable []string) string {
 	if verdict == engine.VerdictPass {
 		return "No action required; proof is current."
 	}
@@ -162,6 +174,16 @@ func requiredNextStep(m MatchResult, verdict engine.Verdict, ctx contextspec.Con
 	var need []string
 	for _, id := range m.Requires.Proofs {
 		need = append(need, fmt.Sprintf("proof %q", id))
+	}
+	// An unreachable proof is not missing evidence — the drill could not even
+	// try, because its recovery source (NAS, remote, object store) was not
+	// reachable when it ran. The generic "refresh or supply" advice would send
+	// someone hunting for corruption that was never observed; the honest remedy
+	// is to re-run the drill once the source answers. No data loss implied.
+	for _, id := range unreachable {
+		need = append(need, fmt.Sprintf(
+			"proof %q (unreachable — the recovery source was not reachable when the drill last ran, so nothing was proven; "+
+				"this is not evidence of data loss; re-run the drill once the source is reachable)", id))
 	}
 	for _, id := range m.Requires.Facts {
 		need = append(need, fmt.Sprintf("fact %q", id))

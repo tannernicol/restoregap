@@ -22,6 +22,9 @@ const (
 	EntryCheckpoint      EntryType = "checkpoint"
 	EntryDrill           EntryType = "drill"
 	EntryChainAnchor     EntryType = "chain_anchor"
+	EntryAccept          EntryType = "accept"
+	EntryAcceptClear     EntryType = "accept_clear"
+	EntryEpoch           EntryType = "epoch"
 )
 
 // FindingRecord is the ledger's durable summary of one evaluated finding —
@@ -36,12 +39,34 @@ type FindingRecord struct {
 	ProofStatus string `json:"proof_status"`
 }
 
+// DecisionCheckRecord records one ordered stage of a preflight evaluation.
+// Outcome is deliberately a small, presentation-safe vocabulary: pass, fail,
+// skip, or broken. DurationMS is an integer so the ledger remains float-free.
+//
+// These are gate-execution checks, not recovery drill validation checks. The
+// latter live in DrillCheckRecord because a drill's check vocabulary and
+// lifetime are independent from an individual preflight decision.
+type DecisionCheckRecord struct {
+	ID         string `json:"id"`
+	Outcome    string `json:"outcome"`
+	DurationMS int64  `json:"duration_ms"`
+}
+
 // DecisionPayload records the outcome of one preflight evaluation.
 type DecisionPayload struct {
 	Verdict       string          `json:"verdict"`
 	Findings      []FindingRecord `json:"findings"`
 	Actor         string          `json:"actor"`
 	ContextWindow string          `json:"context_window,omitempty"`
+	// GateState distinguishes a policy decision that ran ("ran") from a
+	// gate that could not be trusted to run ("broken"). It is optional so
+	// schema-v2 entries written before this field existed retain their exact
+	// canonical form and continue to verify.
+	GateState    string                `json:"gate_state,omitempty"`
+	BrokenReason string                `json:"broken_reason,omitempty"`
+	Checks       []DecisionCheckRecord `json:"checks,omitempty"`
+	DurationMS   int64                 `json:"duration_ms,omitempty"`
+	ToolVersion  string                `json:"tool_version,omitempty"`
 }
 
 // OverridePayload records an owner override of a specific finding.
@@ -126,6 +151,29 @@ type ChainAnchorPayload struct {
 	ApprovedBy string `json:"approved_by"`
 }
 
+// AcceptPayload records an owner accepting, with a reason and a review
+// date, that a proof will not be drilled within that window — the durable
+// counterpart of the accepted: block `restoregap accept` writes onto the
+// proof in its context file. The ledger entry survives later context edits
+// even when the proof (or its acceptance) is removed.
+type AcceptPayload struct {
+	ProofID string `json:"proof_id"`
+	By      string `json:"by"`
+	Reason  string `json:"reason"`
+	// ReviewAt is when the acceptance lapses (accepted.review_by), nil never
+	// in practice — `restoregap accept` refuses to record one without it.
+	ReviewAt *time.Time `json:"review_at,omitempty"`
+}
+
+// AcceptClearPayload records an owner removing a proof's acceptance — the
+// durable counterpart of `restoregap accept --clear`. It carries no reason
+// field: clearing returns the proof to the ordinary unreviewed bucket, it
+// does not assert anything that needs justifying.
+type AcceptClearPayload struct {
+	ProofID string `json:"proof_id"`
+	By      string `json:"by"`
+}
+
 // Payload is a closed union over the typed per-entry-type payloads. Exactly
 // one field is set, matching EntryType — see Entry.Validate.
 type Payload struct {
@@ -135,6 +183,33 @@ type Payload struct {
 	Checkpoint      *CheckpointPayload      `json:"checkpoint,omitempty"`
 	Drill           *DrillPayload           `json:"drill,omitempty"`
 	ChainAnchor     *ChainAnchorPayload     `json:"chain_anchor,omitempty"`
+	Accept          *AcceptPayload          `json:"accept,omitempty"`
+	AcceptClear     *AcceptClearPayload     `json:"accept_clear,omitempty"`
+	Epoch           *EpochPayload           `json:"epoch,omitempty"`
+}
+
+// HostRecord is the durable host stamp on an entry: the machine's name plus
+// its stable id (sha256 of /etc/machine-id, truncated — internal/hostid).
+// Optional so entries written before host stamping existed keep their exact
+// canonical form and continue to verify.
+type HostRecord struct {
+	Name string `json:"name"`
+	ID   string `json:"id"`
+}
+
+// PolicyFileRecord is one context file hashed into a policy revision.
+type PolicyFileRecord struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+// PolicyRecord is the policy an entry was decided under: the revision digest
+// over every context file in force plus the files themselves, so a verdict
+// can be reproduced (or shown stale) years later. Optional on Entry for the
+// same backward-compatibility reason as HostRecord.
+type PolicyRecord struct {
+	Revision string             `json:"revision"`
+	Files    []PolicyFileRecord `json:"files"`
 }
 
 // Entry is one hash-chained ledger record.
@@ -147,16 +222,34 @@ type Entry struct {
 	Payload   Payload   `json:"payload"`
 	Prev      string    `json:"prev"`
 	Hash      string    `json:"hash"`
+	// Host/Epoch/Policy are the portability stamps (docs/SCHEMA.md): where
+	// the entry was written, under which install of that machine, and which
+	// policy text was in force. All three are omitempty so pre-stamping
+	// entries re-encode byte-identically and their hashes still verify.
+	Host   *HostRecord   `json:"host,omitempty"`
+	Epoch  string        `json:"epoch,omitempty"`
+	Policy *PolicyRecord `json:"policy,omitempty"`
 }
 
-// SchemaVersion is the current ledger entry schema.
+// EpochPayload records a labelled epoch marker — `restoregap epoch new
+// "<label>"`. It has no gating effect: it exists so the ledger narrates when
+// a new epoch began (reinstall, machine-id reset) from a human's point of
+// view, next to the machine-derived epoch ids every other entry carries.
+type EpochPayload struct {
+	Label string `json:"label"`
+}
+
+// SchemaVersion remains 2: all newer decision fields are optional and use
+// omitempty, so an older v2 entry has byte-identical canonical JSON when it is
+// decoded and re-encoded by this version. Bumping it would not make old hashes
+// safer; the compatibility test in canonical_test.go pins this guarantee.
 const SchemaVersion = 2
 
 // payloadTypes lists, in a fixed order, each Payload field paired with the
 // EntryType it must accompany. Validate walks this instead of a type switch
 // so adding a new entry type only ever means adding one line here.
 func (p Payload) payloadTypes() map[EntryType]bool {
-	set := make(map[EntryType]bool, 6)
+	set := make(map[EntryType]bool, 8)
 	if p.Decision != nil {
 		set[EntryDecision] = true
 	}
@@ -174,6 +267,15 @@ func (p Payload) payloadTypes() map[EntryType]bool {
 	}
 	if p.ChainAnchor != nil {
 		set[EntryChainAnchor] = true
+	}
+	if p.Accept != nil {
+		set[EntryAccept] = true
+	}
+	if p.AcceptClear != nil {
+		set[EntryAcceptClear] = true
+	}
+	if p.Epoch != nil {
+		set[EntryEpoch] = true
 	}
 	return set
 }

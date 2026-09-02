@@ -129,110 +129,108 @@ proofs:
 	}
 }
 
-// ---- SVG builders ---------------------------------------------------------
+// ---- estate row: single next-action, no per-row expand --------------------
 
-func TestRenderHistoryStripTicksInOrderWithClasses(t *testing.T) {
-	ticks := []RunTick{
-		{When: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), Verified: true, RTOMs: 1100},
-		{When: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC), Verified: false, RTOMs: 1300},
-		{When: time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC), Verified: true, RTOMs: 900},
+// estatePanel returns just one panel's markup ("layer" or "system"). The estate
+// deliberately renders TWICE — the same proofs grouped two ways — so any
+// assertion of the form "the page contains X once" is meaningless without
+// naming the panel. Every estate assertion below scopes itself this way.
+func estatePanel(t *testing.T, html, panel string) string {
+	t.Helper()
+	open := `<div class="rgs-estate-panel" data-panel="` + panel + `">`
+	i := strings.Index(html, open)
+	if i < 0 {
+		t.Fatalf("no %q estate panel in page, got:\n%s", panel, html)
 	}
-	svg, ok := renderHistoryStrip(ticks)
-	if !ok {
-		t.Fatal("expected a strip for 3 ticks")
-	}
-	html := string(svg)
-	if n := strings.Count(html, "<rect"); n != 3 {
-		t.Fatalf("got %d rects, want 3, svg:\n%s", n, html)
-	}
-	idx := 0
-	for _, want := range []string{"var(--good)", "var(--critical)", "var(--good)"} {
-		i := strings.Index(html[idx:], want)
-		if i < 0 {
-			t.Fatalf("missing %q in tick order starting at %d, svg:\n%s", want, idx, html)
+	rest := html[i+len(open):]
+	end := len(rest)
+	for _, marker := range []string{`<div class="rgs-estate-panel"`, "</section>"} {
+		if j := strings.Index(rest, marker); j >= 0 && j < end {
+			end = j
 		}
-		idx += i + len(want)
 	}
-	if !strings.Contains(html, "2026-08-01 · verified · 1.1s") {
-		t.Errorf("missing verified tick title, svg:\n%s", html)
-	}
-	if !strings.Contains(html, "2026-08-02 · not verified") {
-		t.Errorf("missing not-verified tick title, svg:\n%s", html)
-	}
+	return rest[:end]
 }
 
-func TestRenderHistoryStripEmptyWhenNoTicks(t *testing.T) {
-	if svg, ok := renderHistoryStrip(nil); ok || svg != "" {
-		t.Errorf("expected ok=false, empty svg for no ticks, got %v %q", ok, svg)
-	}
-}
-
-func TestRenderSparklineOnlyAtThreeOrMorePoints(t *testing.T) {
-	two := []RunTick{{RTOMs: 100}, {RTOMs: 200}}
-	if _, ok := renderSparkline(two); ok {
-		t.Errorf("2 measured points should not draw a sparkline")
-	}
-	three := []RunTick{{RTOMs: 100}, {RTOMs: 200}, {RTOMs: 150}}
-	svg, ok := renderSparkline(three)
-	if !ok {
-		t.Fatal("3 measured points should draw a sparkline")
-	}
-	if !strings.Contains(string(svg), "<polyline") {
-		t.Errorf("missing polyline, svg:\n%s", svg)
-	}
-	if !strings.Contains(string(svg), "min") || !strings.Contains(string(svg), "max") {
-		t.Errorf("missing min/max title, svg:\n%s", svg)
-	}
-}
-
-// ---- attestation-only rows -----------------------------------------------
-
-func TestBuildStatusRowAttestedOnlyRendersReasonNoStrip(t *testing.T) {
-	row := buildStatusRow(InventoryRow{
-		Level: "declared", Proof: "manual-key", IsDrilled: false,
-		RPO: emDash, RTO: emDash, ProofAge: "attested, no drill",
-	})
-	if row.MergedReason != "attested, no drill" {
-		t.Errorf("MergedReason = %q, want %q", row.MergedReason, "attested, no drill")
-	}
-	if row.HasHistory || row.HasSpark || row.HistorySVG != "" || row.SparkSVG != "" {
-		t.Errorf("attested-only row must render no strip/sparkline, got %+v", row)
-	}
-	// The reason must be shown exactly once: MergedReason carries it, so the
-	// Proof age column (which used to repeat the same string) must not.
-	if row.ProofAge != emDash {
-		t.Errorf("ProofAge = %q, want emDash (the reason already shown once in MergedReason)", row.ProofAge)
-	}
-}
-
-// TestRenderHTMLAttestedRowShowsReasonExactlyOnce is the full-page
-// regression for the "attested, no drill" x3 redundancy: the merged cell
-// spans History+RTO+RPO (via the row-grid's rgs-cell-merged class, a
-// grid-column: span 3, since the inventory is a CSS grid "table" now — see
-// TestRenderHTMLInventoryUsesNoTableElement) and the reason string appears
-// exactly once in the row summary, not repeated in a separate Proof age
-// cell (MergedReason spans it; ProofAge itself renders emDash — see
-// TestBuildStatusRowAttestedOnlyRendersReasonNoStrip for the unit-level
-// assertion on that).
+// TestRenderHTMLAttestedRowShowsReasonExactlyOnce: an attestation's reason is
+// shown once per panel — not twice within one panel. The page total is two
+// because the estate is rendered twice by design.
 func TestRenderHTMLAttestedRowShowsReasonExactlyOnce(t *testing.T) {
-	s := &Summary{Verdict: "pass", Inventory: []InventoryRow{
-		{Level: "declared", Proof: "manual-key-attestation", IsDrilled: false, RPO: emDash, RTO: emDash, ProofAge: "attested, no drill"},
+	const reason = "owner attests weekly restore, evidence in vault"
+	s := &Summary{Verdict: "warn", Inventory: []InventoryRow{
+		{Level: "declared", Proof: "p", IsDrilled: false, RPO: emDash, RTO: emDash, ProofAge: reason},
 	}}
 	out, err := s.Render("html")
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := string(out)
-	if !strings.Contains(html, `class="rgs-cell-merged`) {
-		t.Errorf("expected the merged History+RTO+RPO cell (rgs-cell-merged), got:\n%s", html)
+	for _, panel := range []string{"layer", "system"} {
+		if n := strings.Count(estatePanel(t, html, panel), reason); n != 1 {
+			t.Errorf("%s panel: reason should appear exactly once, found %d", panel, n)
+		}
 	}
-	summaryStart := strings.Index(html, "<summary")
-	summaryEnd := strings.Index(html, "</summary>")
-	if summaryStart < 0 || summaryEnd < 0 {
-		t.Fatalf("missing <summary>...</summary>, got:\n%s", html)
+}
+
+// TestRenderHTMLGroupsAndRecoveryChainAreClosedByDefault: the estate tree's
+// layer groups and the legacy Recovery chain section render as <details>
+// with no `open` attribute when every row in them is already settled
+// (restored/observed/accepted) — closed by default, so a machine with many
+// proofs does not pay for them
+// in default page height (mobile-ui-check's ≤8,000px budget).
+func TestRenderHTMLGroupsAndRecoveryChainAreClosedByDefault(t *testing.T) {
+	s := &Summary{
+		Verdict: "pass", Origin: "restoregap.yml", Lifelines: 2, Guards: 1,
+		Inventory: []InventoryRow{
+			{Level: "restores", Proof: "a", IsDrilled: true, LevelRank: contextspec.LevelRestores.Rung(), RPO: emDash, RTO: "1s", ProofAge: "0d"},
+		},
 	}
-	if n := strings.Count(html[summaryStart:summaryEnd], "attested, no drill"); n != 1 {
-		t.Errorf("reason text should appear exactly once in the row summary, found %d times, got:\n%s", n, html[summaryStart:summaryEnd])
+	out, err := s.Render("html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(out)
+	for _, want := range []string{`<details class="rgs-taxlayer"`, `<details class="rgs-legacy">`, "Recovery chain"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("missing %q, got:\n%s", want, html)
+		}
+	}
+	// An all-restored layer group must not carry an `open` attribute, and
+	// neither must the legacy <details>.
+	if strings.Contains(html, `<details class="rgs-legacy"> open>`) || strings.Contains(html, `<details class="rgs-legacy" open>`) {
+		t.Errorf("legacy details must not be open by default, got:\n%s", html)
+	}
+	layerStart := strings.Index(html, `<details class="rgs-taxlayer"`)
+	layerTagEnd := strings.Index(html[layerStart:], ">")
+	if layerStart < 0 || layerTagEnd < 0 {
+		t.Fatalf("missing the layer group's opening tag, got:\n%s", html)
+	}
+	layerTag := html[layerStart : layerStart+layerTagEnd]
+	if strings.Contains(layerTag, " open") {
+		t.Errorf("an all-restored layer group must not be open by default, tag: %s", layerTag)
+	}
+}
+
+// TestRenderHTMLLayerGroupOpensWhenItHasAGap: unlike the old fixed-closed
+// group <details>, an estate layer group auto-expands when it holds a real
+// gap (unreviewed/attention) — a machine with problems should not require
+// an extra click to see them.
+func TestRenderHTMLLayerGroupOpensWhenItHasAGap(t *testing.T) {
+	s := &Summary{Verdict: "warn", Inventory: []InventoryRow{
+		{Level: "declared", Proof: "b", IsDrilled: false, RPO: emDash, RTO: emDash, ProofAge: "attested, no drill"},
+	}}
+	out, err := s.Render("html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(out)
+	layerStart := strings.Index(html, `<details class="rgs-taxlayer"`)
+	layerTagEnd := strings.Index(html[layerStart:], ">")
+	if layerStart < 0 || layerTagEnd < 0 {
+		t.Fatalf("missing the layer group's opening tag, got:\n%s", html)
+	}
+	if !strings.Contains(html[layerStart:layerStart+layerTagEnd], " open") {
+		t.Errorf("a layer group holding a gap must be open by default, tag: %s", html[layerStart:layerStart+layerTagEnd])
 	}
 }
 
@@ -260,7 +258,12 @@ func TestRenderHTMLVerdictBannerClassAndLabel(t *testing.T) {
 	}
 }
 
-func TestGapCalloutAppearsIffDeclaredRowsExist(t *testing.T) {
+// TestEstateRowShowsInlineNextActionForGapNotForGreen: a not-proven row
+// (declared, never drilled) shows its own single remediation command right
+// on the page — no click needed, and no separate "N never drilled" callout
+// duplicating what the To-green panel and the row already say. A currently
+// good row shows no such command.
+func TestEstateRowShowsInlineNextActionForGapNotForGreen(t *testing.T) {
 	withDeclared := &Summary{Verdict: "pass", Inventory: []InventoryRow{
 		{Level: "declared", Proof: "p", IsDrilled: false, RPO: emDash, RTO: emDash, ProofAge: "attested, no drill"},
 	}}
@@ -268,8 +271,8 @@ func TestGapCalloutAppearsIffDeclaredRowsExist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(out), "1 never drilled") {
-		t.Errorf("expected gap callout when declared rows exist, got:\n%s", out)
+	if !strings.Contains(string(out), `class="rgs-rownext"`) || !strings.Contains(string(out), "restoregap accept p --reason") {
+		t.Errorf("expected an inline next-action command for the not-proven row, got:\n%s", out)
 	}
 
 	withoutDeclared := &Summary{Verdict: "pass", Inventory: []InventoryRow{
@@ -279,39 +282,8 @@ func TestGapCalloutAppearsIffDeclaredRowsExist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(out2), "never drilled") {
-		t.Errorf("gap callout should not appear when no declared rows exist")
-	}
-}
-
-// TestGapMessageSplitsNeverDrilledFromDrilledButUnproven: a declared row
-// that WAS drilled (its proof merely expired/is disputed) is not "attested
-// but never drilled" — that phrase overclaims in the other direction. The
-// callout must count the two cases separately.
-func TestGapMessageSplitsNeverDrilledFromDrilledButUnproven(t *testing.T) {
-	rows := []InventoryRow{
-		{Level: "declared", Proof: "a", IsDrilled: false, ProofAge: "attested, no drill"},
-		{Level: "declared", Proof: "b", IsDrilled: false, ProofAge: "attested, no drill"},
-		{Level: "declared", Proof: "c", IsDrilled: true, ProofAge: "proof expired 3d ago"},
-		{Level: "serves", Proof: "d", IsDrilled: true, ProofAge: "0d"},
-	}
-	got := buildGapMessage(rows)
-	if !strings.Contains(got, "2 never drilled") {
-		t.Errorf("expected '2 never drilled', got %q", got)
-	}
-	if !strings.Contains(got, "1 drilled but currently unproven") {
-		t.Errorf("expected '1 drilled but currently unproven', got %q", got)
-	}
-}
-
-func TestGapMessageSuppressesZeroClause(t *testing.T) {
-	rows := []InventoryRow{{Level: "declared", Proof: "c", IsDrilled: true, ProofAge: "proof expired 3d ago"}}
-	got := buildGapMessage(rows)
-	if strings.Contains(got, "never drilled") {
-		t.Errorf("a zero never-drilled count must be suppressed, not printed; got %q", got)
-	}
-	if !strings.Contains(got, "1 drilled but currently unproven") {
-		t.Errorf("expected the drilled-but-unproven count, got %q", got)
+	if strings.Contains(string(out2), `class="rgs-rownext"`) {
+		t.Errorf("a currently-good row must not show a next-action line, got:\n%s", out2)
 	}
 }
 
@@ -482,12 +454,21 @@ func TestRenderHTMLEmptySummaryRendersCompletePage(t *testing.T) {
 	}
 	html := string(out)
 	for _, want := range []string{
-		"<!doctype html>", "restoregap", "Recovery inventory",
-		"No declared drills or proofs yet.", "Declared", "Serves",
+		"<!doctype html>", "restoregap", "No declared drills or proofs yet.",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %q in empty-summary page, got:\n%s", want, html)
 		}
+	}
+	// An estate with nothing in it renders no estate section at all
+	// ({{if .Estate.HasAny}}) — an empty shell with a heading and no rows is
+	// worse than its absence, and "No declared drills or proofs yet." above
+	// already says the true thing.
+	if strings.Contains(html, "Recovery estate") {
+		t.Errorf("an empty estate must not render a heading, got:\n%s", html)
+	}
+	if strings.Contains(html, "<script") {
+		t.Errorf("the page must never contain a <script> tag, got:\n%s", html)
 	}
 }
 
@@ -561,51 +542,27 @@ func TestRenderHTMLInventoryUsesNoTableElement(t *testing.T) {
 	}
 }
 
-// TestRenderHTMLDetailsSummaryCountMatchesRowCount: every inventory row is
-// its own expand/collapse disclosure — one <details>/<summary> pair each,
-// across both groups.
-func TestRenderHTMLDetailsSummaryCountMatchesRowCount(t *testing.T) {
+// TestRenderHTMLEstateRowsAreNotIndividuallyExpandable guards the reason the
+// per-proof detail card was removed: the mobile gate's `--views details` sweep
+// clicks every <details> cumulatively without re-closing, so one card per proof
+// would let a ~40-proof estate open dozens at once and blow the 8,000px height
+// budget. Only the layer sections may be <details>; rows must stay plain.
+func TestRenderHTMLEstateRowsAreNotIndividuallyExpandable(t *testing.T) {
 	s := &Summary{Verdict: "warn", Inventory: []InventoryRow{
 		{Level: "declared", Proof: "a", IsDrilled: false, RPO: emDash, RTO: emDash, ProofAge: "attested, no drill"},
-		{Level: "declared", Proof: "b", IsDrilled: true, RPO: emDash, RTO: emDash, ProofAge: "disputed"},
-		{Level: "serves", Proof: "c", IsDrilled: true, RPO: "1h", RTO: "2s", ProofAge: "1d"},
+		{Level: "restores", Proof: "b", IsDrilled: true, LevelRank: contextspec.LevelRestores.Rung(), RPO: emDash, RTO: "1s", ProofAge: "0d"},
 	}}
 	out, err := s.Render("html")
 	if err != nil {
 		t.Fatal(err)
 	}
-	html := string(out)
-	details := strings.Count(html, `<details class="rgs-row">`)
-	summaries := strings.Count(html, `<summary class="rgs-cols rgs-row-summary"`)
-	if details != 3 || summaries != 3 {
-		t.Errorf("got %d <details>, %d <summary>, want 3 each (one per row), got:\n%s", details, summaries, html)
+	panel := estatePanel(t, string(out), "layer")
+	if got := strings.Count(panel, `<div class="rgs-row"`); got != 2 {
+		t.Errorf("expected 2 plain rows in the layer panel, got %d:\n%s", got, panel)
 	}
-}
-
-// TestBuildStatusRowMeaningLinePerLevel: every rung gets its own
-// non-empty, distinct plain-language meaning line (levelMeaning), written
-// once and looked up — never derived per row.
-func TestBuildStatusRowMeaningLinePerLevel(t *testing.T) {
-	cases := []struct {
-		level string
-		rank  int
-	}{
-		{contextspec.LevelDeclared.String(), contextspec.LevelDeclared.Rung()},
-		{contextspec.LevelRestores.String(), contextspec.LevelRestores.Rung()},
-		{contextspec.LevelDataValid.String(), contextspec.LevelDataValid.Rung()},
-		{contextspec.LevelServes.String(), contextspec.LevelServes.Rung()},
-	}
-	seen := make(map[string]string, len(cases))
-	for _, c := range cases {
-		row := buildStatusRow(InventoryRow{Level: c.level, LevelRank: c.rank, Proof: "p", IsDrilled: true, RPO: emDash, RTO: emDash})
-		if row.Meaning == "" {
-			t.Errorf("level %s: empty meaning line", c.level)
-			continue
-		}
-		if other, dup := seen[row.Meaning]; dup {
-			t.Errorf("level %s: meaning line reused from level %s: %q", c.level, other, row.Meaning)
-		}
-		seen[row.Meaning] = c.level
+	// Every <details> here must be a layer section, never a row.
+	if opens, layers := strings.Count(panel, "<details"), strings.Count(panel, `class="rgs-taxlayer"`); opens != layers {
+		t.Errorf("every <details> must be a layer section: %d <details> vs %d layer sections", opens, layers)
 	}
 }
 
@@ -674,38 +631,6 @@ func TestNextStepCommandUnitCases(t *testing.T) {
 	}
 }
 
-// TestRenderHTMLGroupHeadersShowCorrectCounts covers the explicit
-// recoverable/not-proven split: correct counts in each header, and the
-// recoverable group sorted strongest-first (the opposite of the
-// weakest-first order the text renderer/text table uses).
-func TestRenderHTMLGroupHeadersShowCorrectCounts(t *testing.T) {
-	s := &Summary{Verdict: "warn", Inventory: []InventoryRow{
-		{Level: "declared", Proof: "a", IsDrilled: false, RPO: emDash, RTO: emDash, ProofAge: "attested, no drill"},
-		{Level: "declared", Proof: "b", IsDrilled: false, RPO: emDash, RTO: emDash, ProofAge: "attested, no drill"},
-		{Level: "restores", Proof: "c", IsDrilled: true, LevelRank: contextspec.LevelRestores.Rung(), RPO: emDash, RTO: "1s", ProofAge: "0d"},
-		{Level: "serves", Proof: "d", IsDrilled: true, LevelRank: contextspec.LevelServes.Rung(), RPO: "1h", RTO: "2s", ProofAge: "0d"},
-	}}
-	out, err := s.Render("html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	html := string(out)
-	if !strings.Contains(html, `Provably recoverable <span class="rgs-group-count">— 2</span>`) {
-		t.Errorf("expected 'Provably recoverable — 2', got:\n%s", html)
-	}
-	if !strings.Contains(html, `Not proven <span class="rgs-group-count">— 2</span>`) {
-		t.Errorf("expected 'Not proven — 2', got:\n%s", html)
-	}
-	cIdx := strings.Index(html, "<code>c</code>")
-	dIdx := strings.Index(html, "<code>d</code>")
-	if cIdx < 0 || dIdx < 0 {
-		t.Fatalf("missing proof ids in output, got:\n%s", html)
-	}
-	if dIdx > cIdx {
-		t.Errorf("expected strongest-first: serves (d) before restores (c) within the recoverable group")
-	}
-}
-
 // TestRenderHTMLIncludesIntegrationStrip covers the value/integration
 // strip's presence and its honesty constraint: it must never imply cloud
 // scanning or terraform-plan analysis, which were deliberately cut.
@@ -744,7 +669,7 @@ func TestRenderHTMLEscapesDeclarationAndAttestationFields(t *testing.T) {
 			BudgetRTO: emDash, BudgetRPO: emDash,
 		},
 		{
-			Level: "declared", Proof: "q", IsDrilled: false, RPO: emDash, RTO: emDash, ProofAge: "attested, no drill",
+			Level: "declared", Proof: "q", IsDrilled: false, RPO: emDash, RTO: emDash, ProofAge: `<img src=z>`,
 			AttestCommand: `<script>y</script>`, AttestEvidenceURL: `<img src=y>`,
 		},
 	}}
@@ -758,7 +683,147 @@ func TestRenderHTMLEscapesDeclarationAndAttestationFields(t *testing.T) {
 			t.Fatalf("unescaped content leaked into HTML: %q, got:\n%s", raw, html)
 		}
 	}
-	if !strings.Contains(html, "&lt;script&gt;x&lt;/script&gt;") {
-		t.Errorf("expected RecoverCmd to be escaped, got:\n%s", html)
+	// The estate row renders state/proof/artifact/level/why rather than the old
+	// detail card's recover command, so assert escaping on a field it shows:
+	// ProofAge becomes the row's "why".
+	if !strings.Contains(html, "&lt;img src=z&gt;") {
+		t.Errorf("expected the why field to be escaped, got:\n%s", html)
+	}
+}
+
+// ---- to-green convergence panel (feat/accept-next) -----------------------
+
+// TestRenderHTMLToGreenPanelListsStepsUnderHeadline: the panel sits right
+// after the verdict banner and lists exactly `restoregap next`'s lines when
+// there is work left.
+func TestRenderHTMLToGreenPanelListsStepsUnderHeadline(t *testing.T) {
+	s := &Summary{Verdict: "warn", Inventory: []InventoryRow{
+		{Level: "declared", Proof: "phone-reprovision-path", IsDrilled: false, RPO: emDash, RTO: emDash, ProofAge: "attested, no drill"},
+	}}
+	out, err := s.Render("html")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	html := string(out)
+	bannerEnd := strings.Index(html, "</section>")
+	toGreenIdx := strings.Index(html, `class="rgs-togreen"`)
+	if bannerEnd < 0 || toGreenIdx < bannerEnd {
+		t.Fatalf("to-green panel must appear directly after the verdict banner, got:\n%s", html)
+	}
+	for _, want := range []string{
+		"To green: 1 step</h2>",
+		"phone-reprovision-path",
+		"restoregap accept phone-reprovision-path",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("to-green panel missing %q, got:\n%s", want, html)
+		}
+	}
+}
+
+// TestRenderHTMLToGreenPanelFoldsBeyondEightSteps: only the first 8 lines
+// show directly; the rest fold behind a <details>, and the heading still
+// counts the true total.
+func TestRenderHTMLToGreenPanelFoldsBeyondEightSteps(t *testing.T) {
+	rows := make([]InventoryRow, 10)
+	for i := range rows {
+		rows[i] = InventoryRow{
+			Level: "declared", Proof: fmt.Sprintf("proof-%02d", i), IsDrilled: false,
+			RPO: emDash, RTO: emDash, ProofAge: "attested, no drill",
+		}
+	}
+	s := &Summary{Verdict: "warn", Inventory: rows}
+	out, err := s.Render("html")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	html := string(out)
+	if !strings.Contains(html, "To green: 10 steps</h2>") {
+		t.Errorf("expected the heading to count all 10 steps, got:\n%s", html)
+	}
+	if !strings.Contains(html, "2 more steps") {
+		t.Errorf("expected a '2 more steps' <details> summary, got:\n%s", html)
+	}
+	detailsStart := strings.Index(html, `class="rgs-togreen-more"`)
+	if detailsStart < 0 {
+		t.Fatalf("expected a rgs-togreen-more <details>, got:\n%s", html)
+	}
+	if !strings.Contains(html[detailsStart:], "proof-09") {
+		t.Errorf("expected the 10th step (proof-09) inside the folded <details>, got:\n%s", html[detailsStart:])
+	}
+}
+
+// TestRenderHTMLToGreenPanelShowsGreenNote: with nothing left to do, the
+// panel shows "0 steps" and, when a future expiry exists, names it.
+func TestRenderHTMLToGreenPanelShowsGreenNote(t *testing.T) {
+	s := &Summary{
+		Verdict: "pass",
+		Inventory: []InventoryRow{
+			{Level: "serves", Proof: "money-db-recovery", IsDrilled: true, RPO: "16h0m0s", RTO: "2.1s", ProofAge: "3d ago"},
+		},
+		NextExpiryID: "money-db-recovery",
+		NextExpiryAt: mustParseTime(t, "2026-09-01T00:00:00Z"),
+	}
+	out, err := s.Render("html")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	html := string(out)
+	if !strings.Contains(html, "To green: 0 steps</h2>") {
+		t.Errorf("expected the zero-steps heading, got:\n%s", html)
+	}
+	if !strings.Contains(html, "Green. Next expiry: money-db-recovery on 2026-09-01") {
+		t.Errorf("expected the green note naming the next expiry, got:\n%s", html)
+	}
+}
+
+func mustParseTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	tm, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatalf("parse %q: %v", s, err)
+	}
+	return tm
+}
+
+// TestLevelLegendExplainsEveryRungExactlyOnce revives the invariant the
+// deleted TestBuildStatusRowMeaningLinePerLevel guarded: every rung of the
+// recovery ladder gets its own non-empty, distinct plain-language line. The
+// redesign dropped the per-row meaning; this asserts the explanation survives
+// as a single legend instead of vanishing.
+func TestLevelLegendExplainsEveryRungExactlyOnce(t *testing.T) {
+	legend := buildLevelLegend()
+	if len(legend) != 4 {
+		t.Fatalf("expected 4 rungs, got %d: %+v", len(legend), legend)
+	}
+	seen := make(map[string]string, len(legend))
+	for _, item := range legend {
+		if item.Meaning == "" {
+			t.Errorf("level %s: empty meaning line", item.Level)
+			continue
+		}
+		if other, dup := seen[item.Meaning]; dup {
+			t.Errorf("level %s: meaning line reused from level %s: %q", item.Level, other, item.Meaning)
+		}
+		seen[item.Meaning] = item.Level
+	}
+
+	s := &Summary{Verdict: "warn", Inventory: []InventoryRow{
+		{Level: "declared", Proof: "p", IsDrilled: false, RPO: emDash, RTO: emDash, ProofAge: "attested, no drill"},
+	}}
+	out, err := s.Render("html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(out)
+	// Rendered once for the whole page — not once per estate panel, and
+	// certainly not once per row.
+	if n := strings.Count(html, "What the levels mean"); n != 1 {
+		t.Errorf("legend should appear exactly once, found %d", n)
+	}
+	for _, item := range legend {
+		if !strings.Contains(html, item.Meaning) {
+			t.Errorf("legend missing the %s meaning in rendered page", item.Level)
+		}
 	}
 }

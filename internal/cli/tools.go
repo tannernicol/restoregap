@@ -16,7 +16,7 @@ import (
 )
 
 func newEvidenceCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "evidence", Short: "Record recovery proofs and export an evidence packet"}
+	cmd := &cobra.Command{Use: "evidence", Hidden: true, Short: "Record recovery proofs and export an evidence packet"}
 
 	ing := evidence.IngestRequest{}
 	var expiresIn string

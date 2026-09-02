@@ -174,7 +174,7 @@ func Export(req ExportRequest) ([]byte, error) {
 		switch {
 		case p.ExpiresAt != nil && p.ExpiresAt.Before(now):
 			state, verdict = "EXPIRED", "warn"
-		case p.Status == contextspec.ProofRecordStale, p.Status == contextspec.ProofRecordDisputed:
+		case p.Status == contextspec.ProofRecordStale, p.Status == contextspec.ProofRecordDisputed, p.Status == contextspec.ProofRecordUnreachable:
 			state, verdict = string(p.Status), "warn"
 		}
 		detail := string(p.Status)

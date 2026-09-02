@@ -22,6 +22,12 @@ demo:
 	go build -trimpath -o /tmp/rg-demo/bin/restoregap ./cmd/restoregap
 	vhs demo/demo.tape
 
+# End-to-end check of the example PreToolUse hook against a fresh demo
+# fixture (needs bash, jq, sqlite3, go). See docs/examples/preflight-hook.test.sh.
+.PHONY: hook-test
+hook-test:
+	bash docs/examples/preflight-hook.test.sh
+
 # SPDX compliance (REUSE spec): every tracked file carries license + copyright,
 # either as in-file SPDX tags (hand-authored source) or via REUSE.toml
 # (platform-managed, generated, golden and binary files — see its comments for

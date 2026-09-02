@@ -62,11 +62,25 @@ func Verify(path string) (VerifyResult, error) {
 }
 
 // VerifyEntries is Verify's pure core, usable directly by tests and by
-// callers that already hold entries in memory.
+// callers that already hold entries in memory. The first entry's Prev must
+// equal GenesisHash — entries is assumed to be a WHOLE ledger. A caller that
+// holds a truncated slice (a bundle's --since-bounded ledger slice,
+// docs/SCHEMA.md §Portable signed bundle) cannot satisfy that and wants
+// VerifyEntriesFrom instead.
 func VerifyEntries(entries []Entry) VerifyResult {
+	return VerifyEntriesFrom(entries, GenesisHash)
+}
+
+// VerifyEntriesFrom is VerifyEntries with the first entry's expected Prev
+// given explicitly instead of assumed to be GenesisHash — the seam a
+// truncated ledger slice needs: it trusts genesis as the boundary it is
+// continuing from (recorded, not independently re-derivable without the
+// entries before it) and otherwise applies the exact same per-entry
+// hash/chain-anchor checks as a full-ledger Verify.
+func VerifyEntriesFrom(entries []Entry, genesis string) VerifyResult {
 	anchors := scanChainAnchors(entries)
 	var anchoredAnomalies []string
-	prev := GenesisHash
+	prev := genesis
 	for i, e := range entries {
 		n := i + 1
 		// Prev-linkage is checked unconditionally, for every entry

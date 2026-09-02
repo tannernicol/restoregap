@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/tannernicol/restoregap/internal/ledger"
 )
 
 func writeTemp(t *testing.T, name, content string) string {
@@ -80,6 +83,82 @@ func TestRunRecordsLedgerDecision(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"block"`) {
 		t.Errorf("ledger entry does not record the block decision: %s", raw)
+	}
+}
+
+// TestRunUnreadableContextRecordsGateBroken is the fail-closed distinction:
+// a directory supplied as a context is not a policy block. The gate did not
+// run, so it must return the frozen unavailable exit code and leave an
+// auditable broken decision in an otherwise healthy ledger.
+func TestRunUnreadableContextRecordsGateBroken(t *testing.T) {
+	intentPath := writeTemp(t, "intent.yml", "version: 2\naction: delete_file\npath: /tmp/x\n")
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.jsonl")
+	badContext := t.TempDir() // contextspec.Load cannot read a directory as YAML
+
+	res, err := Run(context.Background(), Request{
+		Format: "text", IntentPath: intentPath, ContextPaths: []string{badContext},
+		LedgerPath: ledgerPath, Actor: "agent/test", ToolVersion: "test-version",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExitCode != 3 {
+		t.Fatalf("exit = %d, want 3; report:\n%s", res.ExitCode, res.Rendered)
+	}
+	if !strings.Contains(string(res.Rendered), "GATE BROKEN") || !strings.Contains(string(res.Rendered), "load_context") {
+		t.Errorf("broken report must name the failed check, got:\n%s", res.Rendered)
+	}
+
+	entries, err := ledger.ReadAll(ledgerPath)
+	if err != nil {
+		t.Fatalf("read ledger: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Payload.Decision == nil {
+		t.Fatalf("got %#v, want one decision entry", entries)
+	}
+	d := entries[0].Payload.Decision
+	if d.GateState != "broken" || !strings.Contains(d.BrokenReason, "load_context") {
+		t.Errorf("gate state = %q, broken reason = %q; want broken load_context", d.GateState, d.BrokenReason)
+	}
+	if len(d.Checks) == 0 || d.Checks[len(d.Checks)-1].Outcome != "broken" {
+		t.Errorf("broken entry must retain the failed check, got %#v", d.Checks)
+	}
+	if got := ledger.VerifyEntries(entries); !got.OK {
+		t.Errorf("new broken entry must still verify: %s", got.Reason)
+	}
+}
+
+func TestRunDecisionRecordsExecutionMetadata(t *testing.T) {
+	intentPath := writeTemp(t, "intent.yml", "version: 2\naction: delete_file\npath: /tmp/x\n")
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.jsonl")
+	if _, err := Run(context.Background(), Request{
+		Format: "json", IntentPath: intentPath, LedgerPath: ledgerPath,
+		Actor: "agent/test", ToolVersion: "v9.9.9",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := ledger.ReadAll(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := entries[0].Payload.Decision
+	if d.GateState != "ran" || d.ToolVersion != "v9.9.9" || len(d.Checks) == 0 {
+		t.Errorf("missing decision execution metadata: %#v", d)
+	}
+	if d.DurationMS < 0 {
+		t.Errorf("duration = %d, want non-negative", d.DurationMS)
+	}
+	for _, c := range d.Checks {
+		if c.DurationMS < 0 || c.Outcome == "" || c.ID == "" {
+			t.Errorf("invalid check record: %#v", c)
+		}
+	}
+	// Exercise the exact zero-duration edge too: it is valid and should not
+	// silently turn into a float in the durable entry.
+	if _, err := ledger.Append(ledgerPath, ledger.EntryDecision, "agent/test", ledger.Payload{Decision: &ledger.DecisionPayload{
+		Verdict: "pass", GateState: "ran", DurationMS: 0,
+	}}, time.Now().UTC(), "01J000000000000000000000001"); err != nil {
+		t.Fatalf("append zero-duration decision: %v", err)
 	}
 }
 

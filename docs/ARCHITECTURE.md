@@ -70,6 +70,11 @@ may be redesigned freely. What MUST carry over is **semantics**, not bytes:
    cutover; a `migrate` command is optional later, not v1 scope.
 6. **MCP:** same 7 tool *capabilities* (preflight intent/diff, acknowledge_risk,
    explain_decision, required_proof, ledger_query, story); schemas may be cleaned up.
+   Plus three Go-only additions beyond that parity set: `drill_lint` and `next_steps`
+   (read-only — the path-to-green data `restoregap next --format json` prints), and
+   `discover` (read-only — the same candidate/coverage diff `restoregap discover
+   --format json` prints; unlike the CLI it never writes the on-disk snapshot —
+   see docs/DISCOVER.md).
 
 ### Cutover checklist (we own updating every caller)
 
