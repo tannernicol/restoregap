@@ -60,7 +60,7 @@ jobs:
           git clone --quiet --no-checkout "$src" ../platform-sdk
           git -C ../platform-sdk checkout --quiet --detach "$ref"
           echo "platform SDK pinned at $ref"
-          git -C ../platform-sdk log -1 --format='  %h %s'
+          git -C ../platform-sdk --no-pager log -1 --format='  %h %s'
 
           # The clone must itself be clean — a dirty SDK checkout would mean the
           # gauntlet is again running against something git does not describe.
@@ -82,6 +82,16 @@ jobs:
           if [ -L ../homelab ] || [ ! -e ../homelab ]; then
             ln -sfn platform-sdk ../homelab
             echo "  ../homelab -> platform-sdk (satisfies the go.mod replace)"
+          fi
+
+      - name: prepare UI kit (committed source + browser)
+        run: |
+          set -euo pipefail
+          echo "PLATFORM_SDK_ROOT=$PWD/../platform-sdk" >> "$GITHUB_ENV"
+          if [ -f .ui-kit.json ] || [ -f .ui-kit-source ]; then
+            "$PWD/../platform-sdk/scripts/ui-kit-prepare.sh" --repo "$PWD"
+          else
+            echo "no UI kit enrollment; retaining legacy UI lane"
           fi
 
       - name: select gauntlet tier
