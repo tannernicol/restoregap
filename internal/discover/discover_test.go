@@ -55,8 +55,17 @@ func fixedOptions(t *testing.T, home, stateDir string, now time.Time) Options {
 	}
 }
 
+func testHome(t *testing.T) string {
+	t.Helper()
+	home, err := os.MkdirTemp("/tmp", "restoregap-discover-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
+
 func TestCollectBuildsReportWithCoverageAndPersists(t *testing.T) {
-	home := t.TempDir()
+	home := testHome(t)
 	stateDir := t.TempDir()
 	dbPath := filepath.Join(home, "app.sqlite3")
 	if err := os.WriteFile(dbPath, make([]byte, databaseMinSize+1), 0o644); err != nil {
@@ -89,7 +98,7 @@ func TestCollectBuildsReportWithCoverageAndPersists(t *testing.T) {
 }
 
 func TestCollectNoSaveDoesNotWriteButStillDiffs(t *testing.T) {
-	home := t.TempDir()
+	home := testHome(t)
 	stateDir := t.TempDir()
 	now := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
 
@@ -129,7 +138,7 @@ func TestCollectNoSaveDoesNotWriteButStillDiffs(t *testing.T) {
 }
 
 func TestCollectSecondRunDetectsNewCandidate(t *testing.T) {
-	home := t.TempDir()
+	home := testHome(t)
 	stateDir := t.TempDir()
 	now1 := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC)
 	now2 := now1.Add(48 * time.Hour)
@@ -167,7 +176,7 @@ func TestCollectSecondRunDetectsNewCandidate(t *testing.T) {
 // one candidate with an alternate path), and a genuine large database
 // that must rank first in the default text view.
 func TestCollectEndToEndSuppressesGroupsDedupes(t *testing.T) {
-	home := t.TempDir()
+	home := testHome(t)
 	now := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
 	opts := fixedOptions(t, home, t.TempDir(), now)
 
