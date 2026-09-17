@@ -39,6 +39,7 @@ func stubExternalTools(t *testing.T) {
 func fixedOptions(t *testing.T, home, stateDir string, now time.Time) Options {
 	t.Helper()
 	stubExternalTools(t)
+	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	etc := filepath.Join(home, "fake-etc")
 	if err := os.MkdirAll(etc, 0o755); err != nil {
