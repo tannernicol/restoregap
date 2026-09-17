@@ -61,6 +61,11 @@ func testHome(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(home); err != nil {
+			t.Errorf("remove test home %s: %v", home, err)
+		}
+	})
 	return home
 }
 
