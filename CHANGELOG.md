@@ -6,7 +6,7 @@ each such change is called out here.
 
 ## [Unreleased]
 
-## [0.10.0] — YYYY-MM-DD (fill in on tag day)
+## [0.10.0] — 2026-09-18
 
 Closes the blind spot the 0.9.x line never answered: `check`/`drill`/`preflight`
 all start from something *declared*, so they could only ever say "is what I

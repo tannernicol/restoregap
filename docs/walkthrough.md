@@ -26,6 +26,7 @@ $ echo $?      # 1 — and your nightly backup job said "success" the whole time
 
 # 2. Proof — declare the drill by measuring the live artifact, then actually restore it in a sandbox.
 $ restoregap drill propose proj/app.db --source backup/app.db > restoregap.local.yml
+$ sed -i '/pin_check:/a\    budgets:\n      rto: 5m' restoregap.local.yml   # propose left no budget declared; add one so the drill has something to hold the clock against
 $ restoregap preflight --intent rm-app-db.yml         # rm-app-db.yml: 5 lines of YAML, see below
 context: restoregap.local.yml (discovered)
 ledger: /tmp/rg-demo/ledger.jsonl (default)
@@ -35,7 +36,7 @@ Restore Gap blocked this change. Supply proof, change the plan, or record an own
 …                                                     # verdict table + detail trimmed here
 $ restoregap drill
 context: restoregap.local.yml (discovered)
-✓ app-db-recovery — data-valid (L3) in 0s: integrity ok; users=95 (>= 90% of live 100 = 90)
+✓ app-db-recovery — restored in 0.0s (budget 5m) — data-valid (L3): integrity ok; users=95 (>= 90% of live 100 = 90)
 
 # 3. Gate — the same change is allowed now, and refused again the day that proof expires.
 $ restoregap preflight --intent rm-app-db.yml
@@ -50,7 +51,9 @@ $ echo $?      # 0 — 30 days from now, without a fresh drill, it is 1 again
 `check` needs no configuration and exits 1 on drift, so it can sit in cron or CI
 today. `drill` turns a drifting copy into a **verified, expiring proof** — only a
 real reconstruction counts (a `recover:` command that "succeeds" while restoring
-garbage fails closed). `preflight` is the thesis: *prove your recovery works,
+garbage fails closed), and a declared RTO budget (`budgets: {rto: 5m}`) turns
+that pass line into a stopwatch held against it, not just a number written
+down for later. `preflight` is the thesis: *prove your recovery works,
 then refuse the risky change until it does.* Every decision lands in an
 append-only, hash-chained ledger (`restoregap ledger verify`; default under
 `$XDG_STATE_HOME/restoregap/`). Owner overrides are first-class and audited —
@@ -83,5 +86,5 @@ file in the current directory without `--context`.
 
 Next: `restoregap status` (guards, proof freshness, what provably comes back),
 `restoregap saves` (the changes the gate refused that would have broken a
-recovery), and `docs/drill-authoring.md` for real drills (Postgres, restic,
-Docker volumes, …).
+recovery; not listed in `--help` yet), and `docs/drill-authoring.md` for real
+drills (Postgres, restic, Docker volumes, …).

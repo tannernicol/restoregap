@@ -75,7 +75,7 @@ $ echo $?      # 2 — Claude Code blocks the tool call, agent sees this on stde
 # Prove the recovery actually works — a real reconstruction in a sandbox, not "a copy exists."
 $ restoregap drill
 context: restoregap.local.yml (discovered)
-✓ app-db-recovery — data-valid (L3) in 0s: integrity ok; users=95 (>= 90% of live 100 = 90)
+✓ app-db-recovery — restored in 0.0s — data-valid (L3): integrity ok; users=95 (>= 90% of live 100 = 90)
 
 # Same attempt, same hook, now with a fresh proof on file.
 $ echo '{"tool_name":"Bash","tool_input":{"command":"rm proj/app.db"}}' \

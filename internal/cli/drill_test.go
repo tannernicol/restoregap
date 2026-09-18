@@ -462,8 +462,8 @@ func TestFormatDrillLine(t *testing.T) {
 		Proof: "p", Verified: true, RTOSeconds: 4.2, RPOSeconds: &rpo, Detail: "integrity ok",
 		Checks: []contextspec.CheckOutcome{{Type: "sqlite", Pass: true, Detail: "integrity ok"}},
 	}
-	line := formatDrillLine(pass)
-	if !strings.HasPrefix(line, "✓ p — data-valid (L3) in") || !strings.Contains(line, "integrity ok") {
+	line := formatDrillLine(pass, contextspec.DrillBudgets{})
+	if !strings.HasPrefix(line, "✓ p — restored in 4.2s, RPO") || !strings.Contains(line, "data-valid (L3)") || !strings.Contains(line, "integrity ok") {
 		t.Errorf("unexpected pass line: %q", line)
 	}
 	if !strings.Contains(line, "RPO") {
@@ -477,8 +477,8 @@ func TestFormatDrillLine(t *testing.T) {
 		Proof: "p", Verified: true, RTOSeconds: 2.1, Detail: "ready in 800ms",
 		Checks: []contextspec.CheckOutcome{{Type: "serve", Pass: true, Detail: "ready in 800ms"}},
 	}
-	line = formatDrillLine(servePass)
-	if !strings.HasPrefix(line, "✓ p — serves (L4) in") {
+	line = formatDrillLine(servePass, contextspec.DrillBudgets{})
+	if !strings.HasPrefix(line, "✓ p — restored in 2.1s — serves (L4)") {
 		t.Errorf("unexpected serve pass line: %q", line)
 	}
 
@@ -486,7 +486,7 @@ func TestFormatDrillLine(t *testing.T) {
 		Proof: "p", Verified: false, RTOSeconds: 1, Detail: "sqlite: integrity FAILED: corrupt",
 		Checks: []contextspec.CheckOutcome{{Type: "sqlite", Pass: false, Detail: "integrity FAILED: corrupt"}},
 	}
-	line = formatDrillLine(fail)
+	line = formatDrillLine(fail, contextspec.DrillBudgets{})
 	if !strings.HasPrefix(line, "✗ p — NOT verified") || !strings.Contains(line, "integrity FAILED") {
 		t.Errorf("unexpected fail line: %q", line)
 	}
@@ -495,9 +495,55 @@ func TestFormatDrillLine(t *testing.T) {
 	}
 
 	errRes := drill.Result{Proof: "p", Err: fmt.Errorf("boom")}
-	line = formatDrillLine(errRes)
+	line = formatDrillLine(errRes, contextspec.DrillBudgets{})
 	if line != "✗ p — boom" {
 		t.Errorf("unexpected error line: %q", line)
+	}
+}
+
+// TestFormatDrillLineStopwatch pins the three shapes the verdict line's
+// stopwatch clause can take: comfortably inside a declared RTO budget,
+// past it, and with no budget declared at all to compare against.
+func TestFormatDrillLineStopwatch(t *testing.T) {
+	checks := []contextspec.CheckOutcome{{Type: "sqlite", Pass: true, Detail: "integrity ok"}}
+	detail := "integrity ok; users=95 (>= 90% of live 100 = 90)"
+
+	cases := []struct {
+		name    string
+		res     drill.Result
+		budgets contextspec.DrillBudgets
+		want    string
+	}{
+		{
+			name:    "pass within budget",
+			res:     drill.Result{Proof: "app-db-recovery", Verified: true, RTOSeconds: 0.4, Detail: detail, Checks: checks},
+			budgets: contextspec.DrillBudgets{RTO: 5 * time.Minute},
+			want:    "✓ app-db-recovery — restored in 0.4s (budget 5m) — data-valid (L3): integrity ok; users=95 (>= 90% of live 100 = 90)",
+		},
+		{
+			name: "budget exceeded",
+			res: drill.Result{
+				Proof: "app-db-recovery", Verified: false, RTOSeconds: 372, Detail: detail,
+				Checks: append(checks, contextspec.CheckOutcome{Type: "budget_rto", Pass: false, Detail: "RTO 6m12s exceeds budget 5m"}),
+			},
+			budgets: contextspec.DrillBudgets{RTO: 5 * time.Minute},
+			want:    "✗ app-db-recovery — restored in 6m12s, budget 5m EXCEEDED — data-valid (L3): integrity ok; users=95 (>= 90% of live 100 = 90)",
+		},
+		{
+			name:    "no budget declared",
+			res:     drill.Result{Proof: "app-db-recovery", Verified: true, RTOSeconds: 0.4, Detail: detail, Checks: checks},
+			budgets: contextspec.DrillBudgets{},
+			want:    "✓ app-db-recovery — restored in 0.4s — data-valid (L3): integrity ok; users=95 (>= 90% of live 100 = 90)",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := formatDrillLine(c.res, c.budgets)
+			if got != c.want {
+				t.Errorf("got  %q\nwant %q", got, c.want)
+			}
+		})
 	}
 }
 

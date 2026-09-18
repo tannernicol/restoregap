@@ -4,8 +4,8 @@
 # Cut a release when a v* tag is pushed.
 #
 # Deliberately does NOT run `make verify`: that target includes the platform
-# gate from a checkout that only exists on Tanner's machine, so it cannot run
-# here. The checks below are the portable subset.
+# gate from a checkout that only exists on the maintainer's machine, so it
+# cannot run here. The checks below are the portable subset.
 #
 # The scrub gate runs BEFORE anything is published. This repo leaked a real
 # ed25519 private key once (2026-08-03) past a scan that only looked for

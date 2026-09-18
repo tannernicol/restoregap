@@ -1,7 +1,10 @@
-Deliberate public vanity import path. This repo is the OSS export of Restore
-Gap: its canonical *public* Go import path is github.com/tannernicol/restoregap
-(the `origin` remote consumers import from), while `gitea` remote
-tanner/restoregap-public is the private working mirror. Importers must reach the
-module via GitHub, so the module path follows the GitHub identity, not the
-private Gitea home. This file is internal-only and excluded from the public
-export by .publishignore.
+Module path is github.com/tannernicol/restoregap, not the private Gitea home.
+
+This is the PUBLIC OSS export staging tree. The module path is the import path
+consumers write once the tool is published, so it must not follow the private
+git host. Changing it to match the internal repo would break every downstream
+import at the moment of publication — the one time it matters.
+
+Vanity path restoregap.com deferred 2026-08-07 (domain owned, no landing page
+yet); module moved to the GitHub path the same day. Recorded in
+infra-config/gitea/layout.tsv.

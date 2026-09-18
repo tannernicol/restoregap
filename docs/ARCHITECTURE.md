@@ -13,7 +13,7 @@ reference until the cutover gate passes; it is not refactored further.
   bags. The rewrite fixes these by design, not by refactor.
 - UI reset: one design system for every HTML artifact (see §UI).
 
-## Compatibility stance: clean slate (decided by Tanner, 2026-07-16)
+## Compatibility stance: clean slate (decided by the maintainer, 2026-07-16)
 
 No backwards/forwards compatibility is required. Schemas, ledger format, and CLI
 may be redesigned freely. What MUST carry over is **semantics**, not bytes:
@@ -66,7 +66,7 @@ may be redesigned freely. What MUST carry over is **semantics**, not bytes:
    proofs: [...]                 # unchanged in spirit: status + hashes + optional ed25519
    ```
 
-   Tanner's real `~/.config/restoregap/restoregap.local.yml` is hand-converted at
+   The maintainer's real `~/.config/restoregap/restoregap.local.yml` is hand-converted at
    cutover; a `migrate` command is optional later, not v1 scope.
 6. **MCP:** same 7 tool *capabilities* (preflight intent/diff, acknowledge_risk,
    explain_decision, required_proof, ledger_query, story); schemas may be cleaned up.
@@ -188,7 +188,7 @@ history — it appends.
 
 ## UI (design system + inlined bundle)
 
-Decision (Tanner, 2026-07-16): professional artifact UI, NOT walls of text; dark-first,
+Decision (the maintainer, 2026-07-16): professional artifact UI, NOT walls of text; dark-first,
 calm (no motion/shimmer/flashing — durable preference); artifacts stay SELF-CONTAINED
 single HTML files (offline, emailable, archivable — that's the evidence-product promise).
 
@@ -227,5 +227,5 @@ single HTML files (offline, emailable, archivable — that's the evidence-produc
 4. GitHub/AWS adapters, release gates, agent/github demos.
 5. Cutover gate → repoint ~/bin/restoregap → archive Python as reference.
 
-Repo stays PRIVATE (Gitea origin; no GitHub until the existing scanner-kkr
-publish-approval flow says otherwise).
+Repo stays PRIVATE (Gitea origin; no GitHub until the maintainer's existing
+internal publish-approval flow says otherwise).

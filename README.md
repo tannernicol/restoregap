@@ -1,6 +1,10 @@
 # Restore Gap
 
-**Prove your recovery works — then refuse the risky change until it does.**
+**Everyone tests the alarm. Nobody runs the drill.**
+
+You know the drill.
+
+*Prove your recovery works — then refuse the risky change until it does.*
 
 [![ci](https://github.com/tannernicol/restoregap/actions/workflows/ci.yml/badge.svg)](https://github.com/tannernicol/restoregap/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/tannernicol/restoregap?include_prereleases&label=release)](https://github.com/tannernicol/restoregap/releases)
@@ -9,24 +13,27 @@
 
 ![restoregap: check finds the stale copy, drill proves the restore, preflight refuses the change until it does](demo/demo.gif)
 
-Your nightly backup job says *success*. Restore Gap restores that backup for
-real, in a sandbox, checks the result, and refuses the destructive change —
-yours or your coding agent's — until that proof exists and is fresh. One
-static binary, MIT, no account, no phone-home. Built for people who run their
+> Your nightly backup job says **success**. That was the alarm test — nobody left the building.
+> Restore Gap runs the drill: it restores the backup for real, in a sandbox, with a stopwatch, and writes down the result.
+> Your coding agent goes to `rm app.db`. **BLOCK** — no proof. Under a second later: restored, 95 users, under budget. **PASS.**
+> Thirty days later that proof expires and it's **BLOCK** again — on a clock, whether you feel like it or not. Look alive.
+
+One static binary, MIT, no account, no phone-home. Built for people who run their
 own machines and let scripts or agents change them.
 
 ## Quick start
 
 ```console
-$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.9.2/scripts/install.sh && sh install.sh   # pinned tag; verifies checksums
+$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.10.0/scripts/install.sh && sh install.sh   # pinned tag; verifies checksums
 
 # Try it on the bundled fixture: a project, a "backup" that quietly went stale, an agent about to delete the db
 $ demo/setup.sh /tmp/rg-demo && cd /tmp/rg-demo
+$ export RESTOREGAP_LEDGER=$PWD/ledger.jsonl    # a recovery tool must not pollute your real ledger with demo entries
 
 # The proof — a real restore in a sandbox, which diff can't give you:
 $ restoregap drill propose proj/app.db --source backup/app.db > restoregap.local.yml
 $ restoregap preflight --intent rm-app-db.yml   # BLOCK — proof "app-db-recovery" missing        (exit 1)
-$ restoregap drill                              # ✓ app-db-recovery — data-valid (L3): integrity ok; users=95 (>= 90% of live 100)
+$ restoregap drill                              # ✓ app-db-recovery — restored in 0.0s — data-valid (L3): integrity ok; users=95 (>= 90% of live 100 = 90)
 $ restoregap preflight --intent rm-app-db.yml   # PASS — and BLOCK again the day that proof expires (exit 0)
 
 # The zero-config front door — what exists in exactly one place (copy/rsync-style backups):
@@ -80,7 +87,7 @@ it against the release's `checksums.txt`, and puts it in `~/.local/bin` —
 never sudo, never `curl | sh`:
 
 ```console
-$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.9.2/scripts/install.sh
+$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.10.0/scripts/install.sh
 $ less install.sh && sh install.sh
 ```
 
@@ -120,9 +127,31 @@ whether it gets built.
 Already running it on more than one host? `bundle export` + `bundle merge` gets you
 that fleet view today, free — see [docs/ENTERPRISE.md](docs/ENTERPRISE.md).
 
+## FAQ
+
+**I already have restic / borg / ZFS snapshots.**
+Good — that's the alarm. When did you last restore from one, and how long did
+it take? `restoregap drill` answers that on a schedule and writes it down —
+say which one you use on [the comparators issue](https://github.com/tannernicol/restoregap/issues/2).
+
+**My agent already has deny rules.**
+Deny rules are the net. Restore Gap is the reason you can say yes: the change
+is allowed because the way back is proven and fresh.
+
+**Isn't this just `diff`?**
+`diff` proves two files match today. A drill proves you can come back
+tomorrow, and how long it takes.
+
+**Does it phone home?**
+No account, no telemetry, no network calls except the ones your restore
+needs. It doesn't have a home.
+
 ## Docs
 
-[Walkthrough](docs/walkthrough.md) · [Authoring drills](docs/drill-authoring.md) ·
-[Architecture](docs/ARCHITECTURE.md) · [Evidence & compliance map](docs/COMPLIANCE_MAP.md) ·
+[Walkthrough](docs/walkthrough.md) · [Why not a script?](docs/why-not-a-script.md) ·
+[Authoring drills](docs/drill-authoring.md) · [Discover](docs/DISCOVER.md) ·
+[Agent gate](docs/agent-gate.md) · [GitHub Action](docs/github-action.md) ·
+[Schema](docs/SCHEMA.md) · [The recovery story](docs/recovery-story.md) ·
+[Enterprise](docs/ENTERPRISE.md) · [Architecture](docs/ARCHITECTURE.md) ·
 [Contributing](CONTRIBUTING.md) ·
 [Security](SECURITY.md) · [Changelog](CHANGELOG.md) · MIT.

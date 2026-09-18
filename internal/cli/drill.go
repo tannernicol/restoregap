@@ -268,33 +268,87 @@ func runDrills(out io.Writer, drills []contextspec.Drill, only, sandboxDir strin
 			PinCheck:       d.PinCheck,
 		})
 		results = append(results, res)
-		_, _ = fmt.Fprintln(out, formatDrillLine(res))
+		_, _ = fmt.Fprintln(out, formatDrillLine(res, d.Budgets))
 	}
 	return results, nil
 }
 
-// formatDrillLine renders one drill's CLI-facing line. A pass names the
-// recovery level it earned (contextspec.LevelFromChecks — the same mapping
-// LevelOf uses for a recorded proof, so a live run and the status inventory
-// never disagree) alongside its RTO/RPO measurements; a failure names the
-// failing check(s) first (summarizeDetail in the drill package already
-// orders them that way) so the cause is visible before anything else. A
-// failed run never claims a level — LevelOf's own rule is that "verified"
-// is a precondition for any rung above declared, and a failing drill isn't.
-func formatDrillLine(res drill.Result) string {
+// formatDrillLine renders one drill's CLI-facing line. The stopwatch clause
+// leads: how long the recovery took, held up against the declared RTO budget
+// when there is one — "restored in 0.4s (budget 5m)" on plenty of headroom,
+// "restored in 6m12s, budget 5m EXCEEDED" past it, or just "restored in 0.4s"
+// with no budget declared at all. A pass then names the recovery level it
+// earned (contextspec.LevelFromChecks — the same mapping LevelOf uses for a
+// recorded proof, so a live run and the status inventory never disagree)
+// alongside its detail; a failure names the failing check(s) first
+// (summarizeDetail in the drill package already orders them that way) so the
+// cause is visible before anything else. The one exception is a run whose
+// data checks all passed but which missed its RTO budget: the data really
+// was recovered and verified, just too slowly, so that line still earns and
+// shows a level — everything else that fails a check never claims one,
+// because LevelOf's own rule is that "verified" is a precondition for any
+// rung above declared.
+func formatDrillLine(res drill.Result, budgets contextspec.DrillBudgets) string {
 	if res.Err != nil {
 		return fmt.Sprintf("✗ %s — %v", res.Proof, res.Err)
 	}
-	rto := contextspec.FormatRTO(res.RTOSeconds)
+	elapsed := formatFriendlyRTO(time.Duration(res.RTOSeconds * float64(time.Second)).Round(time.Millisecond))
 	rpo := ""
 	if res.RPOSeconds != nil {
 		rpo = fmt.Sprintf(", RPO %s", contextspec.FormatRPO(*res.RPOSeconds))
 	}
-	if res.Verified {
-		level := contextspec.LevelFromChecks(res.Checks)
-		return fmt.Sprintf("✓ %s — %s (L%d) in %s%s: %s", res.Proof, level, level.Rung(), rto, rpo, res.Detail)
+	rtoExceeded := budgets.RTO > 0 && res.RTOSeconds > budgets.RTO.Seconds()
+	stopwatch := fmt.Sprintf("restored in %s%s", elapsed, rpo)
+	switch {
+	case rtoExceeded:
+		stopwatch = fmt.Sprintf("%s, budget %s EXCEEDED", stopwatch, formatFriendlyRTO(budgets.RTO))
+	case budgets.RTO > 0:
+		stopwatch = fmt.Sprintf("%s (budget %s)", stopwatch, formatFriendlyRTO(budgets.RTO))
 	}
-	return fmt.Sprintf("✗ %s — NOT verified (%s%s): %s", res.Proof, rto, rpo, res.Detail)
+
+	if res.Verified || (rtoExceeded && nonBudgetChecksPassed(res.Checks)) {
+		level := contextspec.LevelFromChecks(res.Checks)
+		mark := "✓"
+		if !res.Verified {
+			mark = "✗"
+		}
+		return fmt.Sprintf("%s %s — %s — %s (L%d): %s", mark, res.Proof, stopwatch, level, level.Rung(), res.Detail)
+	}
+	return fmt.Sprintf("✗ %s — NOT verified (%s%s): %s", res.Proof, elapsed, rpo, res.Detail)
+}
+
+// nonBudgetChecksPassed reports whether every declared (non-budget) check
+// passed — the synthetic budget_rto/budget_rpo outcomes applyBudgets appends
+// are excluded, since a budget miss is judged separately from data validity.
+func nonBudgetChecksPassed(checks []contextspec.CheckOutcome) bool {
+	for _, c := range checks {
+		if c.Type == "budget_rto" || c.Type == "budget_rpo" {
+			continue
+		}
+		if !c.Pass {
+			return false
+		}
+	}
+	return true
+}
+
+// formatFriendlyRTO renders an RTO-scale duration the way an operator would
+// say it: tenths of a second below one second ("0.4s"), and Go's own
+// duration string at or above it ("12.3s", "6m12s") with a trailing
+// zero-seconds component trimmed ("5m0s" -> "5m") so a round budget reads
+// back the way it was declared. RTO budgets/measurements live in the
+// seconds-to-minutes range in practice (calibrate.go's own roundUpFriendlyRTO
+// only ever rounds to a whole 30s or a whole minute), so minutes are as far
+// as this needs to go.
+func formatFriendlyRTO(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	s := d.String()
+	if trimmed := strings.TrimSuffix(s, "0s"); trimmed != s && strings.HasSuffix(trimmed, "m") {
+		return trimmed
+	}
+	return s
 }
 
 // anyDrillMatches reports whether any declared drill has the given proof id.

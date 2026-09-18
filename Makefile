@@ -9,11 +9,47 @@
 # to Tier 1 is a coverage investment, not a config change.
 PLATFORM_MK ?= $(HOME)/homelab/mk/verify.mk
 COVER_MIN ?= 0
+
+# The private gauntlet is optional: a clone that does not have PLATFORM_MK
+# (e.g. the public export, or any machine other than the maintainer's) still
+# gets a working build/test/vet/clean loop from the fallback block below.
+# On the maintainer's machine this resolves true and behaves exactly as the
+# old unconditional `include` did — same file, same targets, same `verify`.
+ifneq ($(wildcard $(PLATFORM_MK)),)
 include $(PLATFORM_MK)
+else
+# ---- Stranger fallback (no private platform gauntlet present) ------------
+# PLATFORM_MK below provides `verify`, `vet`, `test-race`, etc. on the
+# maintainer's machine; without it, these targets give a contributor a
+# working build/test/vet loop instead of a hard failure on `make`.
+.DEFAULT_GOAL := help
+
+.PHONY: help build test vet
+help:
+	@echo "restoregap — available targets:"
+	@echo "  build       build ./cmd/restoregap to ./restoregap"
+	@echo "  test        go test ./..."
+	@echo "  vet         go vet ./..."
+	@echo "  reuse-lint  REUSE/SPDX license check (skips if 'reuse' is not installed)"
+	@echo "  clean       remove build artifacts"
+	@echo
+	@echo "note: the full internal verification gauntlet (make verify) needs"
+	@echo "the maintainer's private platform tooling and is not available here."
+
+build:
+	go build -trimpath -o restoregap ./cmd/restoregap
+
+test:
+	go test ./...
+
+vet:
+	go vet ./...
+endif
 
 .PHONY: clean
 clean:
 	rm -f coverage.out
+	rm -f restoregap
 
 # Re-record the README demo (needs vhs, ttyd, ffmpeg, sqlite3). See demo/demo.tape.
 .PHONY: demo

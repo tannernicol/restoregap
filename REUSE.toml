@@ -43,7 +43,10 @@ path = [
 SPDX-FileCopyrightText = "2026 Tanner Nicol"
 SPDX-License-Identifier = "MIT"
 
-# Binaries and images.
+# Binaries and images. The bare *.gif/*.ico/*.png/*.svg patterns above only
+# match root-level files under this REUSE version, so files that already
+# live under a subdirectory (demo/demo.gif, ui/mark.svg, and the
+# site/assets/* favicon/icon/logo set) are listed explicitly.
 [[annotations]]
 path = [
   "*.gif",
@@ -52,6 +55,9 @@ path = [
   "*.svg",
   "demo/demo.gif",
   "ui/mark.svg",
+  "site/assets/*.ico",
+  "site/assets/*.png",
+  "site/assets/*.svg",
 ]
 SPDX-FileCopyrightText = "2026 Tanner Nicol"
 SPDX-License-Identifier = "MIT"
