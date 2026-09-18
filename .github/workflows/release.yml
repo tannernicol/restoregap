@@ -69,6 +69,13 @@ jobs:
       - name: test
         run: go test ./...
 
+      # .goreleaser.yml catalogs every archive with syft (SPDX + CycloneDX).
+      # The hosted runner does not ship syft; without this step the release
+      # fails after building everything ("syft: executable file not found",
+      # v0.10.0 first attempt, 2026-09-18).
+      - name: install syft (SBOM generator goreleaser shells out to)
+        uses: anchore/sbom-action/download-syft@v0
+
       - name: release
         uses: goreleaser/goreleaser-action@v6
         with:
