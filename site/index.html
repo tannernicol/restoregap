@@ -130,12 +130,12 @@ details p { color: var(--ui-muted); margin: 0 0 20px; }
 <section id="install"><div class="wrap"><h2>Your first drill, on disposable data.</h2><p class="lead">Install the binary, download the example, and watch the same intent block, pass, then block again when the proof expires.</p>
 <div class="install-grid"><div>
 <h3>1. Install</h3>
-<pre><code>curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.11.0/scripts/install.sh
+<pre><code>curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.11.1/scripts/install.sh
 less install.sh
-RESTOREGAP_VERSION=v0.11.0 sh install.sh
+RESTOREGAP_VERSION=v0.11.1 sh install.sh
 export PATH="$HOME/.local/bin:$PATH"</code></pre>
 <h3>2. Run the example</h3>
-<pre><code>git clone --depth 1 --branch v0.11.0 https://github.com/tannernicol/restoregap.git
+<pre><code>git clone --depth 1 --branch v0.11.1 https://github.com/tannernicol/restoregap.git
 cd restoregap
 bash demo/run.sh</code></pre>
 <p class="small">The example needs Bash, Git and SQLite's <code>sqlite3</code> command. It uses disposable files and a separate ledger. You do not need to give it your backups.</p>

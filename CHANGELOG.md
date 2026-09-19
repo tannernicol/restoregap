@@ -6,6 +6,14 @@ each such change is called out here.
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-09-19
+
+Native macOS release verification exposed Linux assumptions in test fixtures.
+Configuration-discovery tests now isolate HOME and use the platform's actual user
+configuration directory. GPG fixtures use short, unique temporary homes so
+macOS socket path limits do not prevent key generation. Runtime behavior and
+file formats are unchanged from 0.11.0.
+
 ## [0.11.0] — 2026-09-19
 
 The local decision layer now binds recovery evidence to the tested recipe and
