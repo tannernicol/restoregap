@@ -21,10 +21,20 @@ event="$(cat)"
 tool="$(jq -er '.tool_name | select(type == "string" and length > 0)' <<<"$event")" || exit 2
 cmd="$(jq -r '.tool_input.command // empty' <<<"$event")" || exit 2
 coverage=()
+require_coverage=0
 if [[ "${RESTOREGAP_REQUIRE_COVERAGE:-0}" == 1 ]]; then
   coverage=(--require-coverage)
+  require_coverage=1
 fi
 action='' desc='' paths=() targets=()
+
+unrecognized_operation() {
+  if (( require_coverage )); then
+    printf 'not evaluated: unrecognized operation\n' >&2
+    exit 2
+  fi
+  exit 0
+}
 
 # File-editing tools, not just Bash. A hook registered only for `matcher:
 # "Bash"` lets an agent edit a DECLARED lifeline with its file-writing tools
@@ -49,7 +59,10 @@ case "$tool" in
     ;;
 esac
 
-[[ -n "$cmd" ]] || exit 0
+if [[ "$tool" != Bash && $require_coverage -eq 1 ]]; then
+  unrecognized_operation
+fi
+[[ -n "$cmd" ]] || unrecognized_operation
 
 # nonflags prints cmd's non-flag words after the verb.
 nonflags() {
@@ -101,7 +114,7 @@ elif [[ "${w[0]}" == dropdb ]]; then
   runshape dropdb
 fi
 
-[[ -n "$action" && ${#paths[@]} -gt 0 ]] || exit 0
+[[ -n "$action" && ${#paths[@]} -gt 0 ]] || unrecognized_operation
 intent="$(mktemp)"
 trap 'rm -f "$intent"' EXIT
 scalar() { printf "'%s'" "${1//\'/\'\'}"; } # single-quoted YAML scalar
