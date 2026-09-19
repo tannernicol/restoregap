@@ -53,20 +53,16 @@ func Merge(paths []string) (contextspec.Context, []Finding, error) {
 		return ctx, nil, err
 	}
 
-	m := newMergeState()
-	for _, path := range paths {
-		ctx, err := contextspec.Load(path)
-		if err != nil {
-			return contextspec.Context{}, nil, err
-		}
-		if err := m.checkVersion(path, ctx.Version); err != nil {
-			return contextspec.Context{}, nil, err
-		}
-		m.mergeGuards(path, ctx)
-		if err := m.mergeRest(path, ctx); err != nil {
-			return contextspec.Context{}, nil, err
-		}
+	layers, err := contextspec.LoadLayers(paths)
+	if err != nil {
+		return contextspec.Context{}, nil, err
 	}
+	m := newMergeState()
+	m.version = layers.Version
+	for _, layer := range layers.Layers {
+		m.mergeGuards(layer.Path, layer.Context)
+	}
+	m.facts, m.proofs, m.drills = layers.Facts, layers.Proofs, layers.Drills
 
 	merged := contextspec.Context{
 		Version: m.version,
@@ -74,7 +70,7 @@ func Merge(paths []string) (contextspec.Context, []Finding, error) {
 		Facts:   m.facts,
 		Proofs:  m.proofs,
 		Drills:  m.drills,
-		Origin:  joinOrigins(paths),
+		Origin:  layers.Origin,
 	}
 	return merged, m.findings, nil
 }
@@ -83,20 +79,15 @@ func Merge(paths []string) (contextspec.Context, []Finding, error) {
 // stays a short, readable ladder of steps rather than one long function
 // (the gocyclo cap this codebase enforces).
 type mergeState struct {
-	haveVersion bool
-	version     int
-	firstPath   string
+	version int
 
 	guards    []contextspec.Guard
 	guardIdx  map[string]int
 	guardFile map[string]string
 
-	facts   []contextspec.Fact
-	factAt  map[string]string
-	proofs  []contextspec.Proof
-	proofAt map[string]string
-	drills  []contextspec.Drill
-	drillAt map[string]string
+	facts  []contextspec.Fact
+	proofs []contextspec.Proof
+	drills []contextspec.Drill
 
 	findings []Finding
 }
@@ -105,22 +96,7 @@ func newMergeState() *mergeState {
 	return &mergeState{
 		guardIdx:  map[string]int{},
 		guardFile: map[string]string{},
-		factAt:    map[string]string{},
-		proofAt:   map[string]string{},
-		drillAt:   map[string]string{},
 	}
-}
-
-func (m *mergeState) checkVersion(path string, version int) error {
-	if !m.haveVersion {
-		m.haveVersion, m.version, m.firstPath = true, version, path
-		return nil
-	}
-	if version != m.version {
-		return fmt.Errorf("policy: version mismatch: %s is version %d, %s is version %d",
-			m.firstPath, m.version, path, version)
-	}
-	return nil
 }
 
 // mergeGuards folds one file's guards into the accumulator, tighten-only
@@ -148,57 +124,14 @@ func (m *mergeState) mergeGuards(path string, ctx contextspec.Context) {
 	}
 }
 
-// mergeRest folds one file's facts/proofs/drills into the accumulator by
-// plain union — a duplicate id across files is an error naming both,
-// mirroring contextspec.LoadAll exactly: these are not policy guards, so
-// tighten-only has no meaning for them, and a silently-collapsing duplicate
-// would hide the same kind of drift LoadAll's own union guards against.
-func (m *mergeState) mergeRest(path string, ctx contextspec.Context) error {
-	for i := range ctx.Proofs {
-		ctx.Proofs[i].Scope = contextspec.EffectiveProofScope(ctx, ctx.Proofs[i])
-	}
-	if err := mergeUnique("fact", path, ctx.Facts, m.factAt, func(f contextspec.Fact) string { return f.ID }, &m.facts); err != nil {
-		return err
-	}
-	if err := mergeUnique("proof", path, ctx.Proofs, m.proofAt, func(p contextspec.Proof) string { return p.ID }, &m.proofs); err != nil {
-		return err
-	}
-	if err := mergeUnique("drill", path, ctx.Drills, m.drillAt, func(d contextspec.Drill) string { return d.Proof }, &m.drills); err != nil {
-		return err
-	}
-	return nil
-}
-
-// mergeUnique appends items into *out, recording each id's source path in
-// at so a later duplicate names both the file it was first seen in and the
-// one it collided with — contextspec.LoadAll's own mergeByID, duplicated
-// here because that helper is unexported and facts/proofs/drills need
-// exactly its semantics, unlike guards.
-func mergeUnique[T any](kind, path string, items []T, at map[string]string, idOf func(T) string, out *[]T) error {
-	for _, item := range items {
-		id := idOf(item)
-		if prev, dup := at[id]; dup {
-			return fmt.Errorf("policy: duplicate %s id %q in %s and %s", kind, id, prev, path)
-		}
-		at[id] = path
-		*out = append(*out, item)
-	}
-	return nil
-}
-
-func joinOrigins(paths []string) string {
-	out := paths[0]
-	for _, p := range paths[1:] {
-		out += ", " + p
-	}
-	return out
-}
-
 // tightens reports whether candidate is a legal tighten-or-equal evolution
 // of existing (same guard id, a later layer): every dimension the spec
 // names — enforcement, required proofs/facts, max proof age, matched paths
 // — only ever gets stricter or stays the same, never weaker.
 func tightens(existing, candidate contextspec.Guard) bool {
+	if existing.RequireBound && !candidate.RequireBound {
+		return false
+	}
 	if enforcementRank(candidate.Enforcement) < enforcementRank(existing.Enforcement) {
 		return false
 	}

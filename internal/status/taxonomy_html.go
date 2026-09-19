@@ -102,7 +102,8 @@ type EstateRow struct {
 	// Why is TreeRow.Why (InventoryRow.ProofAge unmodified) — the row's
 	// single age/expiry field, shown for every row regardless of whether it
 	// was drilled or is attestation-only, never in two vocabularies.
-	Why string
+	Why     string
+	Binding string
 	// NextAction is the single exact remediation command
 	// (next.go's nextStepCommandFor — the SAME command `restoregap next`/
 	// the To-green panel already show for this proof) for a genuine gap row
@@ -231,7 +232,7 @@ func buildEstateLayer(g LayerGroup, byProof map[string]InventoryRow) EstateLayer
 			}
 			row := EstateRow{
 				Proof: r.Proof, State: r.State, Bucket: bucket,
-				Artifact: orEmDashTax(r.Artifact), Level: r.Level, Why: r.Why,
+				Artifact: orEmDashTax(r.Artifact), Level: r.Level, Why: r.Why, Binding: byProof[r.Proof].Binding,
 			}
 			if isGap {
 				row.NextAction = nextStepCommandFor(byProof[r.Proof])

@@ -21,10 +21,9 @@
 .platform-sdk-ref
 .ui-kit.json
 
-# Decided (2026-09-17): stays private. docs/COMPLIANCE_MAP.md is go-to-market
-# pitch language that contradicts the settled positioning (a recovery GATE,
-# not a compliance/posture tool) and references a `restoregap evidence
-# --framework` flag and a `compliance/controls.yaml` file that do not exist.
+# Historical pitch with unsupported framework/controls claims. Evidence may
+# support leadership, compliance or insurance review, but those flags and
+# certification claims are not implemented.
 docs/COMPLIANCE_MAP.md
 
 # Platform-internal conformance marker (livehost test allowlist), not part of the product.
@@ -43,3 +42,4 @@ POST_LAUNCH.md
 
 # internal launch prep (numbers re-verification, launch-day checklist) — never exported
 docs/launch/*
+docs/plans/*

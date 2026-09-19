@@ -5,6 +5,7 @@ package bundle
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"crypto/ed25519"
 	"encoding/hex"
@@ -32,6 +33,14 @@ type VerifyResult struct {
 // chain (see verifySliceChain). It stops at the first failure — a bundle
 // that fails one check is not "mostly trustworthy".
 func Verify(path string) (VerifyResult, error) {
+	return VerifyWithExpectedKey(path, "")
+}
+
+// VerifyWithExpectedKey verifies a full tar.gz bundle and, when expectedKey
+// is supplied, requires the detached signer to match that independently
+// trusted Ed25519 public key. An empty expectedKey preserves the historical
+// integrity-only API for full bundles.
+func VerifyWithExpectedKey(path, expectedKey string) (VerifyResult, error) {
 	members, err := readTarGz(path)
 	if err != nil {
 		return VerifyResult{}, fmt.Errorf("bundle verify: %s: %w", path, err)
@@ -46,20 +55,12 @@ func Verify(path string) (VerifyResult, error) {
 		return VerifyResult{OK: false, Reason: "missing " + signatureName}, nil
 	}
 
-	var sig Signature
-	if err := json.Unmarshal(sigBytes, &sig); err != nil {
-		return VerifyResult{OK: false, Reason: fmt.Sprintf("unreadable %s: %v", signatureName, err)}, nil
+	signatureOK, reason, err := verifyFullBundleSignature(manifestBytes, sigBytes, expectedKey)
+	if err != nil {
+		return VerifyResult{}, err
 	}
-	pub, err := hex.DecodeString(sig.PublicKeyHex)
-	if err != nil || len(pub) != ed25519.PublicKeySize {
-		return VerifyResult{OK: false, Reason: "signature public key is not a valid Ed25519 key"}, nil
-	}
-	sigRaw, err := hex.DecodeString(sig.SignatureHex)
-	if err != nil || len(sigRaw) != ed25519.SignatureSize {
-		return VerifyResult{OK: false, Reason: "signature is not a valid Ed25519 signature"}, nil
-	}
-	if !ed25519.Verify(pub, manifestBytes, sigRaw) {
-		return VerifyResult{OK: false, Reason: "signature does not verify against manifest.json — tampered or wrong key"}, nil
+	if !signatureOK {
+		return VerifyResult{OK: false, Reason: reason}, nil
 	}
 
 	var manifest Manifest
@@ -81,6 +82,34 @@ func Verify(path string) (VerifyResult, error) {
 	}
 
 	return VerifyResult{OK: true, Manifest: manifest}, nil
+}
+
+func verifyFullBundleSignature(manifestBytes, sigBytes []byte, expectedKey string) (bool, string, error) {
+	var sig Signature
+	if err := json.Unmarshal(sigBytes, &sig); err != nil {
+		return false, fmt.Sprintf("unreadable %s: %v", signatureName, err), nil
+	}
+	pub, err := hex.DecodeString(sig.PublicKeyHex)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return false, "signature public key is not a valid Ed25519 key", nil
+	}
+	if expectedKey != "" {
+		expected, err := parseExpectedPublicKey(expectedKey)
+		if err != nil {
+			return false, "", err
+		}
+		if !bytes.Equal(pub, expected) {
+			return false, "bundle signer does not match the expected public key", nil
+		}
+	}
+	sigRaw, err := hex.DecodeString(sig.SignatureHex)
+	if err != nil || len(sigRaw) != ed25519.SignatureSize {
+		return false, "signature is not a valid Ed25519 signature", nil
+	}
+	if !ed25519.Verify(pub, manifestBytes, sigRaw) {
+		return false, "signature does not verify against manifest.json — tampered or wrong key", nil
+	}
+	return true, "", nil
 }
 
 // verifyContentDigests recomputes every context file's sha256 and the

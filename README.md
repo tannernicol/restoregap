@@ -7,29 +7,28 @@
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![go](https://img.shields.io/github/go-mod/go-version/tannernicol/restoregap)](go.mod)
 
-Your backup job says **success**. Can you
-recover the thing it protects, and is that proof still fresh when a risky local
-change is about to happen?
+Agents can change a system faster than you can review it. Before a risky change,
+ask for the recovery evidence—and keep the reason for the decision.
 
-Restore Gap is a local, MIT-licensed CLI. It records recovery proofs, evaluates
-declared changes against those proofs, and keeps an append-only ledger. It does
-not intercept every command, provide an operating-system sandbox, or replace
-your agent's permissions and deny rules. The gate applies where you explicitly
-wire it: a hook, a CI check, or the MCP server.
+Restore Gap is a local, MIT-licensed CLI that checks **proposed changes** against
+declared recovery requirements. Its read-only gate returns **pass, warn, or block**
+and records the decision in a local ledger. Separate, explicit drills test your
+recovery procedure and refresh its evidence. The gate never applies a change or
+runs a restore. Wire it into a hook, CI check, or agent through MCP.
 
 Demo recording: [watch the terminal recording](demo/demo.gif).
 
 ## Quick start
 
-Install the v0.10.1 release, then run the isolated demo fixture. The demo needs
+Install the v0.11.0 release, then run the isolated demo fixture. The demo needs
 `sqlite3` because its fixture is a real SQLite database.
 
 ```console
-$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.10.1/scripts/install.sh
+$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.11.0/scripts/install.sh
 $ less install.sh
-$ RESTOREGAP_VERSION=v0.10.1 sh install.sh
+$ RESTOREGAP_VERSION=v0.11.0 sh install.sh
 $ export PATH="$HOME/.local/bin:$PATH"   # use /usr/local/bin when installing as root
-$ git clone --depth 1 --branch v0.10.1 https://github.com/tannernicol/restoregap.git
+$ git clone --depth 1 --branch v0.11.0 https://github.com/tannernicol/restoregap.git
 $ cd restoregap
 $ demo/run.sh
 ```
@@ -58,12 +57,20 @@ The smallest useful loop is:
 |---|---|---|
 | Drift | `restoregap check <live> <recovery>` | Which entries exist in exactly one place or differ today. |
 | Proof | `restoregap drill` | Whether a declared recovery source can reconstruct the artifact and pass its checks. |
-| Gate | `restoregap preflight` | Whether a declared intent, diff, or Terraform plan has a fresh proof for the guards it touches. |
+| Gate | `restoregap preflight` | Whether a supplied intent or diff satisfies the recovery requirements for the guards it touches. |
 
 `drill propose` measures a live artifact and writes a draft context. You review
 that context, then run the drill. A proof expires; an expired proof does not
 clear a guard. The ledger records decisions, drill results, and owner
-overrides. Verify it with `restoregap ledger verify`.
+overrides. Read it with `restoregap ledger show`; check its chain with
+`restoregap ledger verify`.
+
+For agent workflows, enable `preflight --require-coverage`: every supplied
+path, destination, package and command must match declared coverage. Use
+`require_bound: true` with `require_verified: true` on guards that require a
+tested, unchanged recovery recipe. A proposed change to a declared recovery
+dependency invalidates the affected proof for that decision. See the
+[agent gate](docs/agent-gate.md) and the [restic recipe](docs/examples/restic.md).
 
 The built-in policy covers SSH keys and recovery bundles even without a custom
 context. For an agent integration, `restoregap mcp serve` exposes the same
@@ -72,21 +79,44 @@ preflight decision surface. The example hook in
 narrow set of destructive command shapes can be translated into intents; it is
 an example integration, not universal command interception.
 
+## The ledger explains the decision
+
+`restoregap ledger show --limit 10` answers: **What change was proposed? Why
+did it pass or block? What evidence was used? What should happen next?**
+It also shows recorded drills, owner overrides and chain integrity. JSON output
+is available with `--format json` for agents. The dashboard presents the latest
+decision using the same recorded data; older entries remain readable and are
+labelled when proposal details were not recorded.
+
+The ledger is a local audit trail, not an execution log or a count of incidents
+prevented. A hash chain detects changes against its recorded chain; an owner
+who can replace the whole ledger can replace that history. Keep trusted copies
+and signing keys outside the agent's writable scope when assurance matters.
+
+For a review handoff, `bundle export --summary-only` produces a signed JSON
+summary of test outcomes, freshness, binding and ledger integrity without raw
+paths, commands or configuration. Verification requires an independently trusted
+key. It establishes who signed the record and whether it changed; it does not
+certify compliance, insurance acceptance or universal recoverability.
+[Create and verify a review summary](docs/evidence-handoff.md).
+
 ## Five words
 
-- **proof** — a recorded, expiring result of a real restore with its checks and recovery timing.
+- **proof** — a recorded observation or test result; a verified drill proof states which recovery checks passed and when.
 - **drill** — the declared recovery run that produces a proof.
 - **guard** — a rule naming what must be proven before a matching change is allowed.
-- **intent** — the change under evaluation: an intent file, diff, or Terraform plan.
-- **ledger** — the append-only, hash-chained record of verdicts and overrides.
+- **intent** — the proposed change under evaluation, supplied as an intent file or diff.
+- **ledger** — the decision history: what was evaluated, why it passed or blocked, and which tests or owner exceptions were recorded. A decision does not establish that a change was executed.
 
 ## What it does not claim
 
-Restore Gap checks the recovery process you declare. It does not inspect inside
+Restore Gap checks the recovery process and change scope you declare. It does not inspect inside
 every backup product, make an undeclared recovery path safe, provide an OS-level
 sandbox, or turn an agent into a generally safe operator. Your backup tooling,
 host isolation, permissions, and agent controls remain responsible for those
-parts. For restic, borg, or ZFS targets, see the
+parts. There is no provider-aware AWS, GitHub, or Terraform-plan adapter in this
+release. Model relevant files, commands, packages and recovery dependencies
+explicitly. For restic, borg, or ZFS targets, see the
 [comparators issue](https://github.com/tannernicol/restoregap/issues/2).
 
 ## A possible hosted layer
@@ -119,8 +149,9 @@ checks passed at that time. It cannot guarantee a future restore will succeed.
 
 **Does it phone home?**
 
-No account or telemetry is required. The CLI runs locally and makes network
-calls only when your declared recovery command makes them.
+No account or telemetry is required. Evaluation and offline evidence verification
+make no network calls. Explicit recovery commands and validation probes may use
+the network you configure.
 
 ## Docs
 

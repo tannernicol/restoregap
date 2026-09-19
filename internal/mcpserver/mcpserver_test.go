@@ -233,6 +233,49 @@ func TestPreflightToolExplicitContextPathIsNeverOverriddenByDiscovery(t *testing
 	}
 }
 
+func TestPreflightToolRequireCoverageBlocksUncoveredResource(t *testing.T) {
+	path := writeContext(t, `version: 2
+guards:
+  - id: covered
+    kind: guard
+    match: {paths: ["/covered"], actions: [delete_file]}
+`)
+	text, err := callTool(context.Background(), "preflight_intent", toolArgs{
+		Intent:          "version: 2\naction: delete_file\npaths: [/covered, /uncovered]\n",
+		ContextPath:     path,
+		RequireCoverage: true,
+		AsOf:            "2026-08-20T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := preflightVerdict(t, text); got != "block" {
+		t.Fatalf("strict MCP verdict = %q, want block: %s", got, text)
+	}
+	if !strings.Contains(text, "/uncovered") {
+		t.Errorf("strict MCP result must name uncovered resource: %s", text)
+	}
+}
+
+func TestToolDefsExposeRequireCoverageForPreflightTools(t *testing.T) {
+	for _, want := range []string{"preflight_intent", "preflight_diff"} {
+		var found *toolDef
+		for _, d := range toolDefs() {
+			if d.Name == want {
+				found = &d
+				break
+			}
+		}
+		if found == nil {
+			t.Fatalf("missing %s tool", want)
+		}
+		props, ok := found.InputSchema["properties"].(map[string]any)
+		if !ok || props["require_coverage"] == nil {
+			t.Errorf("%s schema missing require_coverage: %+v", want, found.InputSchema)
+		}
+	}
+}
+
 // TestServeDrillLintOverJSONRPC: an end-to-end round trip through the actual
 // stdio protocol (tools/list then tools/call), not just the callTool helper.
 func TestServeDrillLintOverJSONRPC(t *testing.T) {

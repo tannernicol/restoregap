@@ -211,6 +211,151 @@ guards:
 	}
 }
 
+func TestEvaluateWithOptionsRequiresEveryAddressedPath(t *testing.T) {
+	ctx, err := contextspec.Parse(stringsReader(`version: 2
+guards:
+  - id: covered
+    kind: guard
+    match:
+      paths: ["/covered"]
+      actions: [delete_file]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := intent.ChangeIntent{Action: intent.ActionDeleteFile, Paths: []string{"/covered", "/uncovered"}}
+	legacy := Evaluate([]intent.ChangeIntent{ci}, ctx, fixedNow)
+	if len(legacy) != 1 || legacy[0].Verdict != engine.VerdictPass {
+		t.Fatalf("legacy evaluation changed: %+v", legacy)
+	}
+	strict := EvaluateWithOptions([]intent.ChangeIntent{ci}, ctx, fixedNow, EvaluateOptions{RequireCoverage: true})
+	if len(strict) != 2 {
+		t.Fatalf("strict findings = %+v, want guard result plus one coverage finding", strict)
+	}
+	var gap *engine.Finding
+	for i := range strict {
+		if strict[i].Kind == "coverage" {
+			gap = &strict[i]
+		}
+	}
+	if gap == nil || gap.Verdict != engine.VerdictBlock || gap.Resource != "/uncovered" {
+		t.Fatalf("strict uncovered finding = %+v, want block for /uncovered", gap)
+	}
+}
+
+func TestEvaluateWithOptionsCoversPackagesAndCommandsIndependently(t *testing.T) {
+	ctx, err := contextspec.Parse(stringsReader(`version: 2
+guards:
+  - id: gpu
+    kind: guard
+    match: {packages: ["nvidia*"]}
+  - id: service
+    kind: guard
+    match: {commands: ["systemctl restart*"]}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := intent.ChangeIntent{Action: intent.ActionRunCommand, Command: "systemctl restart gpu", Packages: []string{"nvidia-driver"}}
+	findings := EvaluateWithOptions([]intent.ChangeIntent{ci}, ctx, fixedNow, EvaluateOptions{RequireCoverage: true})
+	for _, f := range findings {
+		if f.Kind == "coverage" {
+			t.Fatalf("covered package/command unexpectedly produced gap: %+v", findings)
+		}
+	}
+}
+
+func TestEvaluateWithOptionsUsesExplicitResourceDimensionWithOtherANDDimensions(t *testing.T) {
+	ctx, err := contextspec.Parse(stringsReader(`version: 2
+guards:
+  - id: combined
+    kind: guard
+    match:
+      paths: ["/covered"]
+      packages: ["nvidia*"]
+      commands: ["systemctl restart*"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := intent.ChangeIntent{
+		Action:   intent.ActionRunCommand,
+		Paths:    []string{"/covered"},
+		Packages: []string{"nvidia-driver"},
+		Command:  "systemctl restart gpu",
+	}
+	findings := EvaluateWithOptions([]intent.ChangeIntent{ci}, ctx, fixedNow, EvaluateOptions{RequireCoverage: true})
+	for _, f := range findings {
+		if f.Kind == "coverage" {
+			t.Fatalf("combined guard unexpectedly left a resource uncovered: %+v", findings)
+		}
+	}
+}
+
+func TestEvaluateWithOptionsRequiresExplicitParentCoverage(t *testing.T) {
+	ctx, err := contextspec.Parse(stringsReader(`version: 2
+guards:
+  - id: child
+    kind: guard
+    match:
+      paths: ["/parent/one"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := intent.ChangeIntent{Action: intent.ActionDeleteFile, Paths: []string{"/parent"}}
+	findings := EvaluateWithOptions([]intent.ChangeIntent{ci}, ctx, fixedNow, EvaluateOptions{RequireCoverage: true})
+	var gap *engine.Finding
+	for i := range findings {
+		if findings[i].Kind == "coverage" {
+			gap = &findings[i]
+		}
+	}
+	if gap == nil || gap.Resource != "/parent" || gap.Verdict != engine.VerdictBlock {
+		t.Fatalf("descendant-only guard must leave parent uncovered, got %+v", findings)
+	}
+}
+
+func TestEvaluateWithOptionsIgnoresWhitespaceResources(t *testing.T) {
+	ctx, err := contextspec.Parse(stringsReader(`version: 2
+guards:
+  - id: package
+    kind: guard
+    match:
+      packages: ["nvidia*"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := intent.ChangeIntent{Action: intent.ActionPackageUpdate, Packages: []string{" \t", "nvidia-driver"}}
+	findings := EvaluateWithOptions([]intent.ChangeIntent{ci}, ctx, fixedNow, EvaluateOptions{RequireCoverage: true})
+	for _, f := range findings {
+		if f.Kind == "coverage" {
+			t.Fatalf("whitespace package unexpectedly counted as a resource: %+v", findings)
+		}
+	}
+	unknown := EvaluateWithOptions([]intent.ChangeIntent{{Action: intent.ActionRunCommand, Command: " \t"}}, contextspec.Context{}, fixedNow, EvaluateOptions{RequireCoverage: true})
+	if len(unknown) != 1 || unknown[0].Resource != "intent" || unknown[0].Verdict != engine.VerdictBlock {
+		t.Fatalf("whitespace command should produce one explicit intent block, got %+v", unknown)
+	}
+}
+
+func TestEvaluateWithOptionsBlocksUnknownIntent(t *testing.T) {
+	findings := EvaluateWithOptions([]intent.ChangeIntent{{}}, contextspec.Context{}, fixedNow, EvaluateOptions{RequireCoverage: true})
+	if len(findings) != 1 || findings[0].Kind != "coverage" || findings[0].Verdict != engine.VerdictBlock {
+		t.Fatalf("unknown strict intent findings = %+v, want one explicit block", findings)
+	}
+	if !strings.Contains(findings[0].Proof, "cannot classify") {
+		t.Errorf("unknown strict intent proof = %q, want classification explanation", findings[0].Proof)
+	}
+	if strings.Contains(findings[0].RequiredNextStep, "disable strict coverage") {
+		t.Errorf("strict coverage remediation must not recommend disabling strict coverage: %q", findings[0].RequiredNextStep)
+	}
+	if !strings.Contains(findings[0].RequiredNextStep, "Declare or review") {
+		t.Errorf("strict coverage remediation should require declaration/review: %q", findings[0].RequiredNextStep)
+	}
+}
+
 // TestGuardMatchesAncestorSubtreeDelete covers the dogfood bug where a guard
 // on a file was not fired by an intent to delete or move the DIRECTORY above
 // it — the directory delete destroys the guarded file without naming it.

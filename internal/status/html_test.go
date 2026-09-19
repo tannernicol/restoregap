@@ -287,6 +287,29 @@ func TestEstateRowShowsInlineNextActionForGapNotForGreen(t *testing.T) {
 	}
 }
 
+func TestRenderHTMLShowsRecentDecisionAndReadOnlyBoundary(t *testing.T) {
+	executed := false
+	s := &Summary{
+		Verdict: "block", Origin: "fixture", GeneratedAt: time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC),
+		LedgerOK: true, Last: &DecisionSummary{
+			When: time.Date(2026, 9, 19, 11, 59, 0, 0, time.UTC), Actor: "agent/test",
+			Verdict: "block", Operation: "preflight", Executed: &executed,
+			Intents:  []ledger.IntentRecord{{Action: "delete_file", Paths: []string{"/srv/cache"}}},
+			Findings: []ledger.FindingRecord{{FindingID: "guard/cache", Verdict: "block", Resource: "/srv/cache", Proof: "proof missing", RequiredNextStep: "run the recovery drill"}},
+		},
+	}
+	rendered, err := s.RenderHTML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(rendered)
+	for _, want := range []string{"Decision ledger", "Proposed change", "delete_file", "proof missing", "run the recovery drill", "did not execute the change"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered dashboard missing %q", want)
+		}
+	}
+}
+
 // ---- footer: real-scale proof freshness (the footer-collision fix) -------
 
 // mkPresentProofs builds n healthy "present" proofs — the case that used to

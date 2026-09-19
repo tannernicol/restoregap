@@ -5,6 +5,69 @@ import (
 	"strings"
 )
 
+// LoadedLayer is one parsed context file with per-file defaults applied to
+// its guards and proofs. It is the shared seam for callers that need both the
+// merged union and per-file provenance.
+type LoadedLayer struct {
+	Path    string
+	Context Context
+}
+
+// LoadedLayers contains the strict union shared by LoadAll and policy.Merge.
+// Guards remain per-layer because LoadAll rejects duplicate guard IDs while
+// policy.Merge applies its separate tighten-only guard overlay.
+type LoadedLayers struct {
+	Version int
+	Origin  string
+	Layers  []LoadedLayer
+	Facts   []Fact
+	Proofs  []Proof
+	Drills  []Drill
+}
+
+// LoadLayers parses paths, checks their common version, resolves each file's
+// scope defaults, and strictly unions facts, proofs, and drills by ID. Guard
+// policy is intentionally left to the caller.
+func LoadLayers(paths []string) (LoadedLayers, error) {
+	if len(paths) == 0 {
+		return LoadedLayers{}, fmt.Errorf("contextspec: LoadLayers requires at least one path")
+	}
+	loaded := LoadedLayers{Layers: make([]LoadedLayer, 0, len(paths))}
+	factAt := map[string]string{}
+	proofAt := map[string]string{}
+	drillAt := map[string]string{}
+	for _, path := range paths {
+		ctx, err := Load(path)
+		if err != nil {
+			return LoadedLayers{}, err
+		}
+		if len(loaded.Layers) == 0 {
+			loaded.Version = ctx.Version
+		} else if ctx.Version != loaded.Version {
+			return LoadedLayers{}, fmt.Errorf("contextspec: version mismatch: %s is version %d, %s is version %d",
+				loaded.Layers[0].Path, loaded.Version, path, ctx.Version)
+		}
+		for i := range ctx.Guards {
+			ctx.Guards[i].Scope = mergeScope(ctx.Scope, ctx.Guards[i].Scope)
+		}
+		for i := range ctx.Proofs {
+			ctx.Proofs[i].Scope = mergeScope(ctx.Scope, ctx.Proofs[i].Scope)
+		}
+		loaded.Layers = append(loaded.Layers, LoadedLayer{Path: path, Context: ctx})
+		if err := mergeByID("fact", path, ctx.Facts, factAt, func(f Fact) string { return f.ID }, &loaded.Facts); err != nil {
+			return LoadedLayers{}, err
+		}
+		if err := mergeByID("proof", path, ctx.Proofs, proofAt, func(p Proof) string { return p.ID }, &loaded.Proofs); err != nil {
+			return LoadedLayers{}, err
+		}
+		if err := mergeByID("drill", path, ctx.Drills, drillAt, func(d Drill) string { return d.Proof }, &loaded.Drills); err != nil {
+			return LoadedLayers{}, err
+		}
+	}
+	loaded.Origin = strings.Join(paths, ", ")
+	return loaded, nil
+}
+
 // LoadAll loads and merges multiple context documents into one, by union:
 // every path's Guards/Facts/Proofs/Drills are appended together. This is
 // what lets a real deployment split declarations across several files (one
@@ -29,55 +92,19 @@ func LoadAll(paths []string) (Context, error) {
 		return Load(paths[0])
 	}
 
-	var merged Context
-	guardAt := map[string]string{}
-	factAt := map[string]string{}
-	proofAt := map[string]string{}
-	drillAt := map[string]string{}
-	origins := make([]string, 0, len(paths))
-
-	for _, p := range paths {
-		ctx, err := Load(p)
-		if err != nil {
-			return Context{}, err
-		}
-		if len(origins) == 0 {
-			merged.Version = ctx.Version
-		} else if ctx.Version != merged.Version {
-			return Context{}, fmt.Errorf("contextspec: version mismatch: %s is version %d, %s is version %d",
-				origins[0], merged.Version, p, ctx.Version)
-		}
-
-		// Resolve each guard/proof's scope against ITS OWN file's scope:
-		// default before merging: once every file's entries share one
-		// Context, there is no longer a single file-level default to fall
-		// back to (merged.Scope is deliberately left zero), so the merge
-		// point is the last place a per-file default can still apply.
-		// mergeScope is idempotent against a zero base, so this is a no-op
-		// for entries that already declare every field themselves.
-		for i := range ctx.Guards {
-			ctx.Guards[i].Scope = mergeScope(ctx.Scope, ctx.Guards[i].Scope)
-		}
-		for i := range ctx.Proofs {
-			ctx.Proofs[i].Scope = mergeScope(ctx.Scope, ctx.Proofs[i].Scope)
-		}
-
-		if err := mergeByID("guard", p, ctx.Guards, guardAt, func(g Guard) string { return g.ID }, &merged.Guards); err != nil {
-			return Context{}, err
-		}
-		if err := mergeByID("fact", p, ctx.Facts, factAt, func(f Fact) string { return f.ID }, &merged.Facts); err != nil {
-			return Context{}, err
-		}
-		if err := mergeByID("proof", p, ctx.Proofs, proofAt, func(pr Proof) string { return pr.ID }, &merged.Proofs); err != nil {
-			return Context{}, err
-		}
-		if err := mergeByID("drill", p, ctx.Drills, drillAt, func(d Drill) string { return d.Proof }, &merged.Drills); err != nil {
-			return Context{}, err
-		}
-		origins = append(origins, p)
+	layers, err := LoadLayers(paths)
+	if err != nil {
+		return Context{}, err
 	}
-
-	merged.Origin = strings.Join(origins, ", ")
+	var merged Context
+	merged.Version, merged.Origin = layers.Version, layers.Origin
+	merged.Facts, merged.Proofs, merged.Drills = layers.Facts, layers.Proofs, layers.Drills
+	guardAt := map[string]string{}
+	for _, layer := range layers.Layers {
+		if err := mergeByID("guard", layer.Path, layer.Context.Guards, guardAt, func(g Guard) string { return g.ID }, &merged.Guards); err != nil {
+			return Context{}, err
+		}
+	}
 	return merged, nil
 }
 

@@ -134,29 +134,28 @@ func TestTextTableHasFiveColumns(t *testing.T) {
 	}
 }
 
-// TestTextDetailSectionNamesGuardResourceProofNext: the Detail section
-// gives each finding its title line, then 2-space-indented Guard/Resource/
-// Proof/Next lines — the information a human needs without a table.
+// TestTextDetailLeadsWithResourceAndAction: readable change context comes
+// first; explanatory evidence is multiline and the technical id is last.
 func TestTextDetailSectionNamesGuardResourceProofNext(t *testing.T) {
 	rep := FromFindings(sampleFindings(), engine.VerdictBlock, fixedTime, "agent/claude", "")
 	text := string(rep.Text())
 	if !strings.Contains(text, "\nDetail\n") {
 		t.Errorf("expected a Detail section header, got:\n%s", text)
 	}
-	if !strings.Contains(text, "cannot prove safe\n") {
-		t.Errorf("expected the finding title as its own line, got:\n%s", text)
+	if !strings.Contains(text, "~/.ssh/id_ed25519 · delete_file — BLOCK\n") {
+		t.Errorf("expected resource/action headline, got:\n%s", text)
 	}
-	if !strings.Contains(text, "  Guard: default-ssh-private-keys\n") {
-		t.Errorf("expected an indented Guard: line, got:\n%s", text)
-	}
-	if !strings.Contains(text, "  Resource: ~/.ssh/id_ed25519\n") {
-		t.Errorf("expected an indented Resource: line, got:\n%s", text)
+	if !strings.Contains(text, "  Why: cannot prove safe\n") {
+		t.Errorf("expected an indented Why: line, got:\n%s", text)
 	}
 	if !strings.Contains(text, "  Proof: no proof vocabulary\n") {
 		t.Errorf("expected an indented Proof: line, got:\n%s", text)
 	}
 	if !strings.Contains(text, "  Next: declare a guard\n") {
 		t.Errorf("expected an indented Next: line, got:\n%s", text)
+	}
+	if !strings.Contains(text, "  Guard: default-ssh-private-keys\n") || !strings.Contains(text, "  ID: finding_1\n") {
+		t.Errorf("expected guard and trailing id, got:\n%s", text)
 	}
 }
 
@@ -165,5 +164,53 @@ func TestTextNoFindings(t *testing.T) {
 	text := string(rep.Text())
 	if !strings.HasPrefix(text, "PASS — ") || !strings.Contains(text, "No findings.") {
 		t.Errorf("expected PASS headline and 'No findings.', got:\n%s", text)
+	}
+}
+
+func TestDecisionScopeAppearsInEveryFormat(t *testing.T) {
+	executed := false
+	rep := FromFindings(sampleFindings(), engine.VerdictBlock, fixedTime, "agent/test", "local")
+	rep.Operation = "preflight"
+	rep.Executed = &executed
+	rep.Proposed = []ProposedChange{{Action: "move_file", Paths: []string{"/srv/live"}, TargetPaths: []string{"/srv/archive"}, Description: "rotate data"}}
+	for _, tc := range []struct {
+		name string
+		got  func() []byte
+	}{
+		{"text", rep.Text},
+		{"markdown", rep.Markdown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := string(tc.got())
+			decisionLabel := "Decision: BLOCK"
+			if tc.name == "markdown" {
+				decisionLabel = "**Decision:** BLOCK"
+			}
+			for _, want := range []string{decisionLabel, "Restore Gap did not execute the change.", "move_file", "/srv/live", "/srv/archive", "no proof vocabulary", "declare a guard"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("%s output missing %q:\n%s", tc.name, want, got)
+				}
+			}
+		})
+	}
+	html, err := rep.HTML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Decision: BLOCK", "Restore Gap did not execute the change.", "move_file", "/srv/live", "/srv/archive", "Proof state", "Required next step"} {
+		if !strings.Contains(string(html), want) {
+			t.Errorf("html output missing %q", want)
+		}
+	}
+	jsonBytes, err := rep.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Report
+	if err := json.Unmarshal(jsonBytes, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Operation != "preflight" || decoded.Executed == nil || *decoded.Executed || len(decoded.Proposed) != 1 {
+		t.Fatalf("JSON decision scope = %#v", decoded)
 	}
 }

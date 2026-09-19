@@ -8,6 +8,7 @@
 package report
 
 import (
+	"strings"
 	"time"
 
 	"github.com/tannernicol/restoregap/internal/engine"
@@ -30,10 +31,44 @@ type Finding struct {
 	Actions          []string `json:"actions"`
 }
 
+// findingHeadline keeps the readable subject ahead of the technical id in
+// human renderings. The id remains available in the detail tail for support
+// and machine correlation.
+func findingHeadline(f Finding) string {
+	parts := make([]string, 0, 2)
+	if f.Resource != "" {
+		parts = append(parts, f.Resource)
+	}
+	if len(f.Actions) > 0 {
+		parts = append(parts, strings.Join(f.Actions, ", "))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "recovery finding")
+	}
+	return strings.Join(parts, " · ") + " — " + strings.ToUpper(f.Verdict)
+}
+
+// ProposedChange is the operation a preflight inspected. It is descriptive
+// evidence for the decision; rendering it never runs the operation.
+type ProposedChange struct {
+	Action        string   `json:"action,omitempty"`
+	Command       string   `json:"command,omitempty"`
+	Packages      []string `json:"packages,omitempty"`
+	Paths         []string `json:"paths,omitempty"`
+	TargetPaths   []string `json:"target_paths,omitempty"`
+	Actor         string   `json:"actor,omitempty"`
+	ContextWindow string   `json:"context_window,omitempty"`
+	Description   string   `json:"description,omitempty"`
+	Source        string   `json:"source,omitempty"`
+}
+
 // Report is the full rendered preflight outcome.
 type Report struct {
-	Schema  int    `json:"schema"`
-	Verdict string `json:"verdict"`
+	Schema    int              `json:"schema"`
+	Verdict   string           `json:"verdict"`
+	Operation string           `json:"operation,omitempty"`
+	Executed  *bool            `json:"executed,omitempty"`
+	Proposed  []ProposedChange `json:"proposed,omitempty"`
 	// GateState is "ran" for a completed evaluation and "broken" when a
 	// required gate check could not run. It is omitted for reports emitted by
 	// older callers, preserving their JSON shape.

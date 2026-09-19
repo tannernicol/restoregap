@@ -4,13 +4,16 @@
 package drill
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	commandrunner "github.com/tannernicol/restoregap/internal/command"
 	"github.com/tannernicol/restoregap/internal/contextspec"
 )
 
@@ -56,6 +59,10 @@ func walkCandidateFiles(path string) ([]string, error) {
 // stores, or returns key content, comments, or anything beyond the
 // SHA256:... string ssh-keygen itself prints as its second output field.
 func collectSSHFingerprints(path string) (map[string]bool, error) {
+	return collectSSHFingerprintsContext(context.Background(), commandrunner.DefaultTimeout, path)
+}
+
+func collectSSHFingerprintsContext(ctx context.Context, timeout time.Duration, path string) (map[string]bool, error) {
 	if _, err := exec.LookPath("ssh-keygen"); err != nil {
 		// A key check that silently passed because the tool is absent would
 		// be exactly the false comfort this product exists to kill (same
@@ -68,11 +75,14 @@ func collectSSHFingerprints(path string) (map[string]bool, error) {
 	}
 	set := map[string]bool{}
 	for _, f := range files {
-		out, err := exec.Command("ssh-keygen", "-lf", f).CombinedOutput()
-		if err != nil {
+		r := commandrunner.Command(ctx, "ssh-keygen", []string{"-lf", f}, commandrunner.Options{Timeout: timeout})
+		if r.Err != nil {
 			continue // not a key file (or unreadable) — not a failure, just not a key
 		}
-		fields := strings.Fields(string(out))
+		if r.Truncated {
+			return nil, fmt.Errorf("ssh-keygen output exceeded capture limit")
+		}
+		fields := strings.Fields(string(r.Output))
 		if len(fields) < 2 || !strings.HasPrefix(fields[1], "SHA256:") {
 			continue
 		}
@@ -99,6 +109,10 @@ func collectSSHFingerprints(path string) (map[string]bool, error) {
 // keyring, never decrypts, and never inspects, logs, stores, or returns key
 // content — only the fpr: field gpg's own colon-output already prints.
 func collectGPGFingerprints(path string) (map[string]bool, error) {
+	return collectGPGFingerprintsContext(context.Background(), commandrunner.DefaultTimeout, path)
+}
+
+func collectGPGFingerprintsContext(ctx context.Context, timeout time.Duration, path string) (map[string]bool, error) {
 	if _, err := exec.LookPath("gpg"); err != nil {
 		return nil, fmt.Errorf("gpg not found on PATH")
 	}
@@ -118,11 +132,14 @@ func collectGPGFingerprints(path string) (map[string]bool, error) {
 
 	set := map[string]bool{}
 	for _, f := range files {
-		out, err := exec.Command("gpg", "--homedir", homedir, "--show-keys", "--with-colons", f).CombinedOutput()
-		if err != nil {
+		r := commandrunner.Command(ctx, "gpg", []string{"--homedir", homedir, "--show-keys", "--with-colons", f}, commandrunner.Options{Timeout: timeout})
+		if r.Err != nil {
 			continue // not a key file — not a failure
 		}
-		for _, line := range strings.Split(string(out), "\n") {
+		if r.Truncated {
+			return nil, fmt.Errorf("gpg output exceeded capture limit")
+		}
+		for _, line := range strings.Split(string(r.Output), "\n") {
 			// fpr:::::::::<FINGERPRINT>: — field 10 (1-indexed), i.e.
 			// fields[9] after splitting on ":".
 			fields := strings.Split(line, ":")
@@ -138,16 +155,12 @@ func collectGPGFingerprints(path string) (map[string]bool, error) {
 	return set, nil
 }
 
-// fingerprintCollector resolves the collector for a keys scheme. The
-// default case cannot be reached through contextspec.Load (which validates
-// keys at parse time) but a DrillCheck built directly in Go — as tests do —
-// is not forced through that gate, so it fails closed here too.
-func fingerprintCollector(keys string) (func(string) (map[string]bool, error), error) {
+func fingerprintCollectorContext(ctx context.Context, timeout time.Duration, keys string) (func(string) (map[string]bool, error), error) {
 	switch keys {
 	case "ssh":
-		return collectSSHFingerprints, nil
+		return func(path string) (map[string]bool, error) { return collectSSHFingerprintsContext(ctx, timeout, path) }, nil
 	case "gpg":
-		return collectGPGFingerprints, nil
+		return func(path string) (map[string]bool, error) { return collectGPGFingerprintsContext(ctx, timeout, path) }, nil
 	default:
 		return nil, fmt.Errorf("unknown keys scheme %q (must be ssh or gpg)", keys)
 	}
@@ -161,7 +174,15 @@ func fingerprintCollector(keys string) (func(string) (map[string]bool, error), e
 // rely on ExpectFrom/Expect instead" and is never re-defaulted here (see
 // contextspec.DrillCheck.MinKeys).
 func runKeyFingerprint(c contextspec.DrillCheck, env checkEnv) checkResult {
-	collect, err := fingerprintCollector(c.Keys)
+	ctx := env.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timeout := env.Timeout
+	if timeout <= 0 {
+		timeout = commandrunner.DefaultTimeout
+	}
+	collect, err := fingerprintCollectorContext(ctx, timeout, c.Keys)
 	if err != nil {
 		return failOutcome("key_fingerprint", err.Error())
 	}

@@ -89,6 +89,9 @@ type Guard struct {
 	// artifacts you cannot afford to lose, only the second one is worth
 	// blocking on.
 	RequireVerified bool
+	// RequireBound rejects legacy unbound evidence for this guard. It is an
+	// explicit opt-in because older v2 contexts remain readable.
+	RequireBound bool
 	// Layer is this guard's recovery-domain classification (see the Layer*
 	// constants) — empty when never classified. A proof this guard requires
 	// inherits Layer as its own effective layer when the proof declares
@@ -139,6 +142,9 @@ const (
 // Signature is an optional Ed25519 signature over a proof record, verified
 // by CheckProof.
 type Signature struct {
+	// Version is zero for the legacy signature shape and 2 for the structured
+	// v2 shape. Unknown versions are rejected while parsing.
+	Version      int
 	PublicKeyHex string
 	SignatureHex string
 }
@@ -182,6 +188,13 @@ type Proof struct {
 	// Measurements is set only for proofs a drill produced with typed
 	// validate checks; nil for byte-identical-only and non-drill proofs.
 	Measurements *Measurements
+	// RecipeDigest binds generated evidence to the exact declared drill that
+	// produced it. Empty is legacy/unbound evidence.
+	RecipeDigest string
+	// Dependencies are the explicit recovery dependencies captured when the
+	// proof was produced. Nil is legacy/unbound evidence; an empty non-nil set
+	// is a deliberate bound declaration with no listed dependencies.
+	Dependencies *Dependencies
 	// Accepted records an owner's reasoned acceptance that this proof will
 	// not be drilled within its review window — the deliberate alternative
 	// to leaving an undrillable proof as a permanent gap. Nil when no
@@ -293,6 +306,15 @@ type DrillBudgets struct {
 	RPO time.Duration
 }
 
+// Dependencies are explicit recovery-path dependencies. They are metadata
+// declared by the operator; no evaluator infers them from Artifact or any
+// target system.
+type Dependencies struct {
+	Paths    []string
+	Commands []string
+	Packages []string
+}
+
 // Drill declares how one artifact is reconstructed from its recovery source.
 // It is the only thing in the schema that produces a verified proof, because it
 // is the only one that performs the recovery instead of describing it.
@@ -304,8 +326,9 @@ type Drill struct {
 	// Validate lists the typed checks run against the recovered artifact. An
 	// empty list means the implicit, backward-compatible single
 	// byte_identical check: recover, then compare bytes to the live artifact.
-	Validate []DrillCheck
-	Budgets  DrillBudgets
+	Validate     []DrillCheck
+	Budgets      DrillBudgets
+	Dependencies Dependencies
 	// PinCheck is an optional command that only proves the pinned recovery
 	// source still exists (exit 0), without performing a recovery. It backs
 	// `restoregap drill --pins-only`, the cheap-and-frequent check between

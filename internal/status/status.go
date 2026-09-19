@@ -125,10 +125,18 @@ type Summary struct {
 // the durable version/duration/check metadata beside the verdict instead of
 // reducing a failed gate to the indistinguishable word "block".
 type DecisionSummary struct {
+	EntryID      string
 	When         time.Time
+	EvaluatedAt  *time.Time
+	Actor        string
 	Verdict      string
 	GateState    string
 	BrokenReason string
+	Operation    string
+	Executed     *bool
+	Intents      []ledger.IntentRecord
+	Findings     []ledger.FindingRecord
+	Legacy       bool
 	DurationMS   int64
 	ToolVersion  string
 	Checks       []ledger.DecisionCheckRecord
@@ -211,6 +219,9 @@ type InventoryRow struct {
 	IsObserved       bool
 	SignaturePresent bool
 	SigPubKeyPrefix  string // first 8 hex chars of the Ed25519 public key, "" when unsigned
+	// Binding is the recovery recipe assurance label: bound, unbound legacy
+	// evidence, or invalid when only part of a binding was recorded.
+	Binding string
 	// PreviousEpoch is true when the proof's recorded epoch differs from
 	// this machine's current one (see previousEpoch) — evidence from a
 	// different world: it carries the unreviewed state with the "from a
@@ -296,7 +307,7 @@ func Gather(req Request) (*Summary, error) {
 
 	epoch := hostid.Current().Epoch
 	s.Proofs = getProofs(merged, now, epoch, &s.Verdict, &s.ExpiringSoon)
-	s.Restored, s.Observed, s.Accepted, s.Unreviewed = partitionCounts(merged.Proofs, now, epoch)
+	s.Restored, s.Observed, s.Accepted, s.Unreviewed = partitionCounts(merged, now, epoch)
 	if s.Unreviewed > 0 {
 		// A proof nobody has drilled OR accepted is the one posture this
 		// tool exists to surface: converge on it by drilling what can be
@@ -461,6 +472,10 @@ func getProofs(ctx contextspec.Context, now time.Time, currentEpoch string, verd
 	var proofs []ProofState
 	for _, p := range ctx.Proofs {
 		state, detail, expired, expiringHit := proofExpiryState(p, now)
+		binding := ctx.CheckProof(p.ID, 0, false, now)
+		if binding.State == contextspec.StateContradicted {
+			state, detail, expired, expiringHit = "contradicted", binding.Detail, false, false
+		}
 		if previousEpoch(p, currentEpoch) {
 			// Evidence from a different install of this machine (or another
 			// machine entirely) says nothing about THIS machine's recoverability
@@ -470,6 +485,9 @@ func getProofs(ctx contextspec.Context, now time.Time, currentEpoch string, verd
 			expired = false
 		}
 		if expired {
+			*verdict = worst(*verdict, "warn")
+		}
+		if state == "contradicted" || state == "unreachable" || state == "stale" {
 			*verdict = worst(*verdict, "warn")
 		}
 		if expiringHit {
@@ -489,6 +507,18 @@ func getProofs(ctx contextspec.Context, now time.Time, currentEpoch string, verd
 // expires_at/observed_at declarations, before any terminal-status override.
 // expired and expiringHit flag which of the caller's counters to update.
 func proofExpiryState(p contextspec.Proof, now time.Time) (state, detail string, expired, expiringHit bool) {
+	intrinsic := contextspec.EvaluateProof(p, now)
+	switch intrinsic.State {
+	case contextspec.StateUnreachable:
+		return "unreachable", intrinsic.Detail, false, false
+	case contextspec.StateContradicted:
+		return "contradicted", intrinsic.Detail, false, false
+	case contextspec.StateStale:
+		if p.Status == contextspec.ProofRecordStale {
+			return "stale", intrinsic.Detail, false, false
+		}
+		return "expired", intrinsic.Detail, true, false
+	}
 	state, detail = "present", "no expiry declared"
 	switch {
 	case p.ExpiresAt != nil && p.ExpiresAt.Before(now):
@@ -562,10 +592,15 @@ func terminalStatusOverride(status contextspec.ProofRecordStatus) (state, detail
 // which is a gap again, not a decision). It is the same
 // contextspec.LevelOf the inventory rows use, summed across every declared
 // proof, so Restored+Accepted+Unreviewed always equals len(ctx.Proofs).
-func partitionCounts(proofs []contextspec.Proof, now time.Time, currentEpoch string) (restored, observed, accepted, unreviewed int) {
-	for _, p := range proofs {
+func partitionCounts(ctx contextspec.Context, now time.Time, currentEpoch string) (restored, observed, accepted, unreviewed int) {
+	for _, p := range ctx.Proofs {
 		if previousEpoch(p, currentEpoch) {
 			unreviewed++ // a previous epoch's proof is never green here (docs/SCHEMA.md §Identity & epoch)
+			continue
+		}
+		binding := ctx.CheckProof(p.ID, 0, false, now)
+		if binding.State != contextspec.StatePresent {
+			unreviewed++
 			continue
 		}
 		level, _ := contextspec.LevelOf(p, now)
@@ -576,7 +611,7 @@ func partitionCounts(proofs []contextspec.Proof, now time.Time, currentEpoch str
 		switch {
 		case p.Accepted.Active(now):
 			accepted++
-		case isObservedProof(p, now):
+		case isObservedProof(ctx, p, now):
 			observed++
 		default:
 			unreviewed++
@@ -593,7 +628,10 @@ func partitionCounts(proofs []contextspec.Proof, now time.Time, currentEpoch str
 // record (disputed/unreachable/stale) or an already-expired proof is never
 // "observed" — those are gaps (or worse), not fresh evidence, regardless
 // of what timestamps happen to be on file.
-func isObservedProof(p contextspec.Proof, now time.Time) bool {
+func isObservedProof(ctx contextspec.Context, p contextspec.Proof, now time.Time) bool {
+	if ctx.CheckProof(p.ID, 0, false, now).State != contextspec.StatePresent {
+		return false
+	}
 	switch p.Status {
 	case contextspec.ProofRecordDisputed, contextspec.ProofRecordUnreachable, contextspec.ProofRecordStale:
 		return false
@@ -719,7 +757,7 @@ func buildInventory(ctx contextspec.Context, sources *sourceFiles, now time.Time
 	for _, d := range ctx.Drills {
 		hasDrill[d.Proof] = true
 	}
-	bc := rowBuildContext{proofByID: proofByID, guards: ctx.Guards, sources: sources, now: now, epoch: currentEpoch}
+	bc := rowBuildContext{context: ctx, proofByID: proofByID, guards: ctx.Guards, sources: sources, now: now, epoch: currentEpoch}
 
 	type leveled struct {
 		level contextspec.RecoveryLevel
@@ -753,11 +791,23 @@ func buildInventory(ctx contextspec.Context, sources *sourceFiles, now time.Time
 	return rows
 }
 
+// contextualLevelOf credits a proof's recovery level only when its intrinsic
+// evidence and any recorded recipe/dependency binding still match the current
+// context. A recipe edit therefore moves the row back to declared instead of
+// leaving stale measurements looking restored.
+func contextualLevelOf(ctx contextspec.Context, p contextspec.Proof, now time.Time) (contextspec.RecoveryLevel, string) {
+	if result := ctx.CheckProof(p.ID, 0, false, now); result.State != contextspec.StatePresent {
+		return contextspec.LevelDeclared, result.Detail
+	}
+	return contextspec.LevelOf(p, now)
+}
+
 // rowBuildContext bundles the read-only lookups inventoryRow needs beyond
 // the one proof/drill it is building a row for — a parameter object rather
 // than four positional maps/slices/times, all of which are the same across
 // every call within one buildInventory pass.
 type rowBuildContext struct {
+	context   contextspec.Context
 	proofByID map[string]contextspec.Proof
 	guards    []contextspec.Guard
 	sources   *sourceFiles
@@ -810,64 +860,83 @@ func inventoryRow(d *contextspec.Drill, proofID string, isDrilled bool, bc rowBu
 	row.ObservedAtDisplay = formatTimestamp(p.ObservedAt)
 	row.ExpiresAtDisplay = formatTimestamp(p.ExpiresAt)
 	row.ExpiresInDisplay = formatExpiresIn(p.ExpiresAt, bc.now)
-	row.IsObserved = isObservedProof(p, bc.now)
+	row.IsObserved = isObservedProof(bc.context, p, bc.now)
 	row.SignaturePresent = p.Signature != nil
+	row.Binding = proofBinding(p)
 	if p.Signature != nil {
 		row.SigPubKeyPrefix = prefixHex(p.Signature.PublicKeyHex, 8)
 	}
 	if !isDrilled {
-		row.AttestCommand = orEmDash(p.Command)
-		row.AttestEvidenceURL = orEmDash(p.EvidenceURL)
-		row.ProposeArtifact = inferArtifactPath(proofID, bc.guards)
-		// An attestation has no drill to name its own source file — the
-		// file that declared the PROOF is the closest thing it has to a
-		// "next step --context" value.
-		row.SourceFile = bc.sources.proof(proofID)
+		populateAttestationRow(&row, p, proofID, bc)
 	}
 
-	level, reason := contextspec.LevelOf(p, bc.now)
-	if previousEpoch(p, bc.epoch) {
-		row.PreviousEpoch = true
-		reason = fmt.Sprintf("from a previous epoch — re-drill (recorded under epoch %s, this machine is %s)", p.Epoch, bc.epoch)
-	}
-	if !isDrilled && reason == "not verified" {
-		// "not verified" implies a drill ran and didn't produce a verified
-		// result; an attestation with no drill behind it at all never had
-		// one to run, so that phrasing would be actively misleading here.
-		reason = "attested, no drill"
-	}
-	if p.Accepted != nil {
-		if p.Accepted.Active(bc.now) {
-			row.AcceptedReason = p.Accepted.Reason
-			row.AcceptedBy = p.Accepted.By
-			row.AcceptedReviewBy = p.Accepted.ReviewBy.Format(dateOnly)
-			if level == contextspec.LevelDeclared {
-				// The acceptance replaces the gap language: this proof is
-				// carried deliberately, and the row says who decided and
-				// until when.
-				reason = fmt.Sprintf("attested · accepted: %s (review by %s)", p.Accepted.Reason, row.AcceptedReviewBy)
-			}
-		} else {
-			row.AcceptanceLapsedOn = p.Accepted.ReviewBy.Format(dateOnly)
-			reason = fmt.Sprintf("%s · acceptance lapsed %s", reason, row.AcceptanceLapsedOn)
-		}
-	}
+	level, reason := contextualLevelOf(bc.context, p, bc.now)
+	reason = applyProofStatus(&row, p, level, reason, isDrilled, bc)
 	row.Level = level.String()
 	row.ProofAge = reason
 	if reason != "" {
 		return level, row
 	}
-	if p.ObservedAt != nil {
-		row.ProofAge = contextspec.FormatAge(bc.now.Sub(*p.ObservedAt))
-	}
-	if p.Measurements != nil {
-		row.RTO = contextspec.FormatRTO(p.Measurements.RTOSeconds)
-		if p.Measurements.RPOSeconds != nil {
-			row.RPO = contextspec.FormatRPO(*p.Measurements.RPOSeconds)
-		}
-		row.Checks = convertChecks(p.Measurements.Checks)
-	}
+	populateMeasurements(&row, p, bc.now)
 	return level, row
+}
+
+func proofBinding(p contextspec.Proof) string {
+	switch {
+	case p.RecipeDigest != "" && p.Dependencies != nil:
+		return "bound"
+	case p.RecipeDigest != "" || p.Dependencies != nil:
+		return "invalid binding"
+	default:
+		return "unbound evidence"
+	}
+}
+
+func populateAttestationRow(row *InventoryRow, p contextspec.Proof, proofID string, bc rowBuildContext) {
+	row.AttestCommand = orEmDash(p.Command)
+	row.AttestEvidenceURL = orEmDash(p.EvidenceURL)
+	row.ProposeArtifact = inferArtifactPath(proofID, bc.guards)
+	// An attestation has no drill to name its own source file — the file that
+	// declared the proof is the closest thing to a next-step --context value.
+	row.SourceFile = bc.sources.proof(proofID)
+}
+
+func applyProofStatus(row *InventoryRow, p contextspec.Proof, level contextspec.RecoveryLevel, reason string, isDrilled bool, bc rowBuildContext) string {
+	if previousEpoch(p, bc.epoch) {
+		row.PreviousEpoch = true
+		reason = fmt.Sprintf("from a previous epoch — re-drill (recorded under epoch %s, this machine is %s)", p.Epoch, bc.epoch)
+	}
+	if !isDrilled && reason == "not verified" {
+		reason = "attested, no drill"
+	}
+	if p.Accepted == nil {
+		return reason
+	}
+	if p.Accepted.Active(bc.now) {
+		row.AcceptedReason = p.Accepted.Reason
+		row.AcceptedBy = p.Accepted.By
+		row.AcceptedReviewBy = p.Accepted.ReviewBy.Format(dateOnly)
+		if level == contextspec.LevelDeclared {
+			return fmt.Sprintf("attested · accepted: %s (review by %s)", p.Accepted.Reason, row.AcceptedReviewBy)
+		}
+		return reason
+	}
+	row.AcceptanceLapsedOn = p.Accepted.ReviewBy.Format(dateOnly)
+	return fmt.Sprintf("%s · acceptance lapsed %s", reason, row.AcceptanceLapsedOn)
+}
+
+func populateMeasurements(row *InventoryRow, p contextspec.Proof, now time.Time) {
+	if p.ObservedAt != nil {
+		row.ProofAge = contextspec.FormatAge(now.Sub(*p.ObservedAt))
+	}
+	if p.Measurements == nil {
+		return
+	}
+	row.RTO = contextspec.FormatRTO(p.Measurements.RTOSeconds)
+	if p.Measurements.RPOSeconds != nil {
+		row.RPO = contextspec.FormatRPO(*p.Measurements.RPOSeconds)
+	}
+	row.Checks = convertChecks(p.Measurements.Checks)
 }
 
 // formatBudget renders a declared RTO/RPO budget using the same formatter
@@ -1066,14 +1135,26 @@ func drillHistoryByProof(entries []ledger.Entry, known map[string]bool) map[stri
 }
 
 func decisionHistory(entries []ledger.Entry) (broken, blocked []DecisionSummary, last *DecisionSummary) {
+	views := ledger.Decisions(entries)
+	viewByID := make(map[string]ledger.DecisionView, len(views))
+	for _, view := range views {
+		viewByID[view.EntryID] = view
+	}
 	for _, e := range entries {
 		if e.EntryType != ledger.EntryDecision || e.Payload.Decision == nil {
 			continue
 		}
+		view, ok := viewByID[e.ID]
+		if !ok {
+			continue
+		}
 		d := e.Payload.Decision
 		summary := DecisionSummary{
-			When: e.CreatedAt, Verdict: d.Verdict, GateState: d.GateState,
-			BrokenReason: d.BrokenReason, DurationMS: d.DurationMS,
+			EntryID: view.EntryID, When: view.CreatedAt, EvaluatedAt: view.EvaluatedAt, Actor: view.Actor, Verdict: view.Verdict, GateState: view.GateState,
+			BrokenReason: view.BrokenReason, Operation: view.Operation, Executed: view.Executed,
+			Intents:  append([]ledger.IntentRecord(nil), view.Intents...),
+			Findings: append([]ledger.FindingRecord(nil), view.Findings...), Legacy: view.Legacy,
+			DurationMS:  d.DurationMS,
 			ToolVersion: d.ToolVersion, Checks: append([]ledger.DecisionCheckRecord(nil), d.Checks...),
 		}
 		if e.Policy != nil {
@@ -1111,51 +1192,150 @@ func worst(a, b string) string {
 }
 
 func (s *Summary) sections() []report.KVSection {
-	over := report.KVSection{Title: "Recovery chain", Rows: []report.KVRow{
-		{Key: "Context", Value: s.Origin},
-		{Key: "Guards declared", Value: fmt.Sprintf("%d (%d lifelines, %d guards)", s.Lifelines+s.Guards, s.Lifelines, s.Guards)},
-	}}
-	if s.LedgerEntries > 0 || s.LedgerDetail != "" {
-		v := s.LedgerDetail
-		if s.LedgerEntries > 0 {
-			v = fmt.Sprintf("%d entries · chain %s", s.LedgerEntries, map[bool]string{true: "verified", false: "BROKEN: " + s.LedgerDetail}[s.LedgerOK])
-		}
-		over.Rows = append(over.Rows, report.KVRow{Key: "Ledger", Value: v})
+	sections := []report.KVSection{recoveryChainSection(s)}
+	if recent, ok := recentDecisionSection(s.Last); ok {
+		sections = append(sections, recent)
 	}
-	if s.LastDecision != "" {
-		over.Rows = append(over.Rows, report.KVRow{Key: "Last decision", Value: s.LastDecision})
-	}
-	sections := []report.KVSection{over}
-	if len(s.ActiveOverrides) > 0 {
-		overrides := report.KVSection{Title: "Active overrides"}
-		for _, override := range s.ActiveOverrides {
-			daysLeft := overrideDaysLeft(override.ExpiresAt, s.GeneratedAt)
-			value := fmt.Sprintf("%d days left · approved by %s", daysLeft, override.ApprovedBy)
-			switch {
-			case override.LegacyNoExpiry:
-				value = fmt.Sprintf("WARN: override %s has no expiry — re-approve with --expires-in (%s)", override.EntryID, value)
-			case daysLeft <= 7:
-				value = "WARN: expires soon · " + value
-			}
-			overrides.Rows = append(overrides.Rows, report.KVRow{Key: "override " + override.EntryID, Value: value})
-		}
+	if overrides, ok := overrideSection(s); ok {
 		sections = append(sections, overrides)
 	}
-	if len(s.Proofs) > 0 {
-		ps := report.KVSection{Title: "Proofs"}
-		for _, p := range s.Proofs {
-			ps.Rows = append(ps.Rows, report.KVRow{Key: p.ID, Value: p.Status + " · " + p.Detail})
-		}
-		sections = append(sections, ps)
+	if proofs, ok := proofSection(s.Proofs); ok {
+		sections = append(sections, proofs)
 	}
-	if len(s.PolicyFindings) > 0 {
-		pf := report.KVSection{Title: "Policy (ignored loosening attempts)"}
-		for _, f := range s.PolicyFindings {
-			pf.Rows = append(pf.Rows, report.KVRow{Key: "WARN", Value: f})
-		}
-		sections = append(sections, pf)
+	if policy, ok := policyFindingSection(s.PolicyFindings); ok {
+		sections = append(sections, policy)
 	}
 	return sections
+}
+
+func recoveryChainSection(s *Summary) report.KVSection {
+	rows := []report.KVRow{
+		{Key: "Context", Value: s.Origin},
+		{Key: "Guards declared", Value: fmt.Sprintf("%d (%d lifelines, %d guards)", s.Lifelines+s.Guards, s.Lifelines, s.Guards)},
+	}
+	if s.LedgerEntries > 0 || s.LedgerDetail != "" {
+		value := s.LedgerDetail
+		if s.LedgerEntries > 0 {
+			state := "BROKEN: " + s.LedgerDetail
+			if s.LedgerOK {
+				state = "verified"
+			}
+			value = fmt.Sprintf("%d entries · chain %s", s.LedgerEntries, state)
+		}
+		rows = append(rows, report.KVRow{Key: "Ledger", Value: value})
+	}
+	if s.LastDecision != "" {
+		rows = append(rows, report.KVRow{Key: "Last decision", Value: s.LastDecision})
+	}
+	return report.KVSection{Title: "Recovery chain", Rows: rows}
+}
+
+func recentDecisionSection(d *DecisionSummary) (report.KVSection, bool) {
+	if d == nil {
+		return report.KVSection{}, false
+	}
+	rows := []report.KVRow{
+		{Key: "Outcome", Value: formatDecisionOutcome(*d)},
+		{Key: "Recorded", Value: d.When.Local().Format("2006-01-02 15:04")},
+	}
+	if d.EvaluatedAt != nil {
+		rows = append(rows, report.KVRow{Key: "Evaluated as of", Value: d.EvaluatedAt.Local().Format(time.RFC3339)})
+	}
+	if d.Legacy {
+		rows = append(rows, report.KVRow{Key: "Proposed change", Value: "legacy record — details were not recorded"})
+	} else {
+		rows = append(rows, report.KVRow{Key: "Proposed change", Value: formatDecisionIntents(d.Intents)})
+		for _, f := range d.Findings {
+			rows = append(rows, report.KVRow{Key: "Finding " + f.FindingID, Value: formatFindingRecord(f)})
+		}
+	}
+	return report.KVSection{Title: "Recent decision", Rows: rows}, true
+}
+
+func overrideSection(s *Summary) (report.KVSection, bool) {
+	if len(s.ActiveOverrides) == 0 {
+		return report.KVSection{}, false
+	}
+	section := report.KVSection{Title: "Active overrides"}
+	for _, override := range s.ActiveOverrides {
+		daysLeft := overrideDaysLeft(override.ExpiresAt, s.GeneratedAt)
+		value := fmt.Sprintf("%d days left · approved by %s", daysLeft, override.ApprovedBy)
+		if override.LegacyNoExpiry {
+			value = fmt.Sprintf("WARN: override %s has no expiry — re-approve with --expires-in (%s)", override.EntryID, value)
+		} else if daysLeft <= 7 {
+			value = "WARN: expires soon · " + value
+		}
+		section.Rows = append(section.Rows, report.KVRow{Key: "override " + override.EntryID, Value: value})
+	}
+	return section, true
+}
+
+func proofSection(proofs []ProofState) (report.KVSection, bool) {
+	if len(proofs) == 0 {
+		return report.KVSection{}, false
+	}
+	section := report.KVSection{Title: "Proofs"}
+	for _, p := range proofs {
+		section.Rows = append(section.Rows, report.KVRow{Key: p.ID, Value: p.Status + " · " + p.Detail})
+	}
+	return section, true
+}
+
+func policyFindingSection(findings []string) (report.KVSection, bool) {
+	if len(findings) == 0 {
+		return report.KVSection{}, false
+	}
+	section := report.KVSection{Title: "Policy (ignored loosening attempts)"}
+	for _, finding := range findings {
+		section.Rows = append(section.Rows, report.KVRow{Key: "WARN", Value: finding})
+	}
+	return section, true
+}
+
+func formatDecisionOutcome(d DecisionSummary) string {
+	if d.GateState == "broken" {
+		if d.BrokenReason != "" {
+			return "GATE BROKEN — " + d.BrokenReason
+		}
+		return "GATE BROKEN"
+	}
+	return strings.ToUpper(d.Verdict)
+}
+
+func formatDecisionIntents(intents []ledger.IntentRecord) string {
+	if len(intents) == 0 {
+		return "no proposed intents recorded"
+	}
+	parts := make([]string, 0, len(intents))
+	for _, in := range intents {
+		value := in.Action
+		paths := append(append([]string(nil), in.Paths...), in.TargetPaths...)
+		if len(paths) > 0 {
+			value += " " + strings.Join(paths, ", ")
+		}
+		if in.Description != "" {
+			value += " — " + in.Description
+		}
+		parts = append(parts, value)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func formatFindingRecord(f ledger.FindingRecord) string {
+	parts := []string{f.Verdict}
+	if f.Resource != "" {
+		parts = append(parts, "resource: "+f.Resource)
+	}
+	if f.Proof != "" {
+		parts = append(parts, "proof: "+f.Proof)
+	}
+	if f.RequiredNextStep != "" {
+		parts = append(parts, "next: "+f.RequiredNextStep)
+	}
+	if f.Override != nil {
+		parts = append(parts, "override by "+f.Override.ApprovedBy+": "+f.Override.Reason)
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (s *Summary) summaryLine() string {
@@ -1217,6 +1397,9 @@ func (s *Summary) RenderLast() []byte {
 		fmt.Fprintf(&b, "%s\n", strings.ToUpper(d.Verdict))
 	}
 	fmt.Fprintf(&b, "recorded: %s\n", d.When.Local().Format("2006-01-02 15:04"))
+	if d.EvaluatedAt != nil {
+		fmt.Fprintf(&b, "evaluated as of: %s\n", d.EvaluatedAt.Local().Format(time.RFC3339))
+	}
 	if d.ToolVersion != "" {
 		fmt.Fprintf(&b, "tool version: %s\n", d.ToolVersion)
 	}

@@ -1,92 +1,116 @@
-# Agent Gate — a coding agent tries to delete a file
+# Put recovery evidence before an agent's change
 
-A PreToolUse hook intercepts every `Bash` call your coding agent makes,
-before the shell runs it. `restoregap preflight` decides whether that call
-is safe, by checking it against a declared, *verified* recovery proof —
-not just "a backup exists somewhere."
+Restore Gap evaluates the **proposed operation** and returns a decision. It never
+executes the operation or automatically runs a recovery to make the gate pass.
+The caller must enforce the result before it lets the operation proceed.
 
-## The wiring
+## Start with a faithful input
 
-The OSS `restoregap` binary does not turn a shell command into an intent —
-`preflight` only ever consumes an already-built intent YAML or diff, and
-the MCP server's `preflight_intent`/`preflight_diff` tools take the same
-inputs. **That translation happens in the hook itself**,
-`docs/examples/preflight-hook.sh` (bash + jq, 80 lines): it reads the tool
-call Claude Code sends on stdin, matches the command against a shape
-table, and writes the v2 intent (schema in `internal/intent`) that
-`preflight` understands. First matching shape wins, flags allowed, every
-path resolved with `realpath -m`:
+Prefer an intent supplied by the tool integration, or an actual diff supplied by
+CI. The CLI and MCP use the same evaluator:
 
-| Shape | Intent |
+```sh
+restoregap preflight --context restoregap.yml --intent change.yml \
+  --require-coverage --format json
+```
+
+For MCP, call `preflight_intent` or `preflight_diff` with `require_coverage: true`.
+MCP is a decision interface, not an enforcement boundary by itself. An agent that
+can omit the call, change the policy or execute the operation through another
+route can bypass it. Keep the enforcing caller, trusted policy and signing keys
+outside the agent's writable scope.
+
+| Result | Caller behavior |
 |---|---|
-| `rm <p>…` | `delete_file` (all non-flag args) |
-| `shred <p>…` | `delete_file` |
-| `mv <src>… <dst>` | `move_file` (all but the last arg) |
-| `truncate … <p>` | `modify_file` |
-| leading `> <p>` or `: > <p>` | `modify_file` |
-| `dd … of=<p>` | `modify_file` |
-| `git push --force` / `-f` / `--force-with-lease` | `run_command` |
-| `git branch -D …` | `run_command` |
-| `terraform destroy` | `run_command` |
-| `dropdb …` | `run_command` |
+| Exit 0 | Evaluation completed without a blocking result. Inspect warnings; use `--fail-on-warn` when warnings must stop work. |
+| Exit 1 | Policy blocked the proposal, or a warning was made fatal. Stop. |
+| Exit 2 | Input or command usage failed. No permission to proceed was established. |
+| Exit 3 | The gate could not complete reliably. Stop and repair the gate. |
 
-Anything else exits 0 untouched. This is the example net for Claude Code;
-your agent's own permissions.deny / sandbox is the general net — Restore
-Gap decides whether a *guarded* change is allowed.
-`docs/examples/preflight-hook.test.sh` (`make hook-test`) runs the whole
-table against a fresh demo fixture.
+Treat every nonzero exit as a stop. The structured `gate_state` distinguishes a
+policy decision from a broken gate. Preserve the JSON result for the agent to
+explain the next step; do not turn a block into an automatic override.
 
-Register it in `.claude/settings.json`:
+Strict coverage requires an applicable guard for every supplied path, destination,
+package and command. One covered file does not cover another file in the same
+intent. A command string supplied alongside paths also needs applicable command
+coverage. This does not parse arbitrary shell semantics or discover resources the
+caller omitted. Existing integrations retain the older permissive behavior unless
+they explicitly enable strict coverage.
+
+For evidence-backed changes, set `require_verified: true` and `require_bound: true`
+on the guard. A bound proof records the tested recovery recipe and its explicit
+recovery dependencies. A changed recipe or a proposed change to one of those
+dependencies makes that evidence insufficient. The caller must supply the entire
+change set; separating dependent changes into undisclosed requests hides that
+relationship from any local evaluator.
+
+## Example tool hook
+
+[preflight-hook.sh](examples/preflight-hook.sh) is a narrow Claude Code
+`PreToolUse` example. It reads the event once, translates supported tool calls to
+an intent, and maps every failing gate result to hook exit 2. It uses Bash 4+,
+`jq` and GNU `realpath -m`; this particular shell adapter is not a portable shell
+parser. The Go CLI and MCP are the portable interfaces.
+
+Register the script with an absolute path appropriate to your installation:
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
-      { "matcher": "Bash", "hooks": [
-        { "type": "command", "command": "docs/examples/preflight-hook.sh" }
+      { "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit", "hooks": [
+        { "type": "command", "command": "/opt/restoregap/preflight-hook.sh" }
       ] }
     ]
   }
 }
 ```
 
-Claude Code sends `{"tool_name":"Bash","tool_input":{"command":"..."}}` on
-stdin before every Bash call; exit 2 blocks the call and the hook's stderr
-becomes the message the agent sees. This is the same fixture as
-`docs/walkthrough.md` — every line below is real output.
+Recognized file-edit tools go directly to the evaluator, including paths covered
+by policy globs. Supported shell shapes are deliberately limited:
 
-## The transcript
+| Shape | Intent |
+|---|---|
+| `rm`, `shred` | `delete_file` |
+| `mv` | `move_file` |
+| `truncate`, leading redirection, `dd … of=` | `modify_file` |
+| forceful `git push`, `git branch -D`, `terraform destroy`, `dropdb` | `run_command` |
 
-```console
-$ demo/setup.sh /tmp/rg-agent-demo && cd /tmp/rg-agent-demo
-$ export RESTOREGAP_LEDGER=$PWD/ledger.jsonl
-$ restoregap drill propose proj/app.db --source backup/app.db > restoregap.local.yml
+Unmatched commands pass through this example without evaluation. Quoting, shell
+expansion, compound commands, aliases and interpreter code exceed its simple word
+parser. Use your agent's sandbox and deny rules, or a tool integration supplying
+structured operations, for those cases. A `terraform destroy` command match is
+not Terraform-plan or provider-resource analysis.
 
-# The agent tries: rm proj/app.db
-$ echo '{"tool_name":"Bash","tool_input":{"command":"rm proj/app.db"}}' \
-    | docs/examples/preflight-hook.sh
-context: restoregap.local.yml (discovered)
-# BLOCK
-Restore Gap blocked this change. Supply proof, change the plan, or record an owner override.
-- Refresh or supply proof "app-db-recovery", or record an owner override before proceeding.
-…                                                     # verdict table + detail trimmed here
-$ echo $?      # 2 — Claude Code blocks the tool call, agent sees this on stderr
+`RESTOREGAP_CONTEXT` and `RESTOREGAP_LEDGER` select the policy and local ledger.
+Set `RESTOREGAP_REQUIRE_COVERAGE=1` to enable strict coverage for the hook's
+recognized inputs. Malformed events block rather than silently skipping the gate.
 
-# Prove the recovery actually works — a real reconstruction in a sandbox, not "a copy exists."
-$ restoregap drill
-context: restoregap.local.yml (discovered)
-✓ app-db-recovery — restored in 0.0s — data-valid (L3): integrity ok; users=95 (>= 90% of live 100 = 90)
+Run the fixture from the repository root:
 
-# Same attempt, same hook, now with a fresh proof on file.
-$ echo '{"tool_name":"Bash","tool_input":{"command":"rm proj/app.db"}}' \
-    | docs/examples/preflight-hook.sh
-context: restoregap.local.yml (discovered)
-# PASS
-Restore Gap found no unresolved recovery risk.
-…
-$ echo $?      # 0 — the agent's rm proceeds
+```sh
+bash docs/examples/preflight-hook.test.sh
 ```
 
-The proof expires in 30 days by default (`drill --expires-in`); after that,
-the same `rm proj/app.db` blocks again until another `restoregap drill`
-records a fresh one.
+It exercises guarded shell calls and file edits before and after a real drill,
+wildcard policy matching, malformed input, strict unknown-file coverage and
+explicitly unmatched commands. All data, context and ledger paths are isolated
+from the operator's policy.
+
+## Read the decision history
+
+```sh
+restoregap ledger show --limit 10
+restoregap ledger show --format json
+restoregap ledger verify
+```
+
+The ledger connects the proposal, findings, supporting evidence and next step.
+Older records that did not capture a proposal remain visibly incomplete; their
+history is never filled in using today's policy. Overrides are explicit owner
+exceptions. Neither a pass nor a block is an execution receipt.
+
+A separate, explicit `restoregap drill` refreshes recovery evidence. Review its
+commands and credentials before running it: a temporary recovery directory is
+not an operating-system sandbox. See the [restic recipe](examples/restic.md).

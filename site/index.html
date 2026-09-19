@@ -54,6 +54,10 @@ h1 span { color: var(--ui-muted); }
 .block { color: var(--ui-danger); }
 .pass { color: var(--ui-success); }
 .terminal-note { font-size: 12px; color: var(--ui-muted); margin-top: 12px; }
+.ledger-card { margin-top: 16px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface); padding: 14px 18px; }
+.ledger-card-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--ui-muted); }
+.ledger-card code { display: block; margin-top: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.ledger-card p { margin: 6px 0 0; font-size: 13px; color: var(--ui-muted); }
 section { padding: 48px 0; }
 section + section { border-top: 1px solid var(--ui-border); }
 h2 { font-size: clamp(25px, 4vw, 34px); line-height: 1.2; letter-spacing: -0.035em; margin: 0 0 16px; }
@@ -102,7 +106,7 @@ details p { color: var(--ui-muted); margin: 0 0 20px; }
 <section class="hero"><div class="wrap hero-layout">
 <div><p class="eyebrow">Open-source recovery gate</p>
 <h1>Prove your recovery works.<br><span>Then make the change.</span></h1>
-<p class="sub">Run a real restore drill. Keep the evidence fresh. Refuse a guarded change until you have a tested way back.</p>
+<p class="sub">Evaluate a proposed change, see the decision and proof behind it, then choose the next step. Restore Gap records the evidence and never executes the change.</p>
 <div class="cta-row"><a class="ui-kit-button cta-primary" href="#install">Run your first drill</a><a class="ui-kit-button" href="https://github.com/tannernicol/restoregap">View the source ↗</a></div>
 <p class="trust">MIT · Offline · No account · Linux &amp; macOS</p></div>
 <div><div class="terminal" aria-label="The recovery gate in three steps">
@@ -111,7 +115,7 @@ details p { color: var(--ui-muted); margin: 0 0 20px; }
 <div class="terminal-step"><code>$ restoregap preflight --intent cleanup.yml</code><p><span class="state block">BLOCK</span> &nbsp;No fresh recovery proof.</p></div>
 <div class="terminal-step"><code>$ restoregap drill</code><p><span class="state pass">RESTORED</span> &nbsp;Recovered data passed its checks.</p></div>
 <div class="terminal-step"><code>$ restoregap preflight --intent cleanup.yml</code><p><span class="state pass">PASS</span> &nbsp;Required recovery proof is fresh.</p></div>
-</div></div><p class="terminal-note">The gate evaluates an intent; it does not execute the change.</p></div>
+</div></div><div class="ledger-card" aria-label="Recent local ledger decision"><div class="ledger-card-head"><span>Local decision ledger</span><span>PASS · recorded</span></div><code>proposed: delete_file /srv/app.db</code><p>evidence: recovery drill passed · proof fresh</p><code>$ restoregap ledger show</code></div><p class="terminal-note">The gate evaluates an intent; it does not execute the change.</p></div>
 </div></section>
 <section id="how"><div class="wrap">
 <p class="eyebrow">You know the drill.</p><h2>A backup job succeeded.<br>Could you actually recover?</h2>
@@ -126,12 +130,12 @@ details p { color: var(--ui-muted); margin: 0 0 20px; }
 <section id="install"><div class="wrap"><h2>Your first drill, on disposable data.</h2><p class="lead">Install the binary, download the example, and watch the same intent block, pass, then block again when the proof expires.</p>
 <div class="install-grid"><div>
 <h3>1. Install</h3>
-<pre><code>curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.10.1/scripts/install.sh
+<pre><code>curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.11.0/scripts/install.sh
 less install.sh
-RESTOREGAP_VERSION=v0.10.1 sh install.sh
+RESTOREGAP_VERSION=v0.11.0 sh install.sh
 export PATH="$HOME/.local/bin:$PATH"</code></pre>
 <h3>2. Run the example</h3>
-<pre><code>git clone --depth 1 --branch v0.10.1 https://github.com/tannernicol/restoregap.git
+<pre><code>git clone --depth 1 --branch v0.11.0 https://github.com/tannernicol/restoregap.git
 cd restoregap
 bash demo/run.sh</code></pre>
 <p class="small">The example needs Bash, Git and SQLite's <code>sqlite3</code> command. It uses disposable files and a separate ledger. You do not need to give it your backups.</p>
@@ -144,7 +148,7 @@ bash demo/run.sh</code></pre>
 <section id="agents"><div class="wrap split"><div><p class="eyebrow">For people, scripts and agents</p><h2>Put the proof before the permission.</h2><p class="lead">Wire preflight into the place that approves a risky operation. The example agent hook covers documented command patterns; the CLI and MCP expose the same recovery decision.</p><a class="ui-kit-button" href="https://github.com/tannernicol/restoregap/blob/main/docs/agent-gate.md">Set up the agent hook →</a></div>
 <div class="note"><h3>Know what the gate proves.</h3><p>Only declared guards and configured integrations are covered. This is not a universal shell interceptor.</p><p>A drill's claim is limited to the restore and checks you authored. Its temporary workspace is not an operating-system security sandbox.</p><p>A fresh proof records a successful test. It cannot guarantee a future recovery under every failure.</p></div></div></section>
 <section id="hosted"><div class="wrap"><h2>The whole local tool stays free.</h2><p class="lead">Paying should buy an operated service—not unlock a recovery check you need.</p><div class="split">
-<div><span class="tag">Available · MIT</span><h3>Run it yourself</h3><ul class="feature-list"><li>Check, drill, gate, ledger and agent integrations</li><li>Local proof history and signed evidence exports</li><li>Offline verification and multi-host fleet views</li><li>No account or service dependency</li></ul><a class="ui-kit-button" href="#install">Install Restore Gap</a></div>
+<div><span class="tag">Available · MIT</span><h3>Run it yourself</h3><ul class="feature-list"><li>Check, drill, gate, ledger and agent integrations</li><li>Local proof history; proofs may be signed</li><li>Offline verification and multi-host fleet views</li><li>No account or service dependency</li></ul><a class="ui-kit-button" href="#install">Install Restore Gap</a></div>
 <div><span class="tag">Proposed · Not available yet</span><h3>Evidence that stays off-host</h3><ul class="feature-list"><li>Retained history from explicitly enrolled machines</li><li>Alerts when expected proof fails, expires, or stops arriving</li><li>Private verification links and portable exports</li><li>You keep ownership of your backups and recovery</li></ul><a class="ui-kit-button" href="https://github.com/tannernicol/restoregap/issues/1">Tell us what you'd pay to operate →</a><p class="small">Include your host count and the problem you would pay to stop managing. This is an interest check, not a checkout.</p></div>
 </div></div></section>
 <section id="questions"><div class="wrap"><h2>Before you trust it.</h2>

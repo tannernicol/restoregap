@@ -5,6 +5,7 @@ package drill
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	commandrunner "github.com/tannernicol/restoregap/internal/command"
 	"github.com/tannernicol/restoregap/internal/contextspec"
 )
 
@@ -86,7 +88,7 @@ func runServe(c contextspec.DrillCheck, env checkEnv) checkResult {
 	if readyTimeout <= 0 {
 		readyTimeout = contextspec.DefaultServeReadyTimeout
 	}
-	readyIn, readyResult, err := waitReady(c.Probes[0], port, env, readyTimeout, w)
+	readyIn, readyResult, err := waitReady(env.Context, c.Probes[0], port, env, readyTimeout, w)
 	if err != nil {
 		return checkResult{outcome: contextspec.CheckOutcome{
 			Type: "serve", Pass: false,
@@ -101,7 +103,7 @@ func runServe(c contextspec.DrillCheck, env checkEnv) checkResult {
 	parts := []string{fmt.Sprintf("ready in %s", readyIn.Round(10*time.Millisecond)), readyResult.detail}
 	pass := true
 	for i, p := range c.Probes[1:] {
-		res := runProbe(p, port, env)
+		res := runProbeContext(env.Context, p, port, env)
 		parts = append(parts, fmt.Sprintf("probe %d %s", i+2, res.detail))
 		if !res.pass {
 			pass = false
@@ -172,7 +174,10 @@ func killProcessGroup(cmd *exec.Cmd, w *procWaiter) {
 // process that exited before ready proves nothing). Returns how long it
 // took and the passing probe's own result, so the outcome detail can quote
 // it directly instead of running probe 0 a second time.
-func waitReady(p contextspec.DrillProbe, port int, env checkEnv, timeout time.Duration, w *procWaiter) (time.Duration, probeResult, error) {
+func waitReady(ctx context.Context, p contextspec.DrillProbe, port int, env checkEnv, timeout time.Duration, w *procWaiter) (time.Duration, probeResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	start := time.Now()
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
@@ -180,7 +185,7 @@ func waitReady(p contextspec.DrillProbe, port int, env checkEnv, timeout time.Du
 	defer ticker.Stop()
 
 	for {
-		if res := runProbe(p, port, env); res.pass {
+		if res := runProbeContext(ctx, p, port, env); res.pass {
 			return time.Since(start), res, nil
 		}
 		select {
@@ -188,6 +193,8 @@ func waitReady(p contextspec.DrillProbe, port int, env checkEnv, timeout time.Du
 			return 0, probeResult{}, fmt.Errorf("serve command exited before becoming ready (%v)", w.Err)
 		case <-deadline.C:
 			return 0, probeResult{}, fmt.Errorf("not ready within %s", timeout)
+		case <-ctx.Done():
+			return 0, probeResult{}, ctx.Err()
 		case <-ticker.C:
 		}
 	}
@@ -199,12 +206,12 @@ type probeResult struct {
 	detail string
 }
 
-func runProbe(p contextspec.DrillProbe, port int, env checkEnv) probeResult {
+func runProbeContext(ctx context.Context, p contextspec.DrillProbe, port int, env checkEnv) probeResult {
 	switch p.Type {
 	case "http":
 		return runHTTPProbe(p, port)
 	case "command":
-		return runCommandProbe(p, port, env)
+		return runCommandProbeContext(ctx, p, port, env)
 	default:
 		return probeResult{detail: fmt.Sprintf("unknown probe type %q", p.Type)}
 	}
@@ -243,25 +250,19 @@ func runHTTPProbe(p contextspec.DrillProbe, port int) probeResult {
 	return probeResult{pass: true, detail: fmt.Sprintf("GET %s -> %d (body ok)", p.Path, resp.StatusCode)}
 }
 
-// runCommandProbe runs an arbitrary sh -c probe with RG_PORT/RG_TARGET/
-// RG_SANDBOX; exit 0 is pass. The detail is always just the first output
-// line (or a plain ok/failed when there is none) — this is a liveness
-// probe, not an invariant check, so it stays terse.
-func runCommandProbe(p contextspec.DrillProbe, port int, env checkEnv) probeResult {
-	cmd := exec.Command("sh", "-c", p.Run)
-	cmd.Env = append(os.Environ(),
+func runCommandProbeContext(ctx context.Context, p contextspec.DrillProbe, port int, env checkEnv) probeResult {
+	r := commandrunner.Shell(ctx, p.Run, commandrunner.Options{Env: append(os.Environ(),
 		"RG_PORT="+strconv.Itoa(port),
 		"RG_TARGET="+env.Target,
 		"RG_SANDBOX="+env.Sandbox,
-	)
-	out, err := cmd.CombinedOutput()
-	line := firstLine(out)
-	pass := err == nil
+	), Timeout: serveProbeTimeout})
+	line := firstLine(r.Output)
+	pass := r.Err == nil
 	if line == "" {
 		if pass {
 			line = "ok"
 		} else {
-			line = fmt.Sprintf("failed: %v", err)
+			line = fmt.Sprintf("failed: %v", r.Err)
 		}
 	}
 	return probeResult{pass: pass, detail: "command probe: " + line}

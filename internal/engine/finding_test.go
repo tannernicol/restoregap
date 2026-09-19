@@ -17,6 +17,9 @@ func TestApplyOverridesDowngradesMatchingFinding(t *testing.T) {
 	if got[0].Verdict != VerdictPass {
 		t.Errorf("f1 verdict = %s, want pass (overridden)", got[0].Verdict)
 	}
+	if got[0].Override == nil || got[0].Override.ApprovedBy != "tanner" || got[0].Override.Reason == "" {
+		t.Errorf("f1 override metadata = %#v, want typed owner exception", got[0].Override)
+	}
 	if got[1].Verdict != VerdictWarn {
 		t.Errorf("f2 verdict = %s, want warn (untouched)", got[1].Verdict)
 	}

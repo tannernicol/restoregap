@@ -65,6 +65,18 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test recovery boundaries on the native operating system
+        shell: bash
+        run: >-
+          go test -race -shuffle=on
+          ./internal/command ./internal/proofstore ./internal/contextspec
+          ./internal/rules ./internal/preflight ./internal/drill
+          ./internal/evidence ./internal/bundle ./internal/cli
+
       - name: Verify archive, binary, and isolated demo
         shell: bash
         env:

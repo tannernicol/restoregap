@@ -156,3 +156,14 @@ func TestPreflightPlanFlagSkipsLedger(t *testing.T) {
 		t.Errorf("--plan must not create the ledger file, stat err = %v", err)
 	}
 }
+
+func TestPreflightExposesRequireCoverageFlag(t *testing.T) {
+	cmd := newPreflightCmd()
+	flag := cmd.Flags().Lookup("require-coverage")
+	if flag == nil {
+		t.Fatal("preflight must expose --require-coverage")
+	}
+	if flag.DefValue != "false" {
+		t.Errorf("--require-coverage default = %q, want false", flag.DefValue)
+	}
+}

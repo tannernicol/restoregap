@@ -156,6 +156,43 @@ func TestCheckProofSignature(t *testing.T) {
 	}
 }
 
+func TestIntrinsicProofStateMatchesGuardCheckAndLevel(t *testing.T) {
+	now := t3339("2026-05-14T12:00:00Z")
+	expiredAt := t3339("2026-05-14T06:00:00Z")
+	observedAt := t3339("2026-05-14T00:00:00Z")
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badSignature := ed25519.Sign(priv, []byte("not the signed proof"))
+	proofs := []Proof{
+		{ID: "expired", Status: ProofRecordValidated, ObservedAt: &observedAt, ExpiresAt: &expiredAt},
+		{ID: "disputed", Status: ProofRecordDisputed, ObservedAt: &observedAt},
+		{ID: "unreachable", Status: ProofRecordUnreachable, ObservedAt: &observedAt},
+		{ID: "bad-signature", Status: ProofRecordValidated, ObservedAt: &observedAt,
+			Signature: &Signature{PublicKeyHex: hex.EncodeToString(pub), SignatureHex: hex.EncodeToString(badSignature)}},
+	}
+	ctx := Context{Proofs: proofs}
+	want := map[string]ProofState{
+		"expired":       StateStale,
+		"disputed":      StateContradicted,
+		"unreachable":   StateUnreachable,
+		"bad-signature": StateContradicted,
+	}
+	for _, proof := range proofs {
+		t.Run(proof.ID, func(t *testing.T) {
+			intrinsic := EvaluateProof(proof, now)
+			guard := ctx.CheckProof(proof.ID, 0, false, now)
+			if intrinsic.State != want[proof.ID] || guard.State != intrinsic.State {
+				t.Fatalf("intrinsic=%s (%s), guard=%s (%s), want %s", intrinsic.State, intrinsic.Detail, guard.State, guard.Detail, want[proof.ID])
+			}
+			if level, _ := LevelOf(proof, now); level != LevelDeclared {
+				t.Errorf("LevelOf invalid proof = %s, want declared", level)
+			}
+		})
+	}
+}
+
 // TestCheckProofRequireVerified: require_verified exists to distinguish "someone
 // attested" from "a recovery was reconstructed and the bytes matched". An
 // observed proof must NOT satisfy a guard that asked for the stronger claim,

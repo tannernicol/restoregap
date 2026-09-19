@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -87,13 +88,20 @@ func fromRawScope(rs *rawScope) Scope {
 }
 
 type rawDrill struct {
-	Proof          string          `yaml:"proof"`
-	Artifact       string          `yaml:"artifact"`
-	Recover        string          `yaml:"recover"`
-	RecoverySource string          `yaml:"recovery_source"`
-	Validate       []rawDrillCheck `yaml:"validate"`
-	Budgets        rawDrillBudgets `yaml:"budgets"`
-	PinCheck       string          `yaml:"pin_check"`
+	Proof          string           `yaml:"proof"`
+	Artifact       string           `yaml:"artifact"`
+	Recover        string           `yaml:"recover"`
+	RecoverySource string           `yaml:"recovery_source"`
+	Validate       []rawDrillCheck  `yaml:"validate"`
+	Budgets        rawDrillBudgets  `yaml:"budgets"`
+	Dependencies   *rawDependencies `yaml:"dependencies"`
+	PinCheck       string           `yaml:"pin_check"`
+}
+
+type rawDependencies struct {
+	Paths    []string `yaml:"paths"`
+	Commands []string `yaml:"commands"`
+	Packages []string `yaml:"packages"`
 }
 
 type rawDrillFreshness struct {
@@ -163,6 +171,7 @@ type rawGuard struct {
 	RecoveryCopy     string      `yaml:"recovery_copy"`
 	AlternatePaths   []string    `yaml:"alternate_paths"`
 	RequireVerified  bool        `yaml:"require_verified"`
+	RequireBound     bool        `yaml:"require_bound"`
 	Layer            string      `yaml:"layer"`
 	Category         string      `yaml:"category"`
 	Scope            *rawScope   `yaml:"scope"`
@@ -177,6 +186,7 @@ type rawFact struct {
 }
 
 type rawSignature struct {
+	Version   int    `yaml:"version"`
 	PublicKey string `yaml:"public_key"`
 	Signature string `yaml:"signature"`
 }
@@ -192,6 +202,8 @@ type rawProof struct {
 	Verified     bool             `yaml:"verified"`
 	Command      string           `yaml:"command"`
 	Measurements *rawMeasurements `yaml:"measurements"`
+	RecipeDigest string           `yaml:"recipe_digest"`
+	Dependencies *rawDependencies `yaml:"dependencies"`
 	Accepted     *rawAcceptance   `yaml:"accepted"`
 	Layer        string           `yaml:"layer"`
 	Category     string           `yaml:"category"`
@@ -333,6 +345,10 @@ func fromRawDrill(rd rawDrill) (Drill, error) {
 	if err != nil {
 		return Drill{}, fmt.Errorf("%s: %w", rd.Proof, err)
 	}
+	dependencies, err := fromRawDependencies(rd.Dependencies)
+	if err != nil {
+		return Drill{}, fmt.Errorf("%s: %w", rd.Proof, err)
+	}
 	return Drill{
 		Proof:          rd.Proof,
 		Artifact:       rd.Artifact,
@@ -340,8 +356,26 @@ func fromRawDrill(rd rawDrill) (Drill, error) {
 		RecoverySource: rd.RecoverySource,
 		Validate:       checks,
 		Budgets:        budgets,
+		Dependencies:   dependencies,
 		PinCheck:       rd.PinCheck,
 	}, nil
+}
+
+func fromRawDependencies(raw *rawDependencies) (Dependencies, error) {
+	if raw == nil {
+		return Dependencies{}, nil
+	}
+	deps := Dependencies{
+		Paths: append([]string(nil), raw.Paths...), Commands: append([]string(nil), raw.Commands...), Packages: append([]string(nil), raw.Packages...),
+	}
+	for kind, values := range map[string][]string{"paths": deps.Paths, "commands": deps.Commands, "packages": deps.Packages} {
+		for i, value := range values {
+			if strings.TrimSpace(value) == "" {
+				return Dependencies{}, fmt.Errorf("dependencies.%s[%d] must not be empty", kind, i)
+			}
+		}
+	}
+	return deps, nil
 }
 
 // drillCheckTypes is the closed set of validate[].type values the drill
@@ -582,6 +616,7 @@ func fromRawGuard(g rawGuard) (Guard, error) {
 		RecoveryCopy:     g.RecoveryCopy,
 		AlternatePaths:   g.AlternatePaths,
 		RequireVerified:  g.RequireVerified,
+		RequireBound:     g.RequireBound,
 		Layer:            g.Layer,
 		Category:         g.Category,
 		Scope:            fromRawScope(g.Scope),
@@ -673,6 +708,18 @@ func fromRawProof(rp rawProof) (Proof, error) {
 	if rp.Host != nil {
 		host = &ProofHost{Name: rp.Host.Name, ID: rp.Host.ID}
 	}
+	var dependencies *Dependencies
+	if rp.Dependencies != nil {
+		value, err := fromRawDependencies(rp.Dependencies)
+		if err != nil {
+			return Proof{}, fmt.Errorf("%s: %w", rp.ID, err)
+		}
+		dependencies = &value
+	}
+	measurements, err := fromRawMeasurements(rp.Measurements)
+	if err != nil {
+		return Proof{}, fmt.Errorf("%s: %w", rp.ID, err)
+	}
 	return Proof{
 		ID:           rp.ID,
 		Status:       status,
@@ -683,7 +730,9 @@ func fromRawProof(rp rawProof) (Proof, error) {
 		Signature:    sig,
 		Verified:     rp.Verified,
 		Command:      rp.Command,
-		Measurements: fromRawMeasurements(rp.Measurements),
+		Measurements: measurements,
+		RecipeDigest: rp.RecipeDigest,
+		Dependencies: dependencies,
 		Accepted:     accepted,
 		Layer:        rp.Layer,
 		Category:     rp.Category,
@@ -722,7 +771,10 @@ func fromRawSignature(id string, rs *rawSignature) (*Signature, error) {
 	if rs.PublicKey == "" || rs.Signature == "" {
 		return nil, fmt.Errorf("%s: signature requires both public_key and signature", id)
 	}
-	return &Signature{PublicKeyHex: rs.PublicKey, SignatureHex: rs.Signature}, nil
+	if rs.Version != 0 && rs.Version != 2 {
+		return nil, fmt.Errorf("%s: unsupported signature version %d", id, rs.Version)
+	}
+	return &Signature{Version: rs.Version, PublicKeyHex: rs.PublicKey, SignatureHex: rs.Signature}, nil
 }
 
 // fromRawAcceptance converts and validates an optional accepted: block.
@@ -760,13 +812,19 @@ func fromRawAcceptance(proofID string, ra *rawAcceptance) (*Acceptance, error) {
 // fromRawMeasurements converts an optional measurements: block. A nil input
 // (the field was absent) yields a nil result, distinguishing "not a drill
 // proof" from a proof that measured nothing.
-func fromRawMeasurements(rm *rawMeasurements) *Measurements {
+func fromRawMeasurements(rm *rawMeasurements) (*Measurements, error) {
 	if rm == nil {
-		return nil
+		return nil, nil
+	}
+	if math.IsNaN(rm.RTOSeconds) || math.IsInf(rm.RTOSeconds, 0) || rm.RTOSeconds < 0 {
+		return nil, fmt.Errorf("measurements.rto_seconds must be finite and non-negative")
+	}
+	if rm.RPOSeconds != nil && (math.IsNaN(*rm.RPOSeconds) || math.IsInf(*rm.RPOSeconds, 0) || *rm.RPOSeconds < 0) {
+		return nil, fmt.Errorf("measurements.rpo_seconds must be finite and non-negative")
 	}
 	checks := make([]CheckOutcome, 0, len(rm.Checks))
 	for _, rc := range rm.Checks {
 		checks = append(checks, CheckOutcome(rc))
 	}
-	return &Measurements{RTOSeconds: rm.RTOSeconds, RPOSeconds: rm.RPOSeconds, Checks: checks}
+	return &Measurements{RTOSeconds: rm.RTOSeconds, RPOSeconds: rm.RPOSeconds, Checks: checks}, nil
 }

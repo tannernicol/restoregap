@@ -4,6 +4,8 @@
 package status
 
 import (
+	"crypto/ed25519"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +60,31 @@ func TestStatusSeparatesGateBrokenFromBlockedAndRendersLast(t *testing.T) {
 		if !strings.Contains(last, want) {
 			t.Errorf("last decision missing %q:\n%s", want, last)
 		}
+	}
+}
+
+func TestStatusInvalidSignatureIsNotGreen(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := t3339(t, "2026-08-01T00:00:00Z")
+	bad := ed25519.Sign(priv, []byte("wrong message"))
+	p := contextspec.Proof{
+		ID: "signed", Status: contextspec.ProofRecordValidated, ObservedAt: observed,
+		Verified: true, Signature: &contextspec.Signature{
+			PublicKeyHex: hex.EncodeToString(pub), SignatureHex: hex.EncodeToString(bad),
+		},
+	}
+	proofs := contextspec.Context{Proofs: []contextspec.Proof{p}}
+	verdict := "pass"
+	rows := getProofs(proofs, *t3339(t, "2026-08-02T00:00:00Z"), "", &verdict, new(int))
+	if verdict != "warn" || len(rows) != 1 || rows[0].Status != "contradicted" {
+		t.Fatalf("invalid signature status = verdict %q rows %+v, want warn/contradicted", verdict, rows)
+	}
+	restored, observedCount, accepted, unreviewed := partitionCounts(proofs, *t3339(t, "2026-08-02T00:00:00Z"), "")
+	if restored != 0 || observedCount != 0 || accepted != 0 || unreviewed != 1 {
+		t.Fatalf("invalid signature counts = restored=%d observed=%d accepted=%d unreviewed=%d", restored, observedCount, accepted, unreviewed)
 	}
 }
 
@@ -357,12 +384,27 @@ func TestInventorySummaryLine(t *testing.T) {
 func TestPartitionCounts(t *testing.T) {
 	ctx := syntheticInventoryContext(t)
 	now := *t3339(t, "2026-08-20T12:00:00Z")
-	restored, observed, accepted, unreviewed := partitionCounts(ctx.Proofs, now, "")
+	restored, observed, accepted, unreviewed := partitionCounts(ctx, now, "")
 	if restored != 3 || observed != 0 || accepted != 0 || unreviewed != 1 {
 		t.Errorf("partitionCounts = (%d, %d, %d, %d), want (3, 0, 0, 1)", restored, observed, accepted, unreviewed)
 	}
 	if restored+observed+accepted+unreviewed != len(ctx.Proofs) {
 		t.Errorf("restored+observed+accepted+unreviewed = %d, want len(Proofs) = %d", restored+observed+accepted+unreviewed, len(ctx.Proofs))
+	}
+}
+
+func TestInventoryRecipeMismatchIsNotRestored(t *testing.T) {
+	now := *t3339(t, "2026-08-20T12:00:00Z")
+	drill := contextspec.Drill{Proof: "bound", Artifact: "/srv/data", RecoverySource: "/backup/data", Recover: "restore-v1", Validate: []contextspec.DrillCheck{{Type: "byte_identical"}}}
+	deps := contextspec.NormalizeDependencies(drill.Dependencies)
+	proof := contextspec.Proof{ID: "bound", Status: contextspec.ProofRecordValidated, Verified: true,
+		RecipeDigest: contextspec.RecipeDigest(drill), Dependencies: &deps,
+		Measurements: &contextspec.Measurements{Checks: []contextspec.CheckOutcome{{Type: "byte_identical", Pass: true}}}}
+	ctx := contextspec.Context{Drills: []contextspec.Drill{drill}, Proofs: []contextspec.Proof{proof}}
+	ctx.Drills[0].Recover = "restore-v2"
+	rows := buildInventory(ctx, nil, now, "")
+	if len(rows) != 1 || rows[0].Level != contextspec.LevelDeclared.String() || !strings.Contains(rows[0].ProofAge, "recipe binding") {
+		t.Fatalf("recipe mismatch row = %+v, want declared with binding reason", rows)
 	}
 }
 
@@ -377,7 +419,7 @@ func TestPartitionCountsSplitsActiveAcceptance(t *testing.T) {
 	lapsed := contextspec.Proof{ID: "b", Status: contextspec.ProofRecordObserved, Accepted: &contextspec.Acceptance{
 		By: "owner/tanner", At: now.Add(-100 * 24 * time.Hour), Reason: "cannot be drilled unattended", ReviewBy: now.Add(-time.Hour),
 	}}
-	restored, observed, accepted, unreviewed := partitionCounts([]contextspec.Proof{active, lapsed}, now, "")
+	restored, observed, accepted, unreviewed := partitionCounts(contextspec.Context{Proofs: []contextspec.Proof{active, lapsed}}, now, "")
 	if restored != 0 || observed != 0 || accepted != 1 || unreviewed != 1 {
 		t.Errorf("partitionCounts = (%d, %d, %d, %d), want (0, 0, 1, 1)", restored, observed, accepted, unreviewed)
 	}
@@ -401,7 +443,7 @@ func TestPartitionCountsObservedVsUnreviewed(t *testing.T) {
 	expiredProof := contextspec.Proof{ID: "u2", Status: contextspec.ProofRecordObserved, ObservedAt: stalePast, ExpiresAt: staleExpires}
 
 	restored, observed, accepted, unreviewed := partitionCounts(
-		[]contextspec.Proof{observedProof, noExpiryProof, expiredProof}, now, "")
+		contextspec.Context{Proofs: []contextspec.Proof{observedProof, noExpiryProof, expiredProof}}, now, "")
 	if restored != 0 || observed != 1 || accepted != 0 || unreviewed != 2 {
 		t.Errorf("partitionCounts = (%d, %d, %d, %d), want (0, 1, 0, 2)", restored, observed, accepted, unreviewed)
 	}
@@ -425,14 +467,15 @@ func TestFreshnessWindowThirtyDayTTLGoesUnreviewedAfterAboutFourDays(t *testing.
 	freshAttestation := contextspec.Proof{ID: "daily-refresh", Status: contextspec.ProofRecordObserved,
 		ObservedAt: oneDayAgo, ExpiresAt: expires30dFromOneDayAgo}
 
-	if isObservedProof(staleAttestation, now) {
+	ctx := contextspec.Context{Proofs: []contextspec.Proof{staleAttestation, freshAttestation}}
+	if isObservedProof(ctx, staleAttestation, now) {
 		t.Error("a 30d-TTL attestation observed 6 days ago must be unreviewed (outside its ~4.3d freshness window), got observed")
 	}
-	if !isObservedProof(freshAttestation, now) {
+	if !isObservedProof(ctx, freshAttestation, now) {
 		t.Error("a 30d-TTL attestation observed 1 day ago must still be observed (inside its ~4.3d freshness window)")
 	}
 
-	restored, observed, accepted, unreviewed := partitionCounts([]contextspec.Proof{staleAttestation, freshAttestation}, now, "")
+	restored, observed, accepted, unreviewed := partitionCounts(ctx, now, "")
 	if restored != 0 || observed != 1 || accepted != 0 || unreviewed != 1 {
 		t.Errorf("partitionCounts = (%d, %d, %d, %d), want (0, 1, 0, 1)", restored, observed, accepted, unreviewed)
 	}

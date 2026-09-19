@@ -23,16 +23,17 @@
 package drill
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	commandrunner "github.com/tannernicol/restoregap/internal/command"
 	"github.com/tannernicol/restoregap/internal/contextspec"
 )
 
@@ -74,6 +75,9 @@ type Result struct {
 // deterministic runs; the zero value measures real elapsed time.
 type Runner struct {
 	Now func() time.Time
+	// Timeout bounds each declared command and its ordinary descendants. It is
+	// deliberately separate from Spec.Budgets.RTO, which measures proof time.
+	Timeout time.Duration
 
 	// SandboxDir is the parent directory throwaway sandboxes are created in.
 	// Empty means the OS temp dir, which on most Linux systems is tmpfs —
@@ -118,68 +122,50 @@ func hashFile(path string) (string, error) {
 // — whatever the serve command itself expects); which checks run determines
 // what shape it must take.
 func (r Runner) Run(spec Spec) Result {
+	return r.RunContext(context.Background(), spec)
+}
+
+// RunContext performs one drill while honoring caller cancellation. A canceled
+// or timed-out recovery/check can never return a verified result.
+func (r Runner) RunContext(ctx context.Context, spec Spec) Result {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	res := Result{Proof: spec.Proof}
-
-	if spec.Proof == "" || spec.Artifact == "" || spec.Recover == "" {
-		res.Err = fmt.Errorf("drill: proof, artifact and recover are all required")
-		res.SourceUnreachable = true // no recovery was attempted; nothing was proven
-		return res
-	}
-
-	checks := spec.Validate
-	if len(checks) == 0 {
-		checks = []contextspec.DrillCheck{{Type: "byte_identical"}}
-	}
-
-	// PreHash is only meaningful — and only computed — when byte_identical is
-	// actually running. Other check types must work against a live artifact
-	// that is a changing dataset or a directory, neither of which hashFile
-	// can read.
-	var preHash string
-	if hasCheckType(checks, "byte_identical") {
-		h, err := hashFile(spec.Artifact)
-		if err != nil {
-			res.Err = fmt.Errorf("drill %s: cannot read the live artifact %s: %w", spec.Proof, spec.Artifact, err)
-			// The run stopped before any recovery was attempted — nothing was
-			// proven, so this is an "unreachable" result, not a failed
-			// verification.
-			res.SourceUnreachable = true
-			return res
-		}
-		preHash = h
-		res.PreHash = h
-	}
-
-	sandbox, err := os.MkdirTemp(r.SandboxDir, "restoregap-drill-")
+	setup, err := r.prepareRun(ctx, spec)
 	if err != nil {
-		res.Err = fmt.Errorf("drill %s: cannot create sandbox: %w", spec.Proof, err)
+		res.Err = err
 		res.SourceUnreachable = true // no recovery was attempted; nothing was proven
 		return res
 	}
-	defer func() { _ = os.RemoveAll(sandbox) }()
+	defer setup.cancel()
+	defer func() { _ = os.RemoveAll(setup.sandbox) }()
 
-	target := filepath.Join(sandbox, "recovered")
+	checks := setup.checks
+	drillCtx := setup.ctx
+	timeout := setup.timeout
+	target := setup.target
+	res.PreHash = setup.preHash
 
 	// The RTO clock runs from just before recovery starts to just after the
 	// last check finishes — it measures the whole "how long until I know the
 	// data is back and good", not merely the recovery command's exit.
-	start := r.now()
+	start := setup.start
 
-	cmd := exec.Command("sh", "-c", spec.Recover)
-	cmd.Env = append(os.Environ(),
-		"RG_SANDBOX="+sandbox,
-		"RG_TARGET="+target,
-		"RG_RECOVERY_SOURCE="+spec.RecoverySource,
-	)
-	out, runErr := cmd.CombinedOutput()
-	if runErr != nil {
-		res.Err = fmt.Errorf("drill %s: recovery command failed: %w — %s", spec.Proof, runErr, firstLine(out))
+	run := commandrunner.Shell(drillCtx, spec.Recover, commandrunner.Options{Env: setup.commandEnv, Timeout: timeout})
+	if run.Err != nil {
+		res.Err = fmt.Errorf("drill %s: recovery command failed: %w — %s", spec.Proof, run.Err, firstLine(run.Output))
 		// A recovery WAS attempted here, so the default recording is
 		// "disputed" — but when the failure output is a source-reachability
 		// signature (the source mount missing, the connection refused or
 		// timing out, permission denied on the source), the honest report is
 		// that the drill could not even try.
-		res.SourceUnreachable = looksLikeUnreachableSource(out)
+		res.SourceUnreachable = run.ContextErr != nil || looksLikeUnreachableSource(run.Output)
+		return res
+	}
+	if drillCtx.Err() != nil {
+		res.Err = fmt.Errorf("drill %s: canceled: %w", spec.Proof, drillCtx.Err())
+		res.SourceUnreachable = true
 		return res
 	}
 
@@ -197,18 +183,20 @@ func (r Runner) Run(spec Spec) Result {
 
 	env := checkEnv{
 		Target:         target,
-		Sandbox:        sandbox,
+		Sandbox:        setup.sandbox,
 		RecoverySource: spec.RecoverySource,
-		PreHash:        preHash,
+		PreHash:        setup.preHash,
 		Now:            r.now,
 		Artifact:       spec.Artifact,
+		Context:        drillCtx,
+		Timeout:        timeout,
 	}
 
 	outcomes := make([]contextspec.CheckOutcome, 0, len(checks))
 	candidates := make([]*freshnessCandidate, 0, len(checks))
 	allPassed := true
 	for _, c := range checks {
-		cr := runCheck(c, env)
+		cr := runCheckContext(drillCtx, c, env)
 		outcomes = append(outcomes, cr.outcome)
 		if !cr.outcome.Pass {
 			allPassed = false
@@ -217,6 +205,13 @@ func (r Runner) Run(spec Spec) Result {
 			res.PostHash = cr.postHash
 		}
 		candidates = append(candidates, cr.rpo)
+		if drillCtx.Err() != nil {
+			res.Err = fmt.Errorf("drill %s: check canceled: %w", spec.Proof, drillCtx.Err())
+			res.SourceUnreachable = true
+			res.Checks = outcomes
+			res.Detail = summarizeDetail(false, outcomes)
+			return res
+		}
 	}
 
 	res.RTOSeconds = r.now().Sub(start).Seconds()
@@ -228,6 +223,89 @@ func (r Runner) Run(spec Spec) Result {
 	res.Verified = allPassed && budgetsMet
 	res.Detail = summarizeDetail(res.Verified, outcomes)
 	return res
+}
+
+type drillSetup struct {
+	ctx        context.Context
+	cancel     context.CancelFunc
+	timeout    time.Duration
+	checks     []contextspec.DrillCheck
+	preHash    string
+	sandbox    string
+	target     string
+	start      time.Time
+	commandEnv []string
+}
+
+// prepareRun performs the checks that must complete before a recovery command
+// is attempted. Every error here means no recovery ran, so callers can report
+// the result as unreachable without duplicating that classification logic.
+func (r Runner) prepareRun(ctx context.Context, spec Spec) (drillSetup, error) {
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = commandrunner.DefaultTimeout
+	}
+	drillCtx, cancel := context.WithTimeout(ctx, timeout)
+	fail := func(err error) (drillSetup, error) {
+		cancel()
+		return drillSetup{}, err
+	}
+
+	if spec.Proof == "" || spec.Artifact == "" || spec.Recover == "" {
+		return fail(fmt.Errorf("drill: proof, artifact and recover are all required"))
+	}
+	if sameLocalObject(spec.Artifact, spec.RecoverySource) {
+		return fail(fmt.Errorf("drill %s: artifact and recovery_source refer to the same local filesystem object", spec.Proof))
+	}
+
+	checks := spec.Validate
+	if len(checks) == 0 {
+		checks = []contextspec.DrillCheck{{Type: "byte_identical"}}
+	}
+	var preHash string
+	if hasCheckType(checks, "byte_identical") {
+		h, err := hashFile(spec.Artifact)
+		if err != nil {
+			return fail(fmt.Errorf("drill %s: cannot read the live artifact %s: %w", spec.Proof, spec.Artifact, err))
+		}
+		preHash = h
+	}
+
+	sandbox, err := os.MkdirTemp(r.SandboxDir, "restoregap-drill-")
+	if err != nil {
+		return fail(fmt.Errorf("drill %s: cannot create sandbox: %w", spec.Proof, err))
+	}
+	target := filepath.Join(sandbox, "recovered")
+	return drillSetup{
+		ctx: drillCtx, cancel: cancel, timeout: timeout, checks: checks,
+		preHash: preHash, sandbox: sandbox, target: target,
+		start: r.now(),
+		commandEnv: append(os.Environ(),
+			"RG_SANDBOX="+sandbox,
+			"RG_TARGET="+target,
+			"RG_RECOVERY_SOURCE="+spec.RecoverySource,
+		),
+	}, nil
+}
+
+// sameLocalObject rejects the one demonstrably unsafe producer setup: using
+// the live artifact itself (including a symlink or hardlink alias) as its
+// recovery source. Opaque remote/source URIs are left to their declared
+// recovery command; a local source directory containing a distinct backup is
+// valid and cannot be rejected from path strings alone.
+func sameLocalObject(artifact, source string) bool {
+	if artifact == "" || source == "" {
+		return false
+	}
+	a, err := os.Stat(artifact)
+	if err != nil {
+		return false
+	}
+	s, err := os.Stat(source)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(a, s)
 }
 
 // applyBudgets evaluates declared RTO/RPO budgets against what was measured

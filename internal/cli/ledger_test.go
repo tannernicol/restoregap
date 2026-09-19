@@ -134,3 +134,58 @@ func TestLedgerAnchorAppendsAndVerifyReportsAcknowledgedRepair(t *testing.T) {
 		t.Fatal("expected an error writing a second anchor for the same entry")
 	}
 }
+
+func TestLedgerShowCapturesDecisionAndKeepsLegacyDetailsEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.jsonl")
+	writeHealthyLedger(t, path) // pre-feature entry: show must call it legacy.
+	executed := false
+	if _, err := ledger.AppendNow(path, ledger.EntryDecision, "agent/test", ledger.Payload{Decision: &ledger.DecisionPayload{
+		Verdict: "pass", Actor: "agent/test", Operation: "preflight", Executed: &executed,
+		Intents:  []ledger.IntentRecord{{Action: "delete_file", Paths: []string{"/tmp/cache"}, Description: "cleanup"}},
+		Findings: []ledger.FindingRecord{{FindingID: "f2", Verdict: "pass", Proof: "recovery proof present", RequiredNextStep: "none"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newLedgerCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"show", path, "--limit", "10"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("show: %v\n%s", err, out.String())
+	}
+	got := out.String()
+	for _, want := range []string{"CHAIN: OK", "DECISIONS (newest first)", "proposed: delete_file · paths: /tmp/cache · cleanup", "proof: recovery proof present", "legacy decision: proposed change details were not recorded", "did not execute the change"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("show output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestLedgerShowEmptyAndBrokenStates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data string
+		want string
+	}{
+		{name: "empty", data: "", want: "CHAIN: EMPTY"},
+		{name: "broken", data: "not-json\n", want: "CHAIN: BROKEN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "ledger.jsonl")
+			if err := os.WriteFile(path, []byte(tc.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := newLedgerCmd()
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetArgs([]string{"show", path})
+			err := cmd.Execute()
+			if tc.name == "broken" && err == nil {
+				t.Fatal("broken ledger should return a nonzero exit error")
+			}
+			if !strings.Contains(out.String(), tc.want) {
+				t.Errorf("output = %q, want %q", out.String(), tc.want)
+			}
+		})
+	}
+}

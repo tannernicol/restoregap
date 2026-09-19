@@ -6,7 +6,10 @@ package policy
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+
+	"github.com/tannernicol/restoregap/internal/contextspec"
 )
 
 func writeLayerFile(t *testing.T, dir, name, body string) string {
@@ -92,6 +95,33 @@ guards:
 	}
 	if len(g.Match.Paths) != 2 {
 		t.Errorf("expected the added matched path to stick, got %v", g.Match.Paths)
+	}
+}
+
+func TestMergeCannotLoosenRequireBound(t *testing.T) {
+	dir := t.TempDir()
+	org := writeLayerFile(t, dir, "org.yml", `version: 2
+guards:
+  - id: bound
+    kind: guard
+    match: {paths: ["/data/**"]}
+    enforcement: warn
+    require_bound: true
+`)
+	host := writeLayerFile(t, dir, "host.yml", `version: 2
+guards:
+  - id: bound
+    kind: guard
+    match: {paths: ["/data/**"]}
+    enforcement: warn
+    require_bound: false
+`)
+	ctx, findings, err := Merge([]string{org, host})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 || !ctx.Guards[0].RequireBound {
+		t.Fatalf("require_bound was loosened: guards=%+v findings=%+v", ctx.Guards, findings)
 	}
 }
 
@@ -280,5 +310,44 @@ func TestMergeSinglePathIsPlainLoad(t *testing.T) {
 	}
 	if len(ctx.Guards) != 1 {
 		t.Fatalf("expected the one declared guard, got %+v", ctx.Guards)
+	}
+}
+
+func TestMergeSharesLoadAllScopeAndUnionSemantics(t *testing.T) {
+	dir := t.TempDir()
+	a := writeLayerFile(t, dir, "org.yml", `version: 2
+scope: {environment: prod, system: shared}
+guards:
+  - id: g1
+    kind: guard
+    match: {paths: ["/a"]}
+    scope: {system: app}
+facts:
+  - id: f1
+    statement: one
+`)
+	b := writeLayerFile(t, dir, "host.yml", `version: 2
+scope: {environment: prod, host: node-1}
+proofs:
+  - id: p1
+    status: validated
+    observed_at: "2026-08-01T00:00:00Z"
+`)
+	all, err := contextspec.LoadAll([]string{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged, findings, err := Merge([]string{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("unexpected findings: %+v", findings)
+	}
+	if !reflect.DeepEqual(all.Facts, merged.Facts) || !reflect.DeepEqual(all.Proofs, merged.Proofs) {
+		t.Fatalf("strict union drifted: LoadAll facts/proofs=%+v/%+v, policy=%+v/%+v", all.Facts, all.Proofs, merged.Facts, merged.Proofs)
+	}
+	if len(merged.Guards) != 1 || merged.Guards[0].Scope.Environment != "prod" || merged.Guards[0].Scope.System != "app" {
+		t.Fatalf("policy guard scope did not preserve per-file defaults/override: %+v", merged.Guards)
 	}
 }

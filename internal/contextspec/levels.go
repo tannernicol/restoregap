@@ -69,20 +69,19 @@ var checkTypeLevel = map[string]RecoveryLevel{
 // (proof.Measurements.Checks) — a drill with both a serve check and a
 // sqlite check that both passed is LevelServes, not merely LevelDataValid.
 func LevelOf(p Proof, now time.Time) (RecoveryLevel, string) {
-	if p.Status == ProofRecordUnreachable {
-		// Same collapse as disputed — an unreachable proof proves nothing —
-		// but with its own reason word so the inventory can say "could not
-		// try" instead of "tried and failed".
-		return LevelDeclared, "unreachable"
-	}
-	if p.Status == ProofRecordDisputed {
-		return LevelDeclared, "disputed"
-	}
-	if p.Status == ProofRecordStale {
-		return LevelDeclared, "stale"
-	}
-	if p.ExpiresAt != nil && now.After(*p.ExpiresAt) {
-		return LevelDeclared, fmt.Sprintf("proof expired %s ago", FormatAge(now.Sub(*p.ExpiresAt)))
+	if result := EvaluateProof(p, now); result.State != StatePresent {
+		switch {
+		case p.Status == ProofRecordUnreachable:
+			return LevelDeclared, "unreachable"
+		case p.Status == ProofRecordDisputed:
+			return LevelDeclared, "disputed"
+		case p.Status == ProofRecordStale:
+			return LevelDeclared, "stale"
+		case result.State == StateStale:
+			return LevelDeclared, fmt.Sprintf("proof expired %s ago", FormatAge(now.Sub(*p.ExpiresAt)))
+		default:
+			return LevelDeclared, "signature invalid"
+		}
 	}
 	if !p.Verified {
 		return LevelDeclared, "not verified"

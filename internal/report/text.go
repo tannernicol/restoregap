@@ -27,11 +27,14 @@ func (r Report) Text() []byte {
 				fmt.Fprintf(&b, "broken check: %s (%dms)\n", c.ID, c.DurationMS)
 			}
 		}
+		writeDecisionScope(&b, r)
 		return []byte(b.String())
 	}
 
 	verdict := strings.ToUpper(r.Verdict)
 	fmt.Fprintf(&b, "%s — %s\n", verdict, summarySentence(r.Verdict))
+	writeDecisionScope(&b, r)
+	b.WriteString("Evidence / why:\n")
 	for _, f := range r.Findings {
 		if f.Verdict == "pass" || f.RequiredNextStep == "" {
 			continue
@@ -54,13 +57,46 @@ func (r Report) Text() []byte {
 
 	b.WriteString("\nDetail\n")
 	for _, f := range r.Findings {
-		fmt.Fprintf(&b, "%s\n", f.Title)
-		fmt.Fprintf(&b, "  Guard: %s\n", f.GuardID)
-		fmt.Fprintf(&b, "  Resource: %s\n", f.Resource)
+		fmt.Fprintf(&b, "%s\n", findingHeadline(f))
+		fmt.Fprintf(&b, "  Why: %s\n", f.Title)
 		fmt.Fprintf(&b, "  Proof: %s\n", f.Proof)
 		if f.RequiredNextStep != "" {
 			fmt.Fprintf(&b, "  Next: %s\n", f.RequiredNextStep)
 		}
+		fmt.Fprintf(&b, "  Guard: %s\n", f.GuardID)
+		fmt.Fprintf(&b, "  ID: %s\n", f.ID)
 	}
 	return []byte(b.String())
+}
+
+func writeDecisionScope(b *strings.Builder, r Report) {
+	fmt.Fprintf(b, "Decision: %s\n", strings.ToUpper(r.Verdict))
+	b.WriteString("Restore Gap did not execute the change.\n")
+	b.WriteString("Proposed change:\n")
+	if len(r.Proposed) == 0 {
+		b.WriteString("  (not recorded)\n")
+		return
+	}
+	for _, p := range r.Proposed {
+		fmt.Fprintf(b, "  - %s\n", proposedChangeText(p))
+	}
+}
+
+func proposedChangeText(p ProposedChange) string {
+	parts := []string{p.Action}
+	if p.Command != "" {
+		parts = append(parts, "command: "+p.Command)
+	}
+	if len(p.Packages) > 0 {
+		parts = append(parts, "packages: "+strings.Join(p.Packages, ", "))
+	}
+	if len(p.TargetPaths) > 0 {
+		parts = append(parts, "from: "+strings.Join(p.Paths, ", "), "to: "+strings.Join(p.TargetPaths, ", "))
+	} else if len(p.Paths) > 0 {
+		parts = append(parts, "paths: "+strings.Join(p.Paths, ", "))
+	}
+	if p.Description != "" {
+		parts = append(parts, p.Description)
+	}
+	return strings.Join(parts, " · ")
 }
