@@ -7,18 +7,17 @@
 package evidence
 
 import (
-	"crypto/sha256"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
+	commandrunner "github.com/tannernicol/restoregap/internal/command"
 	"github.com/tannernicol/restoregap/internal/contextspec"
 	"github.com/tannernicol/restoregap/internal/ledger"
+	"github.com/tannernicol/restoregap/internal/proofstore"
 	"github.com/tannernicol/restoregap/internal/report"
 )
 
@@ -32,41 +31,36 @@ type IngestRequest struct {
 	Validated   bool          // true => status validated, else observed
 	LedgerPath  string        // optional: also record an acknowledgement entry
 	Actor       string
+	Timeout     time.Duration // verifier runtime ceiling; 0 uses command.DefaultTimeout
 }
 
-// loadContextDoc reads a context file and requires the v2 schema.
-func loadContextDoc(path string) (map[string]any, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("evidence ingest: %w", err)
-	}
-	var doc map[string]any
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return nil, fmt.Errorf("evidence ingest: parse context: %w", err)
-	}
-	if v, _ := doc["version"].(int); v != 2 {
-		return nil, fmt.Errorf("evidence ingest: context is not v2 (declare `version: 2`; `restoregap context init` writes a v2 starter)")
-	}
-	return doc, nil
-}
-
-// buildProof assembles the proof map, running the verifier command when one
-// is declared. The returned summary line feeds the ledger acknowledgement.
-func buildProof(req IngestRequest) (map[string]any, string, error) {
+func buildProofContext(ctx context.Context, req IngestRequest) (map[string]any, string, error) {
 	now := time.Now().UTC()
 	proof := map[string]any{
-		"id":          req.ProofID,
-		"status":      map[bool]string{true: "validated", false: "observed"}[req.Validated],
-		"observed_at": now.Format(time.RFC3339),
+		"id":            req.ProofID,
+		"status":        map[bool]string{true: "validated", false: "observed"}[req.Validated],
+		"observed_at":   now.Format(time.RFC3339),
+		"sha256":        nil,
+		"command":       nil,
+		"evidence_url":  nil,
+		"expires_at":    nil,
+		"verified":      nil,
+		"measurements":  nil,
+		"signature":     nil,
+		"recipe_digest": nil,
+		"dependencies":  nil,
 	}
 	summaryDetail := "manual attestation (no verifier command)"
 	if req.Command != "" {
-		out, err := exec.Command("sh", "-c", req.Command).CombinedOutput()
-		if err != nil {
-			return nil, "", fmt.Errorf("evidence ingest: verifier command failed (proof NOT recorded): %w — output: %s", err, firstLine(out))
+		timeout := req.Timeout
+		if timeout <= 0 {
+			timeout = commandrunner.DefaultTimeout
 		}
-		sum := sha256.Sum256(out)
-		proof["sha256"] = "sha256:" + hex.EncodeToString(sum[:])
+		r := commandrunner.Shell(ctx, req.Command, commandrunner.Options{Timeout: timeout})
+		if r.Err != nil {
+			return nil, "", fmt.Errorf("evidence ingest: verifier command failed (proof NOT recorded): %w — output: %s", r.Err, firstLine(r.Output))
+		}
+		proof["sha256"] = "sha256:" + hex.EncodeToString(r.OutputDigest)
 		proof["command"] = req.Command
 		summaryDetail = fmt.Sprintf("verifier ran clean; output hash %s…", proof["sha256"].(string)[:23])
 	}
@@ -80,48 +74,28 @@ func buildProof(req IngestRequest) (map[string]any, string, error) {
 }
 
 // Ingest runs the optional verifier command, hashes its output, and upserts
-// the proof into the context file's proofs list. The context file is
-// re-marshaled (comments are not preserved — the migration header documents
-// this); it is re-validated through contextspec.Parse before writing.
+// the proof into the context file's proofs list through proofstore's locked,
+// atomic persistence boundary.
 func Ingest(req IngestRequest) (string, error) {
+	return IngestContext(context.Background(), req)
+}
+
+// IngestContext is Ingest with caller cancellation propagated to the optional
+// verifier command. A failed or canceled verifier is never persisted.
+func IngestContext(ctx context.Context, req IngestRequest) (string, error) {
 	if req.ProofID == "" {
 		return "", fmt.Errorf("evidence ingest: --proof is required")
 	}
 	if req.ContextPath == "" {
 		return "", fmt.Errorf("evidence ingest: --context is required — run `restoregap context init` first, or pass --context")
 	}
-	doc, err := loadContextDoc(req.ContextPath)
+	proof, summaryDetail, err := buildProofContext(ctx, req)
 	if err != nil {
 		return "", err
 	}
 
-	proof, summaryDetail, err := buildProof(req)
-	if err != nil {
-		return "", err
-	}
-
-	proofs, _ := doc["proofs"].([]any)
-	replaced := false
-	for i, p := range proofs {
-		if pm, ok := p.(map[string]any); ok && pm["id"] == req.ProofID {
-			proofs[i] = proof
-			replaced = true
-		}
-	}
-	if !replaced {
-		proofs = append(proofs, proof)
-	}
-	doc["proofs"] = proofs
-
-	out, err := yaml.Marshal(doc)
-	if err != nil {
-		return "", err
-	}
-	if _, err := contextspec.Parse(strings.NewReader(string(out))); err != nil {
-		return "", fmt.Errorf("evidence ingest: updated context failed validation, not written: %w", err)
-	}
-	if err := os.WriteFile(req.ContextPath, out, 0o644); err != nil {
-		return "", err
+	if err := proofstore.Upsert(req.ContextPath, []map[string]any{proof}); err != nil {
+		return "", fmt.Errorf("evidence ingest: %w", err)
 	}
 
 	if req.LedgerPath != "" {
@@ -167,28 +141,7 @@ func Export(req ExportRequest) ([]byte, error) {
 		return nil, fmt.Errorf("evidence export: %w", err)
 	}
 
-	verdict := "pass"
-	proofRows := []report.KVRow{}
-	for _, p := range ctx.Proofs {
-		state := "present"
-		switch {
-		case p.ExpiresAt != nil && p.ExpiresAt.Before(now):
-			state, verdict = "EXPIRED", "warn"
-		case p.Status == contextspec.ProofRecordStale, p.Status == contextspec.ProofRecordDisputed, p.Status == contextspec.ProofRecordUnreachable:
-			state, verdict = string(p.Status), "warn"
-		}
-		detail := string(p.Status)
-		if p.ObservedAt != nil {
-			detail += " · observed " + p.ObservedAt.Format("2006-01-02")
-		}
-		if p.ExpiresAt != nil {
-			detail += " · expires " + p.ExpiresAt.Format("2006-01-02")
-		}
-		if p.SHA256 != "" {
-			detail += " · " + truncate(p.SHA256, 18) + "…"
-		}
-		proofRows = append(proofRows, report.KVRow{Key: p.ID + " (" + state + ")", Value: detail})
-	}
+	proofRows, verdict := exportProofRows(ctx, now)
 
 	sections := []report.KVSection{
 		{Title: "Scope", Rows: []report.KVRow{
@@ -200,17 +153,65 @@ func Export(req ExportRequest) ([]byte, error) {
 		sections = append(sections, report.KVSection{Title: "Proof inventory", Rows: proofRows})
 	}
 	if req.LedgerPath != "" {
-		if res, err := ledger.Verify(req.LedgerPath); err == nil {
-			state := fmt.Sprintf("%d entries · chain verified · last hash %s…", res.EntryCount, truncate(res.LastHash, 18))
-			if !res.OK {
-				state, verdict = fmt.Sprintf("CHAIN BROKEN at entry %d: %s", res.FailedAt, res.Reason), "block"
-			}
-			sections = append(sections, report.KVSection{Title: "Decision ledger", Rows: []report.KVRow{{Key: "Integrity", Value: state}}})
+		res, err := verifyRequestedLedger(req.LedgerPath)
+		if err != nil {
+			return nil, err
 		}
+		state := fmt.Sprintf("%d entries · chain verified · last hash %s…", res.EntryCount, truncate(res.LastHash, 18))
+		if !res.OK {
+			state, verdict = fmt.Sprintf("CHAIN BROKEN at entry %d: %s", res.FailedAt, res.Reason), "block"
+		}
+		sections = append(sections, report.KVSection{Title: "Decision ledger", Rows: []report.KVRow{{Key: "Integrity", Value: state}}})
 	}
 
 	summary := fmt.Sprintf("%d declared proof(s) · %s", len(proofRows), ctx.Origin)
 	return report.StatusHTML(verdict, summary, sections)
+}
+
+func exportProofRows(ctx contextspec.Context, now time.Time) ([]report.KVRow, string) {
+	verdict := "pass"
+	rows := make([]report.KVRow, 0, len(ctx.Proofs))
+	for _, p := range ctx.Proofs {
+		state := "present"
+		checked := ctx.CheckProofWithBinding(p.ID, 0, false, false, now)
+		switch checked.State {
+		case contextspec.StateStale:
+			state, verdict = "EXPIRED", "warn"
+			if p.Status == contextspec.ProofRecordStale {
+				state = string(p.Status)
+			}
+		case contextspec.StateContradicted:
+			state, verdict = "contradicted", "warn"
+		case contextspec.StateUnreachable:
+			state, verdict = string(p.Status), "warn"
+		}
+		detail := string(p.Status)
+		if checked.State != contextspec.StatePresent {
+			detail = checked.Detail
+		}
+		if p.ObservedAt != nil {
+			detail += " · observed " + p.ObservedAt.Format("2006-01-02")
+		}
+		if p.ExpiresAt != nil {
+			detail += " · expires " + p.ExpiresAt.Format("2006-01-02")
+		}
+		if p.SHA256 != "" {
+			detail += " · " + truncate(p.SHA256, 18) + "…"
+		}
+		rows = append(rows, report.KVRow{Key: p.ID + " (" + state + ")", Value: detail})
+	}
+	return rows, verdict
+}
+
+func verifyRequestedLedger(path string) (ledger.VerifyResult, error) {
+	if _, err := os.Stat(path); err != nil {
+		return ledger.VerifyResult{}, fmt.Errorf("evidence export: cannot verify requested ledger: %w", err)
+	}
+	res, err := ledger.Verify(path)
+	if err != nil {
+		return ledger.VerifyResult{}, fmt.Errorf("evidence export: cannot verify requested ledger: %w", err)
+	}
+	return res, nil
 }
 
 func truncate(s string, n int) string {

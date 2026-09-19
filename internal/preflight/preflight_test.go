@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tannernicol/restoregap/internal/engine"
+	"github.com/tannernicol/restoregap/internal/intent"
 	"github.com/tannernicol/restoregap/internal/ledger"
 )
 
@@ -64,6 +66,30 @@ func TestRunZeroConfigBenignPasses(t *testing.T) {
 	}
 	if out.Verdict != "pass" {
 		t.Errorf("verdict = %q, want pass", out.Verdict)
+	}
+}
+
+func TestRunRequireCoverageBlocksUncoveredResourceWithoutChangingDefault(t *testing.T) {
+	intentPath := writeTemp(t, "intent.yml", "version: 2\naction: delete_file\npaths: [/covered, /uncovered]\n")
+	contextPath := writeTemp(t, "context.yml", `version: 2
+guards:
+  - id: covered
+    kind: guard
+    match: {paths: ["/covered"], actions: [delete_file]}
+`)
+	legacy, err := Run(context.Background(), Request{Format: "json", IntentPath: intentPath, ContextPaths: []string{contextPath}, Plan: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.ExitCode != 0 {
+		t.Fatalf("default coverage exit = %d, want 0: %s", legacy.ExitCode, legacy.Rendered)
+	}
+	strict, err := Run(context.Background(), Request{Format: "json", IntentPath: intentPath, ContextPaths: []string{contextPath}, RequireCoverage: true, Plan: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strict.ExitCode != 1 || !strings.Contains(string(strict.Rendered), "/uncovered") {
+		t.Fatalf("strict coverage result = exit %d, want block naming /uncovered: %s", strict.ExitCode, strict.Rendered)
 	}
 }
 
@@ -148,6 +174,12 @@ func TestRunDecisionRecordsExecutionMetadata(t *testing.T) {
 	if d.DurationMS < 0 {
 		t.Errorf("duration = %d, want non-negative", d.DurationMS)
 	}
+	if d.Operation != "preflight" || d.Executed == nil || *d.Executed {
+		t.Errorf("decision must describe an unexecuted preflight: operation=%q executed=%v", d.Operation, d.Executed)
+	}
+	if len(d.Intents) != 1 || d.Intents[0].Action != "delete_file" || len(d.Intents[0].Paths) != 1 {
+		t.Errorf("decision did not retain proposed intent: %#v", d.Intents)
+	}
 	for _, c := range d.Checks {
 		if c.DurationMS < 0 || c.Outcome == "" || c.ID == "" {
 			t.Errorf("invalid check record: %#v", c)
@@ -159,6 +191,132 @@ func TestRunDecisionRecordsExecutionMetadata(t *testing.T) {
 		Verdict: "pass", GateState: "ran", DurationMS: 0,
 	}}, time.Now().UTC(), "01J000000000000000000000001"); err != nil {
 		t.Fatalf("append zero-duration decision: %v", err)
+	}
+}
+
+func TestRunAsOfSeparatesEvaluationAndRecordingTimes(t *testing.T) {
+	intentPath := writeTemp(t, "intent.yml", "version: 2\naction: delete_file\npath: /tmp/scratch/notes.txt\n")
+	contextPath := writeTemp(t, "context.yml", "version: 2\n")
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.jsonl")
+	future := "2027-01-01T00:00:00Z"
+	before := time.Now().UTC()
+	res, err := Run(context.Background(), Request{
+		Format: "json", IntentPath: intentPath, ContextPaths: []string{contextPath},
+		LedgerPath: ledgerPath, AsOf: future, Actor: "agent/test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit = %d, want pass: %s", res.ExitCode, res.Rendered)
+	}
+	entries, err := ledger.ReadAll(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Payload.Decision == nil {
+		t.Fatalf("entries = %#v, want one decision", entries)
+	}
+	entry := entries[0]
+	if !entry.CreatedAt.After(before) || entry.CreatedAt.Equal(time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("created_at = %s, want recording time near now", entry.CreatedAt)
+	}
+	evaluated := entry.Payload.Decision.EvaluatedAt
+	if evaluated == nil || !evaluated.Equal(time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("evaluated_at = %v, want pinned policy time", evaluated)
+	}
+	view := ledger.Recent(entries, 1).Decisions[0]
+	if view.EvaluatedAt == nil || !view.EvaluatedAt.Equal(*evaluated) {
+		t.Fatalf("decision view lost evaluated_at: %#v", view)
+	}
+}
+
+func TestRunDecisionScopeCoversPassBlockNoMatchAndBroken(t *testing.T) {
+	intent := func(t *testing.T, path string) string {
+		t.Helper()
+		return writeTemp(t, "intent.yml", "version: 2\naction: delete_file\npath: "+path+"\n")
+	}
+	cases := []struct {
+		name       string
+		intentPath string
+		context    []string
+		wantExit   int
+		want       []string
+	}{
+		{
+			name: "pass", intentPath: "scratch", wantExit: 0,
+			want: []string{"PASS", "Decision: PASS", "Proposed change:", "did not execute", "paths: /tmp/scratch"},
+		},
+		{
+			name: "block", intentPath: "key", wantExit: 1,
+			want: []string{"BLOCK", "Decision: BLOCK", "Proposed change:", "did not execute", "paths: /home/user/.ssh/id_ed25519"},
+		},
+		{
+			name: "no match", intentPath: "unmatched", wantExit: 0,
+			want: []string{"PASS", "No findings.", "paths: /tmp/unmatched"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := "/tmp/" + tc.intentPath
+			if tc.name == "block" {
+				path = "/home/user/.ssh/id_ed25519"
+			}
+			res, err := Run(context.Background(), Request{Format: "text", IntentPath: intent(t, path), Plan: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.ExitCode != tc.wantExit {
+				t.Fatalf("exit = %d, want %d:\n%s", res.ExitCode, tc.wantExit, res.Rendered)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(string(res.Rendered), want) {
+					t.Errorf("output missing %q:\n%s", want, res.Rendered)
+				}
+			}
+		})
+	}
+	t.Run("broken", func(t *testing.T) {
+		res, err := Run(context.Background(), Request{
+			Format: "text", IntentPath: intent(t, "/tmp/broken"), ContextPaths: []string{t.TempDir()}, Plan: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.ExitCode != 3 {
+			t.Fatalf("exit = %d, want 3:\n%s", res.ExitCode, res.Rendered)
+		}
+		for _, want := range []string{"GATE BROKEN", "Decision: BLOCK", "did not execute", "paths: /tmp/broken"} {
+			if !strings.Contains(string(res.Rendered), want) {
+				t.Errorf("broken output missing %q:\n%s", want, res.Rendered)
+			}
+		}
+	})
+}
+
+func TestRecordDecisionCapturesFindingDetailAndOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.jsonl")
+	executed := false
+	finding := engine.Finding{
+		ID: "guard/g1", GuardID: "g1", Resource: "/srv/data", Verdict: engine.VerdictPass,
+		Actions: []string{"delete_file"}, Proof: "recovery was fresh", RequiredNextStep: "owner review",
+		Override: &engine.Override{ApprovedBy: "tanner", Reason: "off-host copy confirmed"},
+	}
+	if err := recordDecision(Request{LedgerPath: path, Actor: "agent/test"}, []engine.Finding{finding}, engine.VerdictPass, time.Now().UTC(), "ran", "", nil, 1,
+		[]intent.ChangeIntent{{Action: intent.ActionDeleteFile, Paths: []string{"/srv/data"}}}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := ledger.ReadAll(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := entries[0].Payload.Decision
+	if d.Operation != "preflight" || d.Executed == nil || *d.Executed != executed || len(d.Intents) != 1 {
+		t.Fatalf("decision metadata = %#v", d)
+	}
+	f := d.Findings[0]
+	if len(f.Actions) != 1 || f.Proof == "" || f.RequiredNextStep == "" || f.Override == nil || f.Override.ApprovedBy != "tanner" {
+		t.Fatalf("finding detail = %#v", f)
 	}
 }
 

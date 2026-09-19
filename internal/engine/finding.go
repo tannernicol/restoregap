@@ -18,6 +18,7 @@ type Finding struct {
 	Title            string
 	Proof            string
 	RequiredNextStep string
+	Override         *Override
 }
 
 // Override is a resolved ledger override applying to a finding: it may
@@ -49,6 +50,8 @@ func ApplyOverrides(findings []Finding, overrides []Override) []Finding {
 		}
 		if o, ok := byFinding[f.ID]; ok {
 			out[i].Verdict = VerdictPass
+			override := o
+			out[i].Override = &override
 			out[i].RequiredNextStep = "Owner override recorded (" + o.ApprovedBy + "): " + o.Reason
 		}
 	}

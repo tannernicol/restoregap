@@ -46,7 +46,7 @@ is exotic. All of them are what "do my backups work?" actually means.
 - **Plans are not decisions.** Readiness probes that re-evaluate the same
   unexecuted intent every ten minutes go to a separate ledger, or they flood
   the real one (~3,000 identical lines a week, also measured).
-- **One verdict, several doors.** An intent file, a diff, a Terraform plan,
+- **One verdict, several doors.** An intent file, a diff,
   and an MCP tool call must all reach the same answer for the same change —
   `parity-drill` proves it, every release.
 - **Zero-config safety.** With no configuration at all, SSH private keys and

@@ -27,16 +27,44 @@ const (
 	EntryEpoch           EntryType = "epoch"
 )
 
-// FindingRecord is the ledger's durable summary of one evaluated finding —
-// intentionally smaller than engine.Finding (no prose fields) since the
-// ledger is a permanent audit record, not a rendering source.
+// FindingRecord is the ledger's durable summary of one evaluated finding.
+// The optional decision detail makes the record useful on its own while
+// preserving the canonical bytes of older schema-v2 entries.
 type FindingRecord struct {
-	FindingID   string `json:"finding_id"`
-	GuardID     string `json:"guard_id"`
-	Resource    string `json:"resource"`
-	Verdict     string `json:"verdict"`
-	RiskClass   string `json:"risk_class"`
-	ProofStatus string `json:"proof_status"`
+	FindingID        string                 `json:"finding_id"`
+	GuardID          string                 `json:"guard_id"`
+	Resource         string                 `json:"resource"`
+	Verdict          string                 `json:"verdict"`
+	RiskClass        string                 `json:"risk_class"`
+	ProofStatus      string                 `json:"proof_status"`
+	Actions          []string               `json:"actions,omitempty"`
+	Why              string                 `json:"why,omitempty"`
+	Proof            string                 `json:"proof,omitempty"`
+	RequiredNextStep string                 `json:"required_next_step,omitempty"`
+	Override         *FindingOverrideRecord `json:"override,omitempty"`
+}
+
+// FindingOverrideRecord keeps an applied owner exception typed in the
+// decision entry. Older records only carry the resulting verdict and remain
+// valid because this is optional.
+type FindingOverrideRecord struct {
+	ApprovedBy string `json:"approved_by"`
+	Reason     string `json:"reason"`
+}
+
+// IntentRecord preserves the proposed operation that produced a decision.
+// It is deliberately a snapshot: later edits to an intent file cannot change
+// what the gate actually inspected.
+type IntentRecord struct {
+	Action        string   `json:"action,omitempty"`
+	Command       string   `json:"command,omitempty"`
+	Packages      []string `json:"packages,omitempty"`
+	Paths         []string `json:"paths,omitempty"`
+	TargetPaths   []string `json:"target_paths,omitempty"`
+	Actor         string   `json:"actor,omitempty"`
+	ContextWindow string   `json:"context_window,omitempty"`
+	Description   string   `json:"description,omitempty"`
+	Source        string   `json:"source,omitempty"`
 }
 
 // DecisionCheckRecord records one ordered stage of a preflight evaluation.
@@ -54,10 +82,15 @@ type DecisionCheckRecord struct {
 
 // DecisionPayload records the outcome of one preflight evaluation.
 type DecisionPayload struct {
-	Verdict       string          `json:"verdict"`
-	Findings      []FindingRecord `json:"findings"`
-	Actor         string          `json:"actor"`
-	ContextWindow string          `json:"context_window,omitempty"`
+	Verdict  string          `json:"verdict"`
+	Findings []FindingRecord `json:"findings"`
+	Actor    string          `json:"actor"`
+	// Operation and Executed are optional additive agent-facing metadata. A
+	// preflight decision describes a proposed operation; it never executes it.
+	Operation     string         `json:"operation,omitempty"`
+	Executed      *bool          `json:"executed,omitempty"`
+	Intents       []IntentRecord `json:"intents,omitempty"`
+	ContextWindow string         `json:"context_window,omitempty"`
 	// GateState distinguishes a policy decision that ran ("ran") from a
 	// gate that could not be trusted to run ("broken"). It is optional so
 	// schema-v2 entries written before this field existed retain their exact
@@ -67,6 +100,9 @@ type DecisionPayload struct {
 	Checks       []DecisionCheckRecord `json:"checks,omitempty"`
 	DurationMS   int64                 `json:"duration_ms,omitempty"`
 	ToolVersion  string                `json:"tool_version,omitempty"`
+	// EvaluatedAt is the policy clock used for proof freshness. It can differ
+	// from Entry.CreatedAt when a caller pins --as-of for a reproducible run.
+	EvaluatedAt *time.Time `json:"evaluated_at,omitempty"`
 }
 
 // OverridePayload records an owner override of a specific finding.

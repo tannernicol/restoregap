@@ -105,7 +105,7 @@ func TestV2DecisionWithoutNewFieldsStillVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, absent := range []string{"gate_state", "broken_reason", "duration_ms", "tool_version", "checks"} {
+	for _, absent := range []string{"gate_state", "broken_reason", "duration_ms", "tool_version", "checks", "evaluated_at"} {
 		if bytes.Contains(canonical, []byte(absent)) {
 			t.Errorf("legacy canonical form unexpectedly contains %s: %s", absent, canonical)
 		}

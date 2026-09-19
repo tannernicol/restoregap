@@ -4,6 +4,7 @@
 package drill
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"math"
@@ -17,6 +18,7 @@ import (
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver; pure Go, no cgo
 
+	commandrunner "github.com/tannernicol/restoregap/internal/command"
 	"github.com/tannernicol/restoregap/internal/contextspec"
 )
 
@@ -41,6 +43,8 @@ type freshnessCandidate struct {
 // recovery command wrote the recovered artifact, the declared recovery
 // source, and the injectable clock RPO measurements read against.
 type checkEnv struct {
+	Context        context.Context
+	Timeout        time.Duration
 	Target         string
 	Sandbox        string
 	RecoverySource string
@@ -71,17 +75,27 @@ func failOutcome(checkType, detail string) checkResult {
 // set at parse time) but a Spec built directly in Go — as tests do — is not
 // forced through that gate, so it fails closed here too.
 func runCheck(c contextspec.DrillCheck, env checkEnv) checkResult {
+	return runCheckContext(env.Context, c, env)
+}
+
+func runCheckContext(ctx context.Context, c contextspec.DrillCheck, env checkEnv) checkResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if env.Timeout <= 0 {
+		env.Timeout = commandrunner.DefaultTimeout
+	}
 	switch c.Type {
 	case "byte_identical":
 		return runByteIdentical(env)
 	case "sqlite":
 		return runSQLite(c, env)
 	case "git":
-		return runGit(c, env)
+		return runGitContext(ctx, c, env)
 	case "file_tree":
 		return runFileTree(c, env)
 	case "command":
-		return runCommand(c, env)
+		return runCommandContext(ctx, c, env)
 	case "serve":
 		return runServe(c, env)
 	case "key_fingerprint":
@@ -320,63 +334,66 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
-// runGit checks the recovered repository's integrity via `git fsck`, an
-// optional ref-count constraint, and opportunistically reads the last commit
-// time as an RPO candidate (used only if Run's precedence rules select it).
-func runGit(c contextspec.DrillCheck, env checkEnv) checkResult {
+func runGitContext(ctx context.Context, c contextspec.DrillCheck, env checkEnv) checkResult {
 	if _, err := exec.LookPath("git"); err != nil {
 		// A git drill without git present cannot prove anything — skipping
 		// would look like success, so this is a hard failure, not a skip.
 		return failOutcome("git", "git not found on PATH")
 	}
-	if !isGitRepo(env.Target) {
+	if !isGitRepoContext(ctx, env.Timeout, env.Target) {
 		return failOutcome("git", fmt.Sprintf("%s is not a git repository (worktree or bare)", env.Target))
 	}
 
 	var parts []string
 	pass := true
 
-	if out, err := exec.Command("git", "-C", env.Target, "fsck", "--no-progress").CombinedOutput(); err != nil {
+	result := commandrunner.Command(ctx, "git", []string{"-C", env.Target, "fsck", "--no-progress"}, commandrunner.Options{Timeout: env.Timeout})
+	if result.Err != nil || result.Truncated {
 		pass = false
-		parts = append(parts, fmt.Sprintf("fsck FAILED: %s", firstLine(out)))
+		detail := firstLine(result.Output)
+		if result.Truncated {
+			detail = "output exceeded capture limit"
+		}
+		parts = append(parts, fmt.Sprintf("fsck FAILED: %s", detail))
 	} else {
 		parts = append(parts, "fsck ok")
 	}
 
 	if c.Refs != "" {
-		ok, detail := gitRefCount(env.Target, c.Refs)
+		ok, detail := gitRefCountContext(ctx, env.Timeout, env.Target, c.Refs)
 		parts = append(parts, detail)
 		pass = pass && ok
 	}
 
 	var rpo *freshnessCandidate
-	if seconds, ok := gitLastCommitAge(env.Target, env.Now()); ok {
+	if seconds, ok := gitLastCommitAgeContext(ctx, env.Timeout, env.Target, env.Now()); ok {
 		rpo = &freshnessCandidate{rank: freshnessRankGit, seconds: seconds}
 	}
 
 	return checkResult{rpo: rpo, outcome: contextspec.CheckOutcome{Type: "git", Pass: pass, Detail: strings.Join(parts, "; ")}}
 }
 
-// isGitRepo detects either a worktree or a bare repository, mirroring the
-// spec's `rev-parse --is-inside-work-tree || --is-bare-repository` check.
-func isGitRepo(target string) bool {
-	if gitBoolCheck(target, "--is-inside-work-tree") {
+func isGitRepoContext(ctx context.Context, timeout time.Duration, target string) bool {
+	if gitBoolCheckContext(ctx, timeout, target, "--is-inside-work-tree") {
 		return true
 	}
-	return gitBoolCheck(target, "--is-bare-repository")
+	return gitBoolCheckContext(ctx, timeout, target, "--is-bare-repository")
 }
 
-func gitBoolCheck(target, flag string) bool {
-	out, err := exec.Command("git", "-C", target, "rev-parse", flag).CombinedOutput()
-	return err == nil && strings.TrimSpace(string(out)) == "true"
+func gitBoolCheckContext(ctx context.Context, timeout time.Duration, target, flag string) bool {
+	r := commandrunner.Command(ctx, "git", []string{"-C", target, "rev-parse", flag}, commandrunner.Options{Timeout: timeout})
+	return r.Err == nil && !r.Truncated && strings.TrimSpace(string(r.Output)) == "true"
 }
 
-func gitRefCount(target, constraint string) (bool, string) {
-	out, err := exec.Command("git", "-C", target, "for-each-ref").CombinedOutput()
-	if err != nil {
-		return false, fmt.Sprintf("refs: for-each-ref failed: %s", firstLine(out))
+func gitRefCountContext(ctx context.Context, timeout time.Duration, target, constraint string) (bool, string) {
+	r := commandrunner.Command(ctx, "git", []string{"-C", target, "for-each-ref"}, commandrunner.Options{Timeout: timeout})
+	if r.Err != nil || r.Truncated {
+		if r.Truncated {
+			return false, "refs: for-each-ref output exceeded capture limit"
+		}
+		return false, fmt.Sprintf("refs: for-each-ref failed: %s", firstLine(r.Output))
 	}
-	count := countNonEmptyLines(out)
+	count := countNonEmptyLines(r.Output)
 	ok, evalErr := evalCountConstraint(constraint, count)
 	if evalErr != nil {
 		return false, fmt.Sprintf("refs: %v", evalErr)
@@ -392,12 +409,12 @@ func countNonEmptyLines(b []byte) int {
 	return len(strings.Split(trimmed, "\n"))
 }
 
-func gitLastCommitAge(target string, now time.Time) (float64, bool) {
-	out, err := exec.Command("git", "-C", target, "log", "-1", "--format=%ct").CombinedOutput()
-	if err != nil {
+func gitLastCommitAgeContext(ctx context.Context, timeout time.Duration, target string, now time.Time) (float64, bool) {
+	r := commandrunner.Command(ctx, "git", []string{"-C", target, "log", "-1", "--format=%ct"}, commandrunner.Options{Timeout: timeout})
+	if r.Err != nil || r.Truncated {
 		return 0, false
 	}
-	ts, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	ts, err := strconv.ParseInt(strings.TrimSpace(string(r.Output)), 10, 64)
 	if err != nil {
 		return 0, false
 	}
@@ -499,19 +516,14 @@ func mustExistMissing(root string, paths []string) []string {
 	return missing
 }
 
-// runCommand runs an arbitrary invariant script against the recovered
-// artifact. Exit 0 is pass; the first line of combined output (stdout and
-// stderr) is kept as Detail either way, truncated by firstLine.
-func runCommand(c contextspec.DrillCheck, env checkEnv) checkResult {
-	cmd := exec.Command("sh", "-c", c.Run)
-	cmd.Env = append(os.Environ(),
+func runCommandContext(ctx context.Context, c contextspec.DrillCheck, env checkEnv) checkResult {
+	r := commandrunner.Shell(ctx, c.Run, commandrunner.Options{Env: append(os.Environ(),
 		"RG_TARGET="+env.Target,
 		"RG_SANDBOX="+env.Sandbox,
 		"RG_RECOVERY_SOURCE="+env.RecoverySource,
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return failOutcome("command", fmt.Sprintf("command failed: %s", firstLine(out)))
+	), Timeout: env.Timeout})
+	if r.Err != nil {
+		return failOutcome("command", fmt.Sprintf("command failed: %s", firstLine(r.Output)))
 	}
-	return checkResult{outcome: contextspec.CheckOutcome{Type: "command", Pass: true, Detail: firstLine(out)}}
+	return checkResult{outcome: contextspec.CheckOutcome{Type: "command", Pass: true, Detail: firstLine(r.Output)}}
 }

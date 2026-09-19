@@ -505,7 +505,10 @@ recovers this artifact today.
 8. **`restoregap drill --context <file>`.** The real thing: recover into a
    sandbox, run every declared check, measure RTO/RPO, record the proof.
    Read the failure detail if it doesn't verify — it names the failing check
-   first.
+   first. Recovery, validation, and pin commands have a separate runtime
+   ceiling of 30 minutes by default; set `--timeout <duration>` when a
+   legitimate source needs more or less time. This ceiling is distinct from
+   the declared RTO budget, which measures the proof's observed elapsed time.
 9. **Run it a few times, then `restoregap drill --calibrate --context <file>
    --ledger <ledger> --apply`.** Budgets started empty on purpose (see "Why
    budgets start empty" above) — this is where they get filled in, from

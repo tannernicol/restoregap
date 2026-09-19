@@ -105,6 +105,7 @@ func newPreflightCmd() *cobra.Command {
 	f.StringVar(&req.Format, "format", "auto", "output format: auto (text on a TTY, markdown otherwise), text, markdown, json, or html")
 	f.StringVar(&req.OutPath, "out", "", "write the report to this path (- for stdout)")
 	f.BoolVar(&req.FailOnWarn, "fail-on-warn", false, "exit non-zero on warnings, not just blocks")
+	f.BoolVar(&req.RequireCoverage, "require-coverage", false, "strict mode: every addressed path, target, package, and command must be covered by a matching guard")
 	f.BoolVar(&req.Plan, "plan", false, "evaluate without recording — for readiness probes and dry runs; a plan is not a decision")
 	f.StringVar(&req.AsOf, "as-of", "", "evaluate proof freshness as of this RFC3339 time instead of now")
 	return cmd

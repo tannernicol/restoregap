@@ -17,8 +17,8 @@ import (
 // decide turns one guard match into a fully decided Finding: it checks every
 // required proof/fact via contextspec, derives a RiskClass from the guard's
 // kind, and calls engine.Decide for the final verdict.
-func decide(m MatchResult, ctx contextspec.Context, now time.Time) engine.Finding {
-	proofStatus, risk, detail, unreachable := checkRequirements(m, ctx, now)
+func decide(m MatchResult, ctx contextspec.Context, now time.Time, dependencyConflicts map[string][]string) engine.Finding {
+	proofStatus, risk, detail, unreachable := checkRequirements(m, ctx, now, dependencyConflicts)
 	enforcement := mapEnforcement(m.Enforcement)
 	verdict := engine.Decide(risk, proofStatus, enforcement)
 
@@ -33,7 +33,7 @@ func decide(m MatchResult, ctx contextspec.Context, now time.Time) engine.Findin
 		Verdict:          verdict,
 		Title:            title(m, verdict),
 		Proof:            detail,
-		RequiredNextStep: requiredNextStep(m, verdict, ctx, unreachable),
+		RequiredNextStep: requiredNextStep(m, verdict, ctx, unreachable, dependencyConflicts),
 	}
 }
 
@@ -46,7 +46,7 @@ func decide(m MatchResult, ctx contextspec.Context, now time.Time) engine.Findin
 // the drill once the source is reachable" instead of the generic refresh
 // text — a source that was merely asleep needs different advice than a copy
 // that failed verification.
-func checkRequirements(m MatchResult, ctx contextspec.Context, now time.Time) (engine.ProofStatus, engine.RiskClass, string, []string) {
+func checkRequirements(m MatchResult, ctx contextspec.Context, now time.Time, dependencyConflicts map[string][]string) (engine.ProofStatus, engine.RiskClass, string, []string) {
 	if m.Requires.Empty() {
 		if m.Kind == contextspec.GuardKindLifeline {
 			return engine.ProofMissing, engine.RiskCannotProveSafe,
@@ -59,7 +59,10 @@ func checkRequirements(m MatchResult, ctx contextspec.Context, now time.Time) (e
 	var details []string
 	var unreachable []string
 	for _, id := range m.Requires.Proofs {
-		res := ctx.CheckProof(id, m.MaxProofAgeHours, m.RequireVerified, now)
+		res := ctx.CheckProofWithBinding(id, m.MaxProofAgeHours, m.RequireVerified, m.RequireBound, now)
+		if reasons := dependencyConflicts[id]; len(reasons) > 0 {
+			res = dependencyConflictResult(id, reasons)
+		}
 		details = append(details, res.Detail)
 		worst = worstState(worst, res.State)
 		if res.State == contextspec.StateUnreachable {
@@ -80,6 +83,13 @@ func checkRequirements(m MatchResult, ctx contextspec.Context, now time.Time) (e
 		return proofStatus, engine.RiskDataLossUnrecoverable, strings.Join(details, "; "), unreachable
 	}
 	return proofStatus, engine.RiskRecoveryProofGap, strings.Join(details, "; "), unreachable
+}
+
+func dependencyConflictResult(id string, reasons []string) contextspec.CheckResult {
+	return contextspec.CheckResult{
+		State:  contextspec.StateContradicted,
+		Detail: fmt.Sprintf("proof %q recovery dependency changed: %s", id, strings.Join(reasons, ", ")),
+	}
 }
 
 // worstState returns the more severe of two proof states, in the priority
@@ -132,9 +142,18 @@ func title(m MatchResult, verdict engine.Verdict) string {
 	}
 }
 
-func requiredNextStep(m MatchResult, verdict engine.Verdict, ctx contextspec.Context, unreachable []string) string {
+func requiredNextStep(m MatchResult, verdict engine.Verdict, ctx contextspec.Context, unreachable []string, dependencyConflicts map[string][]string) string {
 	if verdict == engine.VerdictPass {
 		return "No action required; proof is current."
+	}
+	var dependencyIDs []string
+	for _, id := range m.Requires.Proofs {
+		if len(dependencyConflicts[id]) > 0 {
+			dependencyIDs = append(dependencyIDs, id)
+		}
+	}
+	if len(dependencyIDs) > 0 {
+		return fmt.Sprintf("Changing a recovery dependency invalidated proof %s; provide independent recovery evidence or revise the change proposal. Re-drilling the same dependency does not make this dangerous plan pass.", strings.Join(dependencyIDs, ", "))
 	}
 	// A guard already matched — that is why there is a finding at all — so
 	// telling the operator to "declare a guard" sends them to do something they

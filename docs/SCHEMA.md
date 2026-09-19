@@ -18,14 +18,15 @@ disagree, and trust the code.
   actions/actors/context_windows — ANDed across fields, ORed within one),
   `requires: {proofs: [...], facts: [...]}`, `enforcement` (`block` | `warn`),
   optional `max_proof_age_hours`, `recovery_copy`, `alternate_paths`,
-  `require_verified`, and the two taxonomy fields below.
+  `require_verified`, `require_bound`, and the taxonomy fields below.
 - **`facts`** — a reviewed statement of ground truth: `id`, `statement`,
   `provenance`, and an expiry (`expires_at` or `max_age_days`).
 - **`proofs`** — declared evidence a guard's `requires.proofs` may name:
   `id`, `status` (`observed` | `validated` | `stale` | `disputed` |
   `unreachable`), `observed_at`, `expires_at`, `sha256`, `evidence_url`,
-  an optional Ed25519 `signature: {public_key, signature}` (hex), `verified`
-  (true only for a real drill's byte-for-byte reconstruction), `command`,
+  an optional Ed25519 `signature: {version, public_key, signature}` (hex keys), `verified`
+  (a recorded full drill passed its configured checks), `command`,
+  optional `recipe_digest` and captured `dependencies: {paths, commands, packages}`,
   `measurements` (RTO/RPO/per-check outcomes, drill-produced only), an
   optional `accepted: {by, at, reason, review_by}` (§"tighten-only" below
   never applies to acceptances — they are a per-proof owner decision, not a
@@ -46,8 +47,38 @@ disagree, and trust the code.
 - **`drills`** — how one artifact is reconstructed and validated: `proof`,
   `artifact`, `recover`, `recovery_source`, `validate` (typed checks:
   `byte_identical` | `sqlite` | `git` | `file_tree` | `command` | `serve` |
-  `key_fingerprint`), `budgets: {rto, rpo}`, optional `pin_check`.
+  `key_fingerprint`), `budgets: {rto, rpo}`, optional `pin_check`, and explicit
+  recovery `dependencies: {paths, commands, packages}`.
 - **top-level `scope`** — the file's own organizational default (§ above).
+
+### Recovery binding and signatures
+
+New full drills record `recipe_digest` as a SHA-256 digest of the artifact,
+recovery source, recovery/pin commands, typed checks, budgets and normalized
+dependency lists. They also capture those dependencies on the proof. Both must
+match the current drill declaration before bound evidence can satisfy a guard.
+Changing a proof ID's recipe cannot silently reuse its old successful test.
+
+`require_bound: true` rejects older, unbound evidence; it is opt-in for existing
+guards. Combine it with `require_verified: true` when a guard needs a full drill.
+Dependencies describe the recovery path, not automatically every live artifact.
+The evaluator checks all supplied intents for changes to those declared paths,
+commands or packages before accepting the affected proof. It performs no cloud
+discovery or resource inspection. A change outside the supplied scope is unknown.
+
+New signed full-drill records use signature `version: 2`: domain-separated,
+structured JSON covers status, observation/expiry times, verification flag,
+content hash, command, exact measurements/checks, recipe digest, dependencies and
+stamped host/epoch. Signatures without `version` keep their legacy message format
+and limited field coverage. They do not acquire v2 guarantees on import. An
+unrecognized version fails validation. Origin is trusted only when the public
+key is independently trusted; merely including a key with a record is insufficient.
+
+Only generated evidence fields are replaced by a new drill or ingestion. Scope
+metadata survives. A manual attestation cannot inherit an old drill's verified
+flag, measurements, binding or signature. A pin check observes source reachability;
+it cannot create a fresh full-recovery proof. All proof writes use a locked,
+validated, atomic transaction with restrictive file modes preserved.
 
 ## 2. Layer and state vocabularies (frozen; extend by widening, never renaming)
 
@@ -85,7 +116,7 @@ Entry types and what each payload records:
 
 | `entry_type` | Payload fields | Meaning |
 |---|---|---|
-| `decision` | verdict, findings, actor, context_window, gate_state, broken_reason, checks, duration_ms, tool_version | one preflight evaluation |
+| `decision` | verdict, findings, actor, operation, executed, intents, evaluated_at, context_window, gate_state, broken_reason, checks, duration_ms, tool_version | one preflight evaluation |
 | `override` | finding_id, approved_by, reason, expires_at, acknowledgement | an owner override of one finding |
 | `acknowledgement` | finding_id, note | reviewed without changing verdict |
 | `checkpoint` | entry_count, last_hash | a point-in-time chain summary |
@@ -103,6 +134,18 @@ hashes still verify):
 - `epoch` — the epoch id in force when it was written (§4).
 - `policy: {revision, files: [{path, sha256}]}` — the policy text in force
   (§5).
+
+New decisions capture `operation: preflight`, `executed: false` (Restore Gap
+did not execute the change) and the supplied intents, including paths,
+destinations, commands, packages and actor. Findings retain their explanation,
+proof description, next step and applied owner override. These optional fields
+are snapshots, never reconstructed from today's policy. `ledger show` presents
+them with chain health; legacy records explicitly lack proposal details.
+`created_at` records the actual append time; `evaluated_at` separately identifies
+the proof-freshness evaluation time, including a supplied `--as-of` simulation.
+The local ledger can contain sensitive operational text; summary export excludes
+it. New readers verify old records unchanged. Old binaries may not understand
+the added fields and must not be used to append to a newer ledger.
 
 `restoregap history <proof-id>` reads exactly this: every `drill`, `accept`,
 and `accept_clear` entry naming the proof, oldest first, each line carrying
@@ -169,6 +212,28 @@ claims, and the embedded slice's own hash chain — exit 0/1, printing the
 host/epoch/policy revision it vouches for. `bundle inspect` prints the
 manifest without checking anything (never trust `inspect` alone for
 anything that matters).
+
+`--expected-key <hex-public-key>` additionally checks an independently trusted
+signer. Without it, the archive's included public key establishes internal
+integrity only, not trusted origin.
+
+### Signed summary JSON (`schema_version: 1`)
+
+`bundle export --summary-only` is a separate bounded format, signed over a
+domain-separated canonical Go JSON payload. It contains generation/evaluation
+times, an optional explicit operator label, all/filtered scope selection with
+digested selectors, fixed signed limitations, opaque
+proof ID digests, outcome/method/assurance enums, observation/expiry times,
+recipe/dependency digests, finite measurements and check-type/pass pairs,
+policy digest, and ledger integrity/count/tail/anchor count. It carries no raw
+context, ledger entries, paths, commands, URLs or check detail.
+
+`bundle verify summary.json --expected-key <hex-public-key>` requires that key;
+it never trusts the envelope's embedded public key alone. It rejects unknown
+versions/fields, duplicate keys, trailing data, oversized input, invalid
+measurements and signature mismatch. Schema limits are 1 MiB, 4096 proofs and
+64 checks per proof. Signing the envelope does not strengthen the underlying
+proof's assurance. See [the review workflow](evidence-handoff.md).
 
 ## 7. Offline fleet merge (`bundle merge`, `fleet.json`)
 

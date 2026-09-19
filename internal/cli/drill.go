@@ -4,23 +4,24 @@
 package cli
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 
+	commandrunner "github.com/tannernicol/restoregap/internal/command"
 	"github.com/tannernicol/restoregap/internal/contextspec"
 	"github.com/tannernicol/restoregap/internal/drill"
 	"github.com/tannernicol/restoregap/internal/hostid"
 	"github.com/tannernicol/restoregap/internal/ledger"
 	"github.com/tannernicol/restoregap/internal/policy"
+	"github.com/tannernicol/restoregap/internal/proofstore"
 )
 
 // newDrillCmd runs every declared drill and records the outcome as a proof.
@@ -54,6 +55,7 @@ import (
 // drill config runs before ever invoking a real recovery command.
 func newDrillCmd() *cobra.Command {
 	var contextPath, only, expiresIn, signingKey, ledgerPath, actor, sandboxDir string
+	var timeout time.Duration
 	var pinsOnly, lint, calibrate, apply bool
 	var minRuns int
 	var margin float64
@@ -73,6 +75,9 @@ func newDrillCmd() *cobra.Command {
 			"derives RTO/RPO budgets from real ledger telemetry instead of a guess; `drill propose` drafts a\n" +
 			"whole new drills: entry from a live artifact — see `restoregap drill propose --help`.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if timeout <= 0 {
+				return fmt.Errorf("drill: --timeout must be positive")
+			}
 			resolvedContext, err := requireContext(cmd, contextPath, "drill")
 			if err != nil {
 				return err
@@ -107,9 +112,9 @@ func newDrillCmd() *cobra.Command {
 			ledgerPath = resolvedLedger
 
 			if pinsOnly {
-				return runPinsOnlyCmd(cmd, contextPath, ctx.Drills, only, ledgerPath, actor)
+				return runPinsOnlyCmd(cmd, contextPath, ctx.Drills, only, ledgerPath, actor, timeout)
 			}
-			return runFullDrillCmd(cmd, contextPath, ctx.Drills, only, expiresIn, signingKey, ledgerPath, actor, sandboxDir)
+			return runFullDrillCmd(cmd, contextPath, ctx.Drills, only, expiresIn, signingKey, ledgerPath, actor, sandboxDir, timeout)
 		},
 	}
 
@@ -125,6 +130,8 @@ func newDrillCmd() *cobra.Command {
 	cmd.Flags().StringVar(&sandboxDir, "sandbox-dir", "",
 		"parent directory for throwaway sandboxes (default: OS temp dir, which is often tmpfs/RAM — "+
 			"point this at disk when the restored artifact is large)")
+	cmd.Flags().DurationVar(&timeout, "timeout", commandrunner.DefaultTimeout,
+		"maximum runtime for each recovery, validation, and pin command (RTO budgets are measured separately)")
 	cmd.Flags().BoolVar(&pinsOnly, "pins-only", false,
 		"only run each drill's pin_check: prove the pinned recovery source still exists, without recovering")
 	cmd.Flags().BoolVar(&lint, "lint", false,
@@ -178,7 +185,7 @@ func runDrillLintCmd(cmd *cobra.Command, drills []contextspec.Drill, only string
 // runFullDrillCmd runs every declared drill end to end: recover, validate,
 // measure, record the proof, append telemetry, and fail the command if
 // anything did not verify.
-func runFullDrillCmd(cmd *cobra.Command, contextPath string, drills []contextspec.Drill, only, expiresIn, signingKey, ledgerPath, actor, sandboxDir string) error {
+func runFullDrillCmd(cmd *cobra.Command, contextPath string, drills []contextspec.Drill, only, expiresIn, signingKey, ledgerPath, actor, sandboxDir string, timeout time.Duration) error {
 	var ttl time.Duration
 	if expiresIn != "" && expiresIn != "0" {
 		d, err := time.ParseDuration(expiresIn)
@@ -188,7 +195,7 @@ func runFullDrillCmd(cmd *cobra.Command, contextPath string, drills []contextspe
 		ttl = d
 	}
 
-	results, err := runDrills(cmd.OutOrStdout(), drills, only, sandboxDir)
+	results, err := runDrillsContext(cmd.Context(), cmd.OutOrStdout(), drills, only, sandboxDir, timeout)
 	if err != nil {
 		return err
 	}
@@ -217,8 +224,8 @@ func runFullDrillCmd(cmd *cobra.Command, contextPath string, drills []contextspe
 // mean "could not reach", never "recovered and did not verify"; passing pins
 // leave their proof untouched. Every attempted pin still gets a ledger
 // telemetry entry, pass or fail.
-func runPinsOnlyCmd(cmd *cobra.Command, contextPath string, drills []contextspec.Drill, only, ledgerPath, actor string) error {
-	results, err := runPinChecks(cmd.OutOrStdout(), drills, only)
+func runPinsOnlyCmd(cmd *cobra.Command, contextPath string, drills []contextspec.Drill, only, ledgerPath, actor string, timeout time.Duration) error {
+	results, err := runPinChecksContext(cmd.Context(), cmd.OutOrStdout(), drills, only, timeout)
 	if err != nil {
 		return err
 	}
@@ -248,17 +255,21 @@ func runPinsOnlyCmd(cmd *cobra.Command, contextPath string, drills []contextspec
 // proof id via only), printing a pass/fail line per drill as it runs, and
 // returns the accumulated results.
 func runDrills(out io.Writer, drills []contextspec.Drill, only, sandboxDir string) ([]drill.Result, error) {
+	return runDrillsContext(context.Background(), out, drills, only, sandboxDir, commandrunner.DefaultTimeout)
+}
+
+func runDrillsContext(ctx context.Context, out io.Writer, drills []contextspec.Drill, only, sandboxDir string, timeout time.Duration) ([]drill.Result, error) {
 	if only != "" && !anyDrillMatches(drills, only) {
 		return nil, fmt.Errorf("drill: no drill matches --proof %q", only)
 	}
-	runner := drill.Runner{Now: time.Now, SandboxDir: sandboxDir}
+	runner := drill.Runner{Now: time.Now, SandboxDir: sandboxDir, Timeout: timeout}
 	results := make([]drill.Result, 0, len(drills))
 
 	for _, d := range drills {
 		if only != "" && d.Proof != only {
 			continue
 		}
-		res := runner.Run(drill.Spec{
+		res := runner.RunContext(ctx, drill.Spec{
 			Proof:          d.Proof,
 			Artifact:       d.Artifact,
 			Recover:        d.Recover,
@@ -361,11 +372,7 @@ func anyDrillMatches(drills []contextspec.Drill, proof string) bool {
 	return false
 }
 
-// runPinChecks runs pin_check for each declared drill that has one
-// (optionally filtered to a single proof id via only), printing a pass/fail
-// line as it goes. Drills without a pin_check are skipped silently — not
-// every drill needs the cheap check, only the recovery.
-func runPinChecks(out io.Writer, drills []contextspec.Drill, only string) ([]drill.Result, error) {
+func runPinChecksContext(ctx context.Context, out io.Writer, drills []contextspec.Drill, only string, timeout time.Duration) ([]drill.Result, error) {
 	if only != "" && !anyDrillMatches(drills, only) {
 		return nil, fmt.Errorf("drill: no drill matches --proof %q", only)
 	}
@@ -377,7 +384,7 @@ func runPinChecks(out io.Writer, drills []contextspec.Drill, only string) ([]dri
 		if d.PinCheck == "" {
 			continue
 		}
-		res := runPinCheck(d)
+		res := runPinCheckContext(ctx, d, timeout)
 		results = append(results, res)
 		if res.Verified {
 			_, _ = fmt.Fprintf(out, "✓ %s — pin ok: %s\n", d.Proof, res.Detail)
@@ -388,21 +395,12 @@ func runPinChecks(out io.Writer, drills []contextspec.Drill, only string) ([]dri
 	return results, nil
 }
 
-// runPinCheck runs one drill's pin_check with RG_RECOVERY_SOURCE set and
-// RG_SANDBOX/RG_TARGET unset — it proves the pinned source is still
-// reachable, never that a recovery works. It never returns Err: a nonzero
-// exit is the pin failing, not the command failing to run one, so it always
-// resolves to a Verified true/false verdict. A failed pin is by definition a
-// reachability failure — no recovery was attempted — so the result is marked
-// SourceUnreachable and records as status "unreachable", never "disputed".
-func runPinCheck(d contextspec.Drill) drill.Result {
+func runPinCheckContext(ctx context.Context, d contextspec.Drill, timeout time.Duration) drill.Result {
 	res := drill.Result{Proof: d.Proof}
-	c := exec.Command("sh", "-c", d.PinCheck)
-	c.Env = append(os.Environ(), "RG_RECOVERY_SOURCE="+d.RecoverySource)
-	out, err := c.CombinedOutput()
-	if err != nil {
+	r := commandrunner.Shell(ctx, d.PinCheck, commandrunner.Options{Env: append(os.Environ(), "RG_RECOVERY_SOURCE="+d.RecoverySource), Timeout: timeout})
+	if r.Err != nil {
 		res.SourceUnreachable = true
-		res.Detail = fmt.Sprintf("could not reach the pinned recovery source: %s", pinCheckFirstLine(out))
+		res.Detail = fmt.Sprintf("could not reach the pinned recovery source: %s", pinCheckFirstLine(r.Output))
 		return res
 	}
 	res.Verified = true
@@ -472,17 +470,10 @@ func checkDrillsVerified(results []drill.Result) error {
 // declared command ("recover" for a full drill, "pin_check" for pins-only)
 // is recorded as the proof's command field.
 func recordDrillProofs(path string, results []drill.Result, drills []contextspec.Drill, ttl time.Duration, signer ed25519.PrivateKey, mode string) error {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	var doc map[string]any
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return err
-	}
-
 	commandBy := map[string]string{}
+	drillByProof := map[string]contextspec.Drill{}
 	for _, d := range drills {
+		drillByProof[d.Proof] = d
 		if mode == "pin_check" {
 			commandBy[d.Proof] = d.PinCheck
 		} else {
@@ -491,17 +482,52 @@ func recordDrillProofs(path string, results []drill.Result, drills []contextspec
 	}
 
 	now := time.Now().UTC()
-	proofs, _ := doc["proofs"].([]any)
+	entries := make([]map[string]any, 0, len(results))
 	for _, res := range results {
-		proofs = upsertProof(proofs, res.Proof, buildDrillProofEntry(res, commandBy[res.Proof], now, ttl, signer))
+		drill, declared := drillByProof[res.Proof]
+		if !declared {
+			return fmt.Errorf("proof %q has no declared drill", res.Proof)
+		}
+		command := commandBy[res.Proof]
+		// The standalone helper retains its legacy signing contract for callers
+		// that exercise the map builder directly. Persisted full-drill records
+		// are signed below only after binding and host/epoch stamping are final.
+		entry := buildDrillProofEntry(res, command, now, ttl, nil)
+		clearDrillGeneratedFields(entry)
+		if mode == "pin_check" && res.Verified {
+			// A passing pin only observes that the recovery source is reachable.
+			// It did not recover or validate the artifact, so it must not retain
+			// the full-drill authority that may already be stored for this proof.
+			entry["status"] = "observed"
+			entry["verified"] = false
+			entry["expires_at"] = nil
+			entry["sha256"] = nil
+			entry["measurements"] = nil
+			entry["signature"] = nil
+		}
+		if mode == "drill" {
+			entry["recipe_digest"] = contextspec.RecipeDigest(drill)
+			entry["dependencies"] = dependenciesToRaw(drill.Dependencies)
+		} else {
+			entry["recipe_digest"] = nil
+			entry["dependencies"] = nil
+		}
+		stampProofHost(entry)
+		if signer != nil && mode == "drill" && res.Verified {
+			signed := typedDrillProof(res, drill, command, now, ttl)
+			sig, err := contextspec.SignProofV2(signer, signed)
+			if err != nil {
+				return fmt.Errorf("sign proof %q: %w", res.Proof, err)
+			}
+			entry["signature"] = map[string]any{
+				"version":    sig.Version,
+				"public_key": sig.PublicKeyHex,
+				"signature":  sig.SignatureHex,
+			}
+		}
+		entries = append(entries, entry)
 	}
-	doc["proofs"] = proofs
-
-	encoded, err := yaml.Marshal(doc)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, encoded, 0o644)
+	return proofstore.Upsert(path, entries)
 }
 
 // buildDrillProofEntry renders one drill result as the raw proof map
@@ -514,15 +540,17 @@ func recordDrillProofs(path string, results []drill.Result, drills []contextspec
 func buildDrillProofEntry(res drill.Result, command string, now time.Time, ttl time.Duration, signer ed25519.PrivateKey) map[string]any {
 	entry := map[string]any{
 		"id":          res.Proof,
-		"observed_at": now.Format(time.RFC3339),
+		"observed_at": now.Format(time.RFC3339Nano),
 		"command":     command,
 	}
 	if res.Verified {
 		entry["status"] = "validated"
 		entry["verified"] = true
-		entry["sha256"] = res.PostHash
+		if res.PostHash != "" {
+			entry["sha256"] = res.PostHash
+		}
 		if ttl > 0 {
-			entry["expires_at"] = now.Add(ttl).Format(time.RFC3339)
+			entry["expires_at"] = now.Add(ttl).Format(time.RFC3339Nano)
 		}
 	} else {
 		// Contradicted or unproven evidence, not merely absent: say which, so
@@ -568,33 +596,59 @@ func buildDrillProofEntry(res drill.Result, command string, now time.Time, ttl t
 	return entry
 }
 
+// clearDrillGeneratedFields turns omitted producer-owned fields into explicit
+// proofstore clears. Keeping this at the persistence call site preserves the
+// small buildDrillProofEntry map contract used by unit tests and other CLI
+// formatting code, while preventing stale authority from surviving a rerun.
+func clearDrillGeneratedFields(entry map[string]any) {
+	for _, field := range []string{"expires_at", "sha256", "measurements", "signature", "recipe_digest", "dependencies"} {
+		if _, present := entry[field]; !present {
+			entry[field] = nil
+		}
+	}
+}
+
+func dependenciesToRaw(deps contextspec.Dependencies) map[string]any {
+	normalized := contextspec.NormalizeDependencies(deps)
+	return map[string]any{
+		"paths": normalized.Paths, "commands": normalized.Commands, "packages": normalized.Packages,
+	}
+}
+
+func typedDrillProof(res drill.Result, d contextspec.Drill, command string, now time.Time, ttl time.Duration) contextspec.Proof {
+	status := contextspec.ProofRecordDisputed
+	if res.SourceUnreachable {
+		status = contextspec.ProofRecordUnreachable
+	}
+	if res.Verified {
+		status = contextspec.ProofRecordValidated
+	}
+	var expires *time.Time
+	if res.Verified && ttl > 0 {
+		value := now.Add(ttl)
+		expires = &value
+	}
+	var measurements *contextspec.Measurements
+	if len(res.Checks) > 0 {
+		measurements = &contextspec.Measurements{RTOSeconds: res.RTOSeconds, RPOSeconds: res.RPOSeconds, Checks: res.Checks}
+	}
+	host := hostid.Current()
+	deps := contextspec.NormalizeDependencies(d.Dependencies)
+	return contextspec.Proof{
+		ID: res.Proof, Status: status, ObservedAt: &now, ExpiresAt: expires,
+		SHA256: res.PostHash, Verified: res.Verified, Command: command,
+		Measurements: measurements, RecipeDigest: contextspec.RecipeDigest(d),
+		Dependencies: &deps,
+		Host:         &contextspec.ProofHost{Name: host.HostName, ID: host.HostID}, Epoch: host.Epoch,
+	}
+}
+
 func checksToRaw(checks []contextspec.CheckOutcome) []any {
 	out := make([]any, 0, len(checks))
 	for _, c := range checks {
 		out = append(out, map[string]any{"type": c.Type, "pass": c.Pass, "detail": c.Detail})
 	}
 	return out
-}
-
-func upsertProof(proofs []any, id string, entry map[string]any) []any {
-	for i, p := range proofs {
-		if pm, ok := p.(map[string]any); ok && pm["id"] == id {
-			// Preserve every field the fresh drill entry does not own —
-			// layer:/category:/scope: and any unknown field — the same
-			// round-trip rule every other context-file writer here follows
-			// (taxonomy spec section A).
-			for k, v := range pm {
-				if _, owned := entry[k]; !owned {
-					entry[k] = v
-				}
-			}
-			proofs[i] = entry
-			stampProofHost(entry)
-			return proofs
-		}
-	}
-	stampProofHost(entry)
-	return append(proofs, entry)
 }
 
 // stampProofHost stamps the proof record with the current machine's durable

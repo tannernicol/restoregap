@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tannernicol/restoregap/internal/contextspec"
+	"github.com/tannernicol/restoregap/internal/ledger"
 	"github.com/tannernicol/restoregap/internal/status"
 )
 
@@ -17,6 +18,7 @@ func main() {
 	s := status.Summary{
 		Verdict: "warn", Origin: "Synthetic release fixture", GeneratedAt: now,
 		InventorySummary: "1 of 2 provably restorable", LedgerOK: true,
+		Last: syntheticDecision(),
 		Context: contextspec.Context{Guards: []contextspec.Guard{
 			{ID: "app", Requires: contextspec.Requirement{Proofs: []string{"app-db"}}, Scope: contextspec.Scope{System: "demo-app"}},
 			{ID: "files", Requires: contextspec.Requirement{Proofs: []string{"files"}}, Scope: contextspec.Scope{System: "demo-files"}},
@@ -36,4 +38,17 @@ func main() {
 	if _, err := os.Stdout.Write(out); err != nil {
 		panic(err)
 	}
+}
+
+func syntheticDecision() *status.DecisionSummary {
+	executed := false
+	return &status.DecisionSummary{
+		When: nowFixture(), Actor: "agent/fixture", Verdict: "block", Operation: "preflight", Executed: &executed,
+		Intents:  []ledger.IntentRecord{{Action: "delete_file", Paths: []string{"/tmp/demo-cache"}, Description: "fixture cleanup"}},
+		Findings: []ledger.FindingRecord{{FindingID: "fixture/cache", Verdict: "block", Actions: []string{"delete_file"}, Resource: "/tmp/demo-cache", Why: "no fresh recovery proof", Proof: "proof missing", RequiredNextStep: "run restoregap drill"}},
+	}
+}
+
+func nowFixture() time.Time {
+	return time.Date(2026, 9, 18, 11, 55, 0, 0, time.UTC)
 }

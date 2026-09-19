@@ -32,13 +32,14 @@ func (r Report) Markdown() []byte {
 	}
 	b.WriteString("\n## Detail\n\n")
 	for _, f := range r.Findings {
-		fmt.Fprintf(&b, "### %s (%s)\n\n", f.Title, strings.ToUpper(f.Verdict))
-		fmt.Fprintf(&b, "- **Guard:** `%s`\n", f.GuardID)
-		fmt.Fprintf(&b, "- **Resource:** `%s`\n", f.Resource)
+		fmt.Fprintf(&b, "### %s\n\n", findingHeadline(f))
+		fmt.Fprintf(&b, "- **Why:** %s\n", f.Title)
 		fmt.Fprintf(&b, "- **Proof:** %s\n", f.Proof)
 		if f.RequiredNextStep != "" {
 			fmt.Fprintf(&b, "- **Required next step:** %s\n", f.RequiredNextStep)
 		}
+		fmt.Fprintf(&b, "- **Guard:** `%s`\n", f.GuardID)
+		fmt.Fprintf(&b, "- **Finding ID:** `%s`\n", f.ID)
 		b.WriteString("\n")
 	}
 	return []byte(b.String())
@@ -56,11 +57,13 @@ func writeBanner(b *strings.Builder, r Report) {
 				fmt.Fprintf(b, "- **Broken check:** `%s` (%dms)\n", c.ID, c.DurationMS)
 			}
 		}
+		writeMarkdownDecisionScope(b, r)
 		return
 	}
 	verdict := strings.ToUpper(r.Verdict)
 	fmt.Fprintf(b, "# %s\n", verdict)
 	b.WriteString(summarySentence(r.Verdict) + "\n")
+	writeMarkdownDecisionScope(b, r)
 	for _, f := range r.Findings {
 		if f.Verdict == "pass" || f.RequiredNextStep == "" {
 			continue
@@ -74,11 +77,24 @@ func writeBanner(b *strings.Builder, r Report) {
 func summarySentence(verdict string) string {
 	switch verdict {
 	case "block":
-		return "Restore Gap blocked this change. Supply proof, change the plan, or record an owner override."
+		return "Restore Gap blocked this proposed change. Supply proof, change the plan, or record an owner override."
 	case "warn":
 		return "Restore Gap found findings that need review before proceeding."
 	default:
-		return "Restore Gap found no unresolved recovery risk."
+		return "Restore Gap found no unresolved recovery finding for the supplied change."
+	}
+}
+
+func writeMarkdownDecisionScope(b *strings.Builder, r Report) {
+	fmt.Fprintf(b, "\n**Decision:** %s\n", strings.ToUpper(r.Verdict))
+	b.WriteString("**Execution:** Restore Gap did not execute the change.\n\n")
+	b.WriteString("**Proposed change:**\n")
+	if len(r.Proposed) == 0 {
+		b.WriteString("- Not recorded in this report.\n")
+		return
+	}
+	for _, p := range r.Proposed {
+		fmt.Fprintf(b, "- `%s`\n", mdEscape(proposedChangeText(p)))
 	}
 }
 

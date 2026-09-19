@@ -13,7 +13,10 @@
 package rules
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tannernicol/restoregap/internal/contextspec"
@@ -44,12 +47,20 @@ type MatchResult struct {
 	Enforcement      contextspec.Enforcement
 	MaxProofAgeHours int
 	RequireVerified  bool
+	RequireBound     bool
 }
 
 // GuardRule matches a change intent against every declared guard using the
 // AND-across-categories / OR-within-category semantics documented on
 // contextspec.Matcher.
 type GuardRule struct{}
+
+// EvaluateOptions controls optional strictness for the pure evaluator.
+// RequireCoverage is opt-in so existing hooks retain their established
+// matching and exit behavior.
+type EvaluateOptions struct {
+	RequireCoverage bool
+}
 
 // Match reports which of the context's guards apply to the change intent.
 func (GuardRule) Match(ci intent.ChangeIntent, ctx contextspec.Context) []MatchResult {
@@ -68,6 +79,7 @@ func (GuardRule) Match(ci intent.ChangeIntent, ctx contextspec.Context) []MatchR
 			Enforcement:      g.Enforcement,
 			MaxProofAgeHours: g.MaxProofAgeHours,
 			RequireVerified:  g.RequireVerified,
+			RequireBound:     g.RequireBound,
 		})
 	}
 	return results
@@ -201,20 +213,192 @@ func primaryResource(ci intent.ChangeIntent) string {
 // proof/fact freshness through contextspec. now is injected so callers can
 // pin evaluation time (--as-of / tests) instead of using wall-clock time.
 func Evaluate(intents []intent.ChangeIntent, ctx contextspec.Context, now time.Time) []engine.Finding {
+	return EvaluateWithOptions(intents, ctx, now, EvaluateOptions{})
+}
+
+// EvaluateWithOptions evaluates intents using the existing guard semantics
+// and, when RequireCoverage is set, checks every addressed resource in each
+// intent independently. A match for one path never covers another path; the
+// same rule applies to target paths, packages, and commands.
+func EvaluateWithOptions(intents []intent.ChangeIntent, ctx contextspec.Context, now time.Time, options EvaluateOptions) []engine.Finding {
 	var findings []engine.Finding
+	dependencyConflicts := recoveryDependencyConflicts(ctx, intents)
 	for _, ci := range intents {
 		matches := GuardRule{}.Match(ci, ctx)
 		for _, m := range matches {
-			findings = append(findings, decide(m, ctx, now))
+			findings = append(findings, decide(m, ctx, now, dependencyConflicts))
 		}
 		// The advisory heuristic layer only speaks when no declared guard
 		// covered this intent: declared context tightens reporting, never
 		// silences it (a guard that matched already said something better).
-		if len(matches) == 0 {
+		if len(matches) == 0 && (!options.RequireCoverage || strictIntentClassifiable(ci)) {
 			for _, m := range (HeuristicRule{}).Match(ci, ctx) {
 				findings = append(findings, heuristicFinding(m))
 			}
 		}
+		if options.RequireCoverage {
+			findings = append(findings, strictCoverageFindings(ci, ctx)...)
+		}
 	}
 	return findings
+}
+
+type coverageKind string
+
+const (
+	coveragePath    coverageKind = "path"
+	coveragePackage coverageKind = "package"
+	coverageCommand coverageKind = "command"
+)
+
+type addressedResource struct {
+	kind coverageKind
+	name string
+}
+
+func strictCoverageFindings(ci intent.ChangeIntent, ctx contextspec.Context) []engine.Finding {
+	resources := addressedResources(ci)
+	var findings []engine.Finding
+	if !strictIntentClassifiable(ci) {
+		findings = append(findings, coverageFinding(ci, "intent", "intent is empty or has an unknown action; strict coverage cannot classify it"))
+	}
+	for _, resource := range resources {
+		covered := false
+		for _, guard := range ctx.Guards {
+			if guardCoversResource(guard, ci, resource) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			findings = append(findings, coverageFinding(ci, resource.name,
+				fmt.Sprintf("strict coverage: no declared guard applies to %s %q for action %q", resource.kind, resource.name, ci.Action)))
+		}
+	}
+	return findings
+}
+
+func strictIntentClassifiable(ci intent.ChangeIntent) bool {
+	if !hasNonBlank(ci.AllPaths()) && !hasNonBlank(ci.Packages) && !nonBlank(ci.Command) {
+		return false
+	}
+	switch ci.Action {
+	case intent.ActionDeleteFile, intent.ActionModifyFile, intent.ActionMoveFile:
+		return hasNonBlank(ci.AllPaths())
+	case intent.ActionPackageUpdate, intent.ActionInstallPkg, intent.ActionRemovePkg:
+		return hasNonBlank(ci.Packages)
+	case intent.ActionRunCommand:
+		return nonBlank(ci.Command)
+	case intent.ActionSystemUpdate:
+		return true
+	default:
+		return false
+	}
+}
+
+func addressedResources(ci intent.ChangeIntent) []addressedResource {
+	var out []addressedResource
+	seen := make(map[string]bool)
+	for _, path := range ci.AllPaths() {
+		key := string(coveragePath) + "\x00" + path
+		if nonBlank(path) && !seen[key] {
+			seen[key] = true
+			out = append(out, addressedResource{kind: coveragePath, name: path})
+		}
+	}
+	for _, pkg := range ci.Packages {
+		key := string(coveragePackage) + "\x00" + pkg
+		if nonBlank(pkg) && !seen[key] {
+			seen[key] = true
+			out = append(out, addressedResource{kind: coveragePackage, name: pkg})
+		}
+	}
+	if nonBlank(ci.Command) {
+		out = append(out, addressedResource{kind: coverageCommand, name: ci.Command})
+	}
+	return out
+}
+
+func guardCoversResource(g contextspec.Guard, ci intent.ChangeIntent, resource addressedResource) bool {
+	// A guard is applicable to a resource when it explicitly constrains that
+	// resource dimension, or when it has no path/package/command dimensions at
+	// all. Other populated resource dimensions remain ANDed context for the
+	// isolated resource value.
+	if !resourceDimensionApplicable(g.Match, resource.kind) {
+		return false
+	}
+	// Coverage is explicit for the proposed path itself. The ordinary matcher
+	// also accepts a descendant guard for a destructive parent delete so that
+	// the child proof still fires; that implicit subtree match cannot certify
+	// the parent resource's own coverage.
+	if !pathResourceCovered(g.Match, resource) {
+		return false
+	}
+	isolated := isolateResource(ci, resource)
+	matched, _ := guardMatches(g, isolated)
+	return matched
+}
+
+func resourceDimensionApplicable(m contextspec.Matcher, kind coverageKind) bool {
+	if len(m.Paths) == 0 && len(m.Packages) == 0 && len(m.Commands) == 0 {
+		return true
+	}
+	switch kind {
+	case coveragePath:
+		return len(m.Paths) > 0
+	case coveragePackage:
+		return len(m.Packages) > 0
+	case coverageCommand:
+		return len(m.Commands) > 0
+	default:
+		return false
+	}
+}
+
+func pathResourceCovered(m contextspec.Matcher, resource addressedResource) bool {
+	return resource.kind != coveragePath || len(m.Paths) == 0 || globmatch.MatchPathAny(m.Paths, resource.name)
+}
+
+func isolateResource(ci intent.ChangeIntent, resource addressedResource) intent.ChangeIntent {
+	isolated := ci
+	switch resource.kind {
+	case coveragePath:
+		isolated.Paths = []string{resource.name}
+		isolated.TargetPaths = nil
+	case coveragePackage:
+		isolated.Packages = []string{resource.name}
+	case coverageCommand:
+		isolated.Command = resource.name
+	}
+	return isolated
+}
+
+func nonBlank(value string) bool {
+	return strings.TrimSpace(value) != ""
+}
+
+func hasNonBlank(values []string) bool {
+	for _, value := range values {
+		if nonBlank(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func coverageFinding(ci intent.ChangeIntent, resource, detail string) engine.Finding {
+	sum := sha256.Sum256([]byte("coverage|" + string(ci.Action) + "|" + resource))
+	return engine.Finding{
+		ID:               "coverage_" + hex.EncodeToString(sum[:])[:24],
+		GuardID:          "coverage",
+		Kind:             "coverage",
+		Resource:         resource,
+		Actions:          []string{string(ci.Action)},
+		RiskClass:        engine.RiskCannotProveSafe,
+		ProofStatus:      engine.ProofUnknown,
+		Verdict:          engine.VerdictBlock,
+		Title:            "Restore Gap strict coverage could not classify every addressed resource.",
+		Proof:            detail,
+		RequiredNextStep: fmt.Sprintf("Declare or review a guard that explicitly covers %q for proposed action %q, then review the resulting coverage change.", resource, ci.Action),
+	}
 }

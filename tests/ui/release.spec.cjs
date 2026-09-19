@@ -28,6 +28,12 @@ test('status filters and grouping compose without moving controls or losing focu
   page.on('pageerror', err => errors.push(err.message));
   await page.goto('/status.html');
   await expect(page.locator('script, link[rel="stylesheet"]')).toHaveCount(0);
+  const decision = page.getByRole('region', { name: 'Decision ledger · latest' });
+  await expect(decision).toContainText('BLOCK');
+  await expect(decision).toContainText('delete_file');
+  await expect(decision).toContainText('no fresh recovery proof');
+  await expect(decision).toContainText('run restoregap drill');
+  await expect(decision).toContainText('Restore Gap did not execute the change.');
   await expect(page.locator('#rgs-view-attention')).toBeChecked();
   const controls = page.locator('.rgs-viewswitch');
   await controls.scrollIntoViewIfNeeded();

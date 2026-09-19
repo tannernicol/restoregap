@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tannernicol/restoregap/internal/bundle"
+	"github.com/tannernicol/restoregap/internal/contextspec"
 	"github.com/tannernicol/restoregap/internal/status"
 )
 
@@ -86,16 +87,20 @@ func printBundleMergeSummary(cmd *cobra.Command, fleet status.Fleet, jsonPath, h
 }
 
 func newBundleExportCmd() *cobra.Command {
-	var out, since, env, system, host, signingKey, ledgerPath string
+	var out, since, env, system, host, signingKey, ledgerPath, asOf, label string
+	var summaryOnly bool
 	var contextPaths []string
 	cmd := &cobra.Command{
 		Use:   "export",
-		Short: "Export a signed bundle: context files, a bounded ledger slice, and proof-evidence metadata",
-		Long: "Writes a single tar.gz containing manifest.json (host/epoch/policy revision/counts),\n" +
+		Short: "Export a signed full archive or fixed-field offline JSON summary",
+		Long: "By default writes a tar.gz containing manifest.json (host/epoch/policy revision/counts),\n" +
 			"the context files in force, a ledger slice (--since bounds it, e.g. 30d), proof-evidence\n" +
 			"METADATA only (never a file's contents, and never a path under a secret store), and a\n" +
 			"detached Ed25519 signature over the manifest — the same key material `restoregap drill\n" +
-			"--signing-key` uses. Context discovery is the same as `restoregap status`: " + contextDiscoveryHelpRepeatable + ".",
+			"--signing-key` uses. With --summary-only it instead writes a small signed JSON envelope\n" +
+			"containing only opaque proof digests, fixed outcomes, measurements, policy/ledger digests,\n" +
+			"and explicit producer limitations; use --expected-key when verifying that summary. Context\n" +
+			"discovery is the same as `restoregap status`: " + contextDiscoveryHelpRepeatable + ".",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			paths := discoverContextPaths(cmd, contextPaths)
@@ -112,6 +117,36 @@ func newBundleExportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if summaryOnly {
+				if since != "" {
+					cmd.SilenceUsage = true
+					return fmt.Errorf("bundle export: --since cannot be combined with --summary-only")
+				}
+				asOfTime, err := parseBundleAsOf(asOf)
+				if err != nil {
+					cmd.SilenceUsage = true
+					return err
+				}
+				path, err := bundle.ExportSummary(bundle.SummaryExportRequest{
+					ContextPaths: paths,
+					LedgerPath:   ledgerP,
+					SigningKey:   signingKey,
+					Out:          out,
+					Scope:        bundle.ScopeFilter{Environment: env, System: system, Host: host},
+					AsOf:         asOfTime,
+					Label:        label,
+				})
+				if err != nil {
+					cmd.SilenceUsage = true
+					return err
+				}
+				printSummaryExportSuccess(cmd, path, signingKey)
+				return nil
+			}
+			if asOf != "" || label != "" {
+				cmd.SilenceUsage = true
+				return fmt.Errorf("bundle export: --as-of and --label require --summary-only")
+			}
 			path, err := bundle.Export(bundle.ExportRequest{
 				ContextPaths: paths, LedgerPath: ledgerP, Since: sinceDur,
 				Environment: env, System: system, Host: host,
@@ -125,29 +160,54 @@ func newBundleExportCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&out, "out", "", "output tar.gz path (default: restoregap-bundle-<host>-<UTC timestamp>.tgz)")
+	cmd.Flags().StringVar(&out, "out", "", "output path: tar.gz archive by default, JSON summary with --summary-only")
+	cmd.Flags().BoolVar(&summaryOnly, "summary-only", false, "write a signed fixed-field offline JSON summary without raw context or ledger contents")
 	cmd.Flags().StringVar(&since, "since", "", "bound the ledger slice to entries within this window (e.g. 30d, 720h); empty = every entry")
 	cmd.Flags().StringVar(&env, "env", "", "narrow proof counts/evidence to this scope.environment")
 	cmd.Flags().StringVar(&system, "system", "", "narrow proof counts/evidence to this scope.system")
 	cmd.Flags().StringVar(&host, "host", "", "narrow proof counts/evidence to this scope.host")
 	cmd.Flags().StringVar(&signingKey, "signing-key", "", "hex ed25519 seed to sign the bundle (required)")
+	cmd.Flags().StringVar(&asOf, "as-of", "", "evaluate proof outcomes as of this RFC3339 time (summary only; empty = generated time)")
+	cmd.Flags().StringVar(&label, "label", "", "optional operator-supplied display label, signed but not independently verified (summary only)")
 	cmd.Flags().StringVar(&ledgerPath, "ledger", "", "ledger to slice; "+ledgerDiscoveryHelp)
 	cmd.Flags().StringArrayVar(&contextPaths, "context", nil, "path to restoregap.yml / restoregap.local.yml; "+contextDiscoveryHelpRepeatable)
 	return cmd
 }
 
 func newBundleVerifyCmd() *cobra.Command {
+	var expectedKey string
 	cmd := &cobra.Command{
-		Use:   "verify <bundle.tgz>",
-		Short: "Verify a bundle's signature, content digests, and ledger-slice hash chain",
-		Long: "Checks the detached Ed25519 signature over manifest.json, recomputes and compares every\n" +
+		Use:   "verify <bundle.tgz|summary.json>",
+		Short: "Verify a full archive or signed offline JSON summary",
+		Long: "For a full .tgz, checks the detached Ed25519 signature over manifest.json, recomputes and compares every\n" +
 			"context-file and ledger-slice digest the manifest claims, and re-verifies the embedded\n" +
 			"ledger slice's own internal hash chain. Exits 0 and prints the host/epoch/policy revision\n" +
 			"it vouches for when everything checks out; exits 1 and names the first failed check\n" +
-			"otherwise.",
+			"otherwise. For a .json summary, --expected-key is mandatory: it checks the fixed schema,\n" +
+			"opaque proof/ledger digests, producer limitations, and the signature against that\n" +
+			"independently supplied public key; matching the key verifies origin/integrity, not the\n" +
+			"truth of the producer's underlying recovery claims.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			res, err := bundle.Verify(args[0])
+			if strings.HasSuffix(strings.ToLower(args[0]), ".json") {
+				if expectedKey == "" {
+					cmd.SilenceUsage = true
+					return &ExitError{Code: 2, Message: "bundle verify: --expected-key is required for summary JSON"}
+				}
+				res, err := bundle.VerifySummary(args[0], expectedKey)
+				if err != nil {
+					cmd.SilenceUsage = true
+					return err
+				}
+				if !res.OK {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "FAIL: %s\n", res.Reason)
+					cmd.SilenceUsage = true
+					return &ExitError{Code: 1}
+				}
+				printSummaryVerifySuccess(cmd, res.Summary)
+				return nil
+			}
+			res, err := bundle.VerifyWithExpectedKey(args[0], expectedKey)
 			if err != nil {
 				cmd.SilenceUsage = true
 				return err
@@ -167,7 +227,58 @@ func newBundleVerifyCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&expectedKey, "expected-key", "", "independently trusted Ed25519 public key in hex; required for summary JSON, optional for full archives")
 	return cmd
+}
+
+func parseBundleAsOf(value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("bundle export: --as-of must be RFC3339: %w", err)
+	}
+	return parsed, nil
+}
+
+func printSummaryExportSuccess(cmd *cobra.Command, path, signingKey string) {
+	res, err := bundle.VerifySummary(path, summaryPublicKey(signingKey))
+	if err != nil || !res.OK {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\nsummary verification unavailable: %v\n", path, err)
+		return
+	}
+	printSummary(cmd, path, res.Summary, "signer trust: export signing key only · reviewer must verify with an independently trusted --expected-key; underlying claims depend on producer")
+}
+
+func printSummaryVerifySuccess(cmd *cobra.Command, summary bundle.SummaryPayload) {
+	printSummary(cmd, "", summary, "signer trust: explicit expected key · integrity/origin verified; underlying claims depend on producer")
+}
+
+func printSummary(cmd *cobra.Command, path string, summary bundle.SummaryPayload, trust string) {
+	if path != "" {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", path)
+	}
+	counts := map[string]int{}
+	for _, proof := range summary.Proofs {
+		counts[proof.Outcome]++
+	}
+	if summary.Label != "" {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "summary %q · ", summary.Label)
+	} else {
+		_, _ = fmt.Fprint(cmd.OutOrStdout(), "summary · ")
+	}
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%d proof(s) · outcomes pass=%d observed=%d expired=%d disputed=%d unreachable=%d · as-of %s\n",
+		len(summary.Proofs), counts["pass"], counts["observed"], counts["expired"], counts["disputed"], counts["unreachable"], summary.AsOf.Format(time.RFC3339))
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), trust)
+}
+
+func summaryPublicKey(signingKey string) string {
+	signer, err := contextspec.ParseSigningKeySeed(signingKey)
+	if err != nil || signer == nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", signer.Public())
 }
 
 func newBundleInspectCmd() *cobra.Command {

@@ -7,12 +7,15 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/tannernicol/restoregap/internal/contextspec"
 	"github.com/tannernicol/restoregap/internal/hostid"
+	"github.com/tannernicol/restoregap/internal/ledger"
 )
 
 func runBundle(t *testing.T, args ...string) (string, error) {
@@ -114,5 +117,62 @@ func TestBundleMergeRefusesUnverifiableBundle(t *testing.T) {
 	}
 	if out, err := runBundle(t, "merge", fake, "--out", filepath.Join(dir, "out")); err == nil {
 		t.Fatalf("expected bundle merge to refuse an unverifiable bundle, got: %s", out)
+	}
+}
+
+func TestBundleSummaryCLIUsesIndependentKeyAndExplainsBoundary(t *testing.T) {
+	dir := t.TempDir()
+	ctxPath := filepath.Join(dir, "restoregap.yml")
+	ctx := `version: 2
+proofs:
+  - id: sentinel-proof-id
+    status: validated
+    observed_at: "2026-09-19T00:00:00Z"
+    verified: true
+    command: "sentinel command"
+`
+	if err := os.WriteFile(ctxPath, []byte(ctx), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ledgerPath := filepath.Join(dir, "ledger.jsonl")
+	if _, err := ledger.AppendNow(ledgerPath, ledger.EntryDecision, "sentinel-actor", ledger.Payload{
+		Decision: &ledger.DecisionPayload{Verdict: "pass", Actor: "sentinel-actor"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seed := testMergeSigningKey(t)
+	pub, err := contextspec.ParseSigningKeySeed(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubHex := fmt.Sprintf("%x", pub.Public())
+	outPath := filepath.Join(dir, "summary.json")
+	out, err := runBundle(t, "export", "--summary-only", "--context", ctxPath, "--ledger", ledgerPath,
+		"--signing-key", seed, "--as-of", "2026-09-19T12:00:00Z", "--label", "Orders database recovery", "--out", outPath)
+	if err != nil {
+		t.Fatalf("summary export: %v — %s", err, out)
+	}
+	if !strings.Contains(out, `summary "Orders database recovery"`) || !strings.Contains(out, "reviewer must verify with an independently trusted --expected-key") {
+		t.Fatalf("summary export output did not explain the boundary: %q", out)
+	}
+	if strings.Contains(out, "explicit expected key") || strings.Contains(out, "integrity/origin verified") {
+		t.Fatalf("summary export claimed independent verification: %q", out)
+	}
+	raw, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "sentinel-proof-id") || strings.Contains(string(raw), "sentinel command") || strings.Contains(string(raw), "sentinel-actor") {
+		t.Fatalf("summary JSON leaked sentinel content: %s", raw)
+	}
+	verified, err := runBundle(t, "verify", "--expected-key", pubHex, outPath)
+	if err != nil {
+		t.Fatalf("summary verify: %v — %s", err, verified)
+	}
+	if !strings.Contains(verified, "integrity/origin verified") {
+		t.Fatalf("summary verify output missing trust boundary: %q", verified)
+	}
+	if missingKey, err := runBundle(t, "verify", outPath); err == nil || !strings.Contains(err.Error(), "expected-key") {
+		t.Fatalf("summary verify without expected key should fail closed: %v %q", err, missingKey)
 	}
 }

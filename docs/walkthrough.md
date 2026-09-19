@@ -50,11 +50,17 @@ operation. Restore Gap does not provide an operating-system sandbox or protect
 arbitrary commands; isolation and permissions remain properties of the
 recovery command and the host where you run it.
 
-## 4. Verify the record
+## 4. Read the decision, then verify the record
 
 ```console
+$ restoregap ledger show "$RESTOREGAP_LEDGER" --limit 10
 $ restoregap ledger verify "$RESTOREGAP_LEDGER"
 ```
+
+The history connects the proposed database deletion to the missing-proof block,
+the recorded drill, and the fresh-proof pass. Each new decision retains its
+reason, evidence and next step. These are decisions: Restore Gap did not delete
+the database. An external caller decides whether to apply the proposed change.
 
 The ledger is append-only and hash-chained. It records drill results and gate
 decisions, including owner overrides. Pointing `RESTOREGAP_LEDGER` and
@@ -64,3 +70,9 @@ state.
 For the complete isolated run, use `demo/run.sh` from the checkout. It executes
 the same flow and checks each expected exit status without relying on your
 normal context or ledger.
+
+For agents, `preflight --require-coverage` refuses supplied resources outside
+declared guard coverage. The [agent integration guide](agent-gate.md) explains
+where enforcement must live. For a reviewer on another machine, create an
+[offline signed summary](evidence-handoff.md); the [restic example](examples/restic.md)
+shows how to replace the fixture with a real backup source.

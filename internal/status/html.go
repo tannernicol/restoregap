@@ -67,6 +67,7 @@ type statusPageData struct {
 	VerdictLabel     string // PASS | WARN | BLOCK
 	VerdictHeadline  string
 	InventorySummary string
+	RecentDecision   *decisionCardData
 
 	// ToGreen is the convergence panel directly under the banner (question
 	// 1, "can I recover right now" — its non-green half): one line per
@@ -123,6 +124,33 @@ type statusPageData struct {
 type kvPair struct {
 	Key   string
 	Value string
+}
+
+type decisionCardData struct {
+	When         string
+	Evaluated    string
+	Verdict      string
+	Actor        string
+	Operation    string
+	BrokenReason string
+	Proposed     []string
+	Findings     []decisionFindingData
+	Legacy       bool
+	ProposedMore int
+	FindingsMore int
+	Disclaimer   string
+	LedgerHint   string
+}
+
+type decisionFindingData struct {
+	ID       string
+	Action   string
+	Verdict  string
+	Resource string
+	Why      string
+	Proof    string
+	Next     string
+	Override string
 }
 
 // freshnessChip is one proof-freshness state's count ("28 present"),
@@ -210,6 +238,7 @@ func buildStatusPage(s *Summary) statusPageData {
 		VerdictLabel:     strings.ToUpper(s.Verdict),
 		VerdictHeadline:  verdictHeadline(s, countDeclared(s.Inventory)),
 		InventorySummary: s.InventorySummary,
+		RecentDecision:   buildRecentDecision(s.Last),
 		ToGreen:          toGreenShownLines,
 		ToGreenRest:      toGreenRest,
 		ToGreenMore:      len(toGreenRest),
@@ -227,6 +256,58 @@ func buildStatusPage(s *Summary) statusPageData {
 		},
 		RecoveryChain: buildRecoveryChainKV(s),
 	}
+}
+
+func buildRecentDecision(d *DecisionSummary) *decisionCardData {
+	if d == nil {
+		return nil
+	}
+	out := &decisionCardData{
+		When: d.When.Local().Format("2006-01-02 15:04"), Verdict: formatDecisionOutcome(*d),
+		Actor: d.Actor, Operation: d.Operation, BrokenReason: d.BrokenReason, Legacy: d.Legacy,
+		Disclaimer: "Restore Gap did not execute the change.", LedgerHint: "See restoregap ledger show --limit 10 for the recent record.",
+	}
+	if d.EvaluatedAt != nil {
+		out.Evaluated = d.EvaluatedAt.Local().Format("2006-01-02 15:04")
+	}
+	for i, in := range d.Intents {
+		if i >= 3 {
+			out.ProposedMore = len(d.Intents) - i
+			break
+		}
+		value := in.Action
+		if in.Command != "" {
+			value += " · command: " + in.Command
+		}
+		if len(in.Packages) > 0 {
+			value += " · packages: " + strings.Join(in.Packages, ", ")
+		}
+		if len(in.TargetPaths) > 0 {
+			value += " · from: " + strings.Join(in.Paths, ", ") + " · to: " + strings.Join(in.TargetPaths, ", ")
+		} else if len(in.Paths) > 0 {
+			value += " · paths: " + strings.Join(in.Paths, ", ")
+		}
+		if in.Description != "" {
+			value += " — " + in.Description
+		}
+		out.Proposed = append(out.Proposed, value)
+	}
+	for i, f := range d.Findings {
+		if i >= 3 {
+			out.FindingsMore = len(d.Findings) - i
+			break
+		}
+		action := ""
+		if len(f.Actions) > 0 {
+			action = strings.Join(f.Actions, ", ")
+		}
+		fd := decisionFindingData{ID: f.FindingID, Action: action, Verdict: f.Verdict, Resource: f.Resource, Why: f.Why, Proof: f.Proof, Next: f.RequiredNextStep}
+		if f.Override != nil {
+			fd.Override = "approved by " + f.Override.ApprovedBy + ": " + f.Override.Reason
+		}
+		out.Findings = append(out.Findings, fd)
+	}
+	return out
 }
 
 // buildToGreenPrompt renders the To-green panel's folded `next --prompt`
@@ -451,7 +532,7 @@ const estateRowTemplate = `{{define "estateRow"}}
     <span class="rgs-taxstate" data-bucket="{{.Bucket}}">{{.State}}</span>
     <span class="rgs-taxproof"><code>{{.Proof}}</code><span class="rgs-taxsub">{{.Artifact}}</span></span>
     <span class="rgs-taxlevel">{{.Level}}</span>
-    <span class="rgs-taxwhy">{{.Why}}</span>
+    <span class="rgs-taxwhy">{{.Why}}{{if .Binding}} <small class="rgs-taxbinding">{{.Binding}}</small>{{end}}</span>
   </span>
   {{- if .NextAction}}
   <pre class="rgs-rownext"><code>{{.NextAction}}</code></pre>
@@ -476,6 +557,9 @@ var statusPageTemplate = template.Must(template.New("status").Parse(estateRowTem
 <title>Recovery status · Restore Gap</title>
 <meta name="color-scheme" content="dark">
 <link rel="icon" type="image/svg+xml" href="{{.FaviconHref}}">
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#12161c">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>` + statusCSS + `</style>
 </head>
 <body>
@@ -496,6 +580,32 @@ var statusPageTemplate = template.Must(template.New("status").Parse(estateRowTem
     <span class="rgs-vheadline">{{.VerdictHeadline}}</span>
     {{if .InventorySummary}}<span class="rgs-vsub">{{.InventorySummary}}</span>{{end}}
   </section>
+
+  {{- if .RecentDecision}}
+  <section class="rgs-decision" aria-labelledby="recent-decision-title">
+    <div class="rgs-decision-head"><h2 id="recent-decision-title">Decision ledger · latest</h2><span class="rgs-decision-state">{{.RecentDecision.Verdict}}</span></div>
+    <p class="rgs-muted">Recorded {{.RecentDecision.When}}{{if .RecentDecision.Evaluated}} · evaluated as of {{.RecentDecision.Evaluated}}{{end}}{{if .RecentDecision.Actor}} · {{.RecentDecision.Actor}}{{end}}{{if .RecentDecision.Operation}} · {{.RecentDecision.Operation}}{{end}}</p>
+    {{if .RecentDecision.BrokenReason}}<p class="rgs-decision-broken">why gate is unavailable: {{.RecentDecision.BrokenReason}}</p>{{end}}
+    {{- if .RecentDecision.Legacy}}
+    <p>Legacy record: proposed change details were not recorded.</p>
+    {{- end}}
+    <h3>Proposed change</h3>
+    {{- if .RecentDecision.Proposed}}
+    <ul class="rgs-decision-list">{{range .RecentDecision.Proposed}}<li><code>{{.}}</code></li>{{end}}</ul>
+    {{- if .RecentDecision.ProposedMore}}<p class="rgs-muted">{{.RecentDecision.ProposedMore}} more proposed operation(s). {{.RecentDecision.LedgerHint}}</p>{{end}}
+    {{- else}}<p class="rgs-muted">No proposed intent was recorded.</p>{{end}}
+    {{- if .RecentDecision.Findings}}
+    <h3>Why and next step</h3>
+    <div class="rgs-decision-findings">
+      {{- range .RecentDecision.Findings}}
+      <div class="rgs-decision-finding"><strong>{{if .Action}}{{.Action}} · {{end}}{{if .Resource}}{{.Resource}} · {{end}}{{.Verdict}}</strong>{{if .Why}}<span>why: {{.Why}}</span>{{end}}{{if .Proof}}<span>proof: {{.Proof}}</span>{{end}}{{if .Next}}<span>next: {{.Next}}</span>{{end}}{{if .Override}}<span>override: {{.Override}}</span>{{end}}<small>finding id: {{.ID}}</small></div>
+      {{- end}}
+    </div>
+    {{- if .RecentDecision.FindingsMore}}<p class="rgs-muted">{{.RecentDecision.FindingsMore}} more finding(s). {{.RecentDecision.LedgerHint}}</p>{{end}}
+    {{- end}}
+    <p class="rgs-decision-note">{{.RecentDecision.Disclaimer}}</p>
+  </section>
+  {{- end}}
 
   <section class="rgs-togreen">
     {{- if .ToGreen}}
@@ -646,7 +756,7 @@ var statusPageTemplate = template.Must(template.New("status").Parse(estateRowTem
       </div>
       <div>
         <h3>Evidence you can hand over</h3>
-        <p>Ed25519-signed proofs carry real measurements, expire on a schedule, and land in a hash-chained ledger.</p>
+        <p>Proofs may be signed; checks, measurements, scope, and expiry remain visible in the local hash-chained record. Trust the signer separately.</p>
       </div>
     </div>
   </details>
@@ -749,6 +859,20 @@ code, .rgs-mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, 
 .rgs-vlabel { font-weight: 700; letter-spacing: 0.04em; }
 .rgs-vheadline { font-weight: 600; }
 .rgs-vsub { color: var(--text-2); flex-basis: 100%; }
+
+.rgs-decision { margin-top: 1rem; padding: 1rem 1.2rem; border: 1px solid var(--line); border-radius: var(--ui-radius); background: var(--surface-2); }
+.rgs-decision-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.rgs-decision h2 { margin: 0; font-size: 1rem; }
+.rgs-decision h3 { margin: 0.85rem 0 0.35rem; font-size: 0.85rem; }
+.rgs-decision-state { color: var(--accent); font-family: ui-monospace, monospace; font-size: 0.8rem; font-weight: 700; }
+.rgs-decision-list { margin: 0; padding-left: 1.2rem; }
+.rgs-decision-list li { margin: 0.25rem 0; overflow-wrap: anywhere; }
+.rgs-decision-findings { display: grid; gap: 0.5rem; }
+.rgs-decision-finding { display: grid; gap: 0.15rem; padding: 0.55rem 0.7rem; border-left: 2px solid var(--line); font-size: 0.82rem; overflow-wrap: anywhere; }
+.rgs-decision-finding strong { font-family: ui-monospace, monospace; }
+.rgs-decision-finding span { color: var(--text-2); }
+.rgs-decision-finding small { color: var(--text-2); font-size: 0.8rem; }
+.rgs-decision-note { margin: 0.9rem 0 0; color: var(--text-2); font-size: 0.78rem; }
 
 .rgs-togreen {
   background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px;
@@ -950,6 +1074,7 @@ body:has(#rgs-view-attention:checked) .rgs-estate-panel .rgs-taxlayer[data-hasga
 .rgs-taxstate[data-bucket="restored"] { color: var(--good); }
 .rgs-taxlevel { color: var(--text-2); }
 .rgs-taxwhy { color: var(--text-2); flex: 1 1 12rem; }
+.rgs-taxbinding { color: var(--text-2); font-family: ui-monospace, monospace; white-space: nowrap; }
 
 
 .rgs-page-title { margin: 2rem 0 1rem; }

@@ -6,6 +6,40 @@ each such change is called out here.
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-09-19
+
+The local decision layer now binds recovery evidence to the tested recipe and
+explains each decision in the CLI, dashboard and ledger.
+
+- Opt-in `preflight --require-coverage` and MCP `require_coverage` check every
+  supplied resource. A mixed covered/uncovered proposal blocks with the missing
+  resource named. Declared recovery dependency changes invalidate affected proofs
+  across the whole proposal.
+- New drill proofs record recipe/dependency binding; `require_bound: true` lets
+  guards require it. Version-2 signatures cover decision-bearing metadata.
+  Legacy evidence remains readable and explicitly identified.
+- Recovery and verifier subprocesses have a configurable deadline, bounded output
+  and process-group cleanup. Proof updates use a validated atomic transaction
+  under a stable lock; concurrent updates preserve each other's records.
+- `ledger show` presents proposals, decisions, supporting evidence, next steps and
+  owner overrides with chain health. The dashboard surfaces the latest decision.
+  Evaluation never applies the proposed change; local recording remains allowed.
+- `bundle export --summary-only` creates a bounded signed offline JSON handoff
+  excluding raw configuration and operational text. Verification requires an
+  independently trusted `--expected-key`. Full archives retain their format and
+  optionally accept the same expected-key check.
+- The example agent hook reads its event once and includes move destinations;
+  regression fixtures cover destructive operations that previously bypassed it.
+- Architecture, agent integration, restic first-drill and review-handoff guides
+  describe the supported scope and trust boundary. No hosted service or
+  provider-aware infrastructure adapter is added.
+
+Compatibility: existing guard defaults and preflight exit codes remain stable.
+New optional ledger fields preserve old records; use the new binary to append
+to a ledger containing new records. Bound-proof requirements are opt-in for
+existing contexts. Explicit drill commands can execute configured recovery
+commands; the evaluator remains read-only over target systems.
+
 ## [0.10.1] — 2026-09-18
 
 Release packaging and first-run documentation now match the local gate:

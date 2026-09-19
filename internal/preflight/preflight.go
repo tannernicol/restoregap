@@ -46,7 +46,11 @@ type Request struct {
 	Format        string
 	OutPath       string
 	FailOnWarn    bool
-	AsOf          string // RFC3339; pins evaluation time for proof freshness (empty = now)
+	// RequireCoverage opts into strict per-resource guard coverage. The
+	// default remains the established match-any-resource behavior for existing
+	// hooks and callers.
+	RequireCoverage bool
+	AsOf            string // RFC3339; pins evaluation time for proof freshness (empty = now)
 	// ToolVersion is the CLI version stamped into a durable decision entry.
 	// It is set by internal/cli; non-CLI callers may leave it empty.
 	ToolVersion string
@@ -106,7 +110,7 @@ func Run(_ context.Context, req Request) (*Result, error) {
 	checkStarted = time.Now()
 	ctxSpec, policyFindings, err := loadContext(req.ContextPaths)
 	if err != nil {
-		return gateBroken(req, "load_context", err, started, appendCheck(checks, "load_context", "broken", checkStarted))
+		return gateBroken(req, "load_context", err, started, appendCheck(checks, "load_context", "broken", checkStarted), intents)
 	}
 	checks = appendCheck(checks, "load_context", "pass", checkStarted)
 
@@ -116,7 +120,7 @@ func Run(_ context.Context, req Request) (*Result, error) {
 	checkStarted = time.Now()
 	entries, err := loadVerifiedLedger(req.LedgerPath)
 	if err != nil {
-		return gateBroken(req, "verify_ledger", err, started, appendCheck(checks, "verify_ledger", "broken", checkStarted))
+		return gateBroken(req, "verify_ledger", err, started, appendCheck(checks, "verify_ledger", "broken", checkStarted), intents)
 	}
 	ledgerOutcome := "pass"
 	if req.LedgerPath == "" {
@@ -134,12 +138,12 @@ func Run(_ context.Context, req Request) (*Result, error) {
 	checks = appendCheck(checks, "evaluate_policy", outcomeFor(exitCode), checkStarted)
 
 	if req.LedgerPath != "" && !req.Plan {
-		if err := recordDecision(req, findings, overall, now, "ran", "", checks, elapsedMS(started)); err != nil {
-			return gateBroken(req, "record_ledger", err, started, appendCheck(checks, "record_ledger", "broken", time.Now()))
+		if err := recordDecision(req, findings, overall, now, "ran", "", checks, elapsedMS(started), intents); err != nil {
+			return gateBroken(req, "record_ledger", err, started, appendCheck(checks, "record_ledger", "broken", time.Now()), intents)
 		}
 	}
 
-	rendered, err := render(req, findings, overall, now, "ran", "", checks, elapsedMS(started))
+	rendered, err := render(req, findings, overall, now, "ran", "", checks, elapsedMS(started), intents)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +154,7 @@ func Run(_ context.Context, req Request) (*Result, error) {
 // evaluate is the policy step: match the intents against the declared guards,
 // downgrade anything an active override covers, and reduce to one verdict.
 func evaluate(req Request, intents []intent.ChangeIntent, ctxSpec contextspec.Context, entries []ledger.Entry, now time.Time) ([]engine.Finding, engine.Verdict, int) {
-	findings := rules.Evaluate(intents, ctxSpec, now)
+	findings := rules.EvaluateWithOptions(intents, ctxSpec, now, rules.EvaluateOptions{RequireCoverage: req.RequireCoverage})
 	findings = engine.ApplyOverrides(findings, ledger.ActiveOverrides(entries, now))
 	overall := engine.Overall(findings)
 	return findings, overall, engine.ExitCode(overall, req.FailOnWarn)
@@ -181,16 +185,16 @@ func elapsedMS(started time.Time) int64 {
 // policy block says the gate evaluated the change and rejected it, while this
 // says evaluation was unavailable. Both stop callers, but operators need the
 // distinction to repair the gate rather than chase a nonexistent proof gap.
-func gateBroken(req Request, checkID string, cause error, started time.Time, checks []ledger.DecisionCheckRecord) (*Result, error) {
+func gateBroken(req Request, checkID string, cause error, started time.Time, checks []ledger.DecisionCheckRecord, proposed ...[]intent.ChangeIntent) (*Result, error) {
 	reason := fmt.Sprintf("%s: %v", checkID, cause)
 	now := time.Now().UTC()
 	if req.LedgerPath != "" && !req.Plan {
 		// The primary failure is still rendered even if recording it fails. A
 		// broken write path cannot be made auditable by returning a generic
 		// error and hiding the check that failed.
-		_ = recordDecision(req, nil, engine.VerdictBlock, now, "broken", reason, checks, elapsedMS(started))
+		_ = recordDecision(req, nil, engine.VerdictBlock, now, "broken", reason, checks, elapsedMS(started), proposed...)
 	}
-	rendered, err := render(req, nil, engine.VerdictBlock, now, "broken", reason, checks, elapsedMS(started))
+	rendered, err := render(req, nil, engine.VerdictBlock, now, "broken", reason, checks, elapsedMS(started), proposed...)
 	if err != nil {
 		return nil, err
 	}
@@ -339,42 +343,84 @@ func loadVerifiedLedger(ledgerPath string) ([]ledger.Entry, error) {
 	return entries, nil
 }
 
-func recordDecision(req Request, findings []engine.Finding, overall engine.Verdict, now time.Time, gateState, brokenReason string, checks []ledger.DecisionCheckRecord, durationMS int64) error {
+func recordDecision(req Request, findings []engine.Finding, overall engine.Verdict, now time.Time, gateState, brokenReason string, checks []ledger.DecisionCheckRecord, durationMS int64, proposed ...[]intent.ChangeIntent) error {
 	records := make([]ledger.FindingRecord, 0, len(findings))
 	for _, f := range findings {
-		records = append(records, ledger.FindingRecord{
-			FindingID:   f.ID,
-			GuardID:     f.GuardID,
-			Resource:    f.Resource,
-			Verdict:     string(f.Verdict),
-			RiskClass:   string(f.RiskClass),
-			ProofStatus: string(f.ProofStatus),
-		})
+		record := ledger.FindingRecord{
+			FindingID:        f.ID,
+			GuardID:          f.GuardID,
+			Resource:         f.Resource,
+			Verdict:          string(f.Verdict),
+			RiskClass:        string(f.RiskClass),
+			ProofStatus:      string(f.ProofStatus),
+			Actions:          append([]string(nil), f.Actions...),
+			Why:              f.Title,
+			Proof:            f.Proof,
+			RequiredNextStep: f.RequiredNextStep,
+		}
+		if f.Override != nil {
+			record.Override = &ledger.FindingOverrideRecord{ApprovedBy: f.Override.ApprovedBy, Reason: f.Override.Reason}
+		}
+		records = append(records, record)
 	}
+	var intents []ledger.IntentRecord
+	if len(proposed) > 0 {
+		intents = make([]ledger.IntentRecord, 0, len(proposed[0]))
+		for _, in := range proposed[0] {
+			intents = append(intents, ledger.IntentRecord{
+				Action: string(in.Action), Command: in.Command,
+				Packages:    append([]string(nil), in.Packages...),
+				Paths:       append([]string(nil), in.Paths...),
+				TargetPaths: append([]string(nil), in.TargetPaths...),
+				Actor:       in.Actor, ContextWindow: in.ContextWindow,
+				Description: in.Description, Source: in.Source,
+			})
+		}
+	}
+	executed := false
+	evaluatedAt := now.UTC()
 	payload := ledger.Payload{Decision: &ledger.DecisionPayload{
 		Verdict:       string(overall),
 		Findings:      records,
 		Actor:         req.Actor,
+		Operation:     "preflight",
+		Executed:      &executed,
+		Intents:       intents,
 		ContextWindow: req.ContextWindow,
 		GateState:     gateState,
 		BrokenReason:  brokenReason,
 		Checks:        checks,
 		DurationMS:    durationMS,
 		ToolVersion:   req.ToolVersion,
+		EvaluatedAt:   &evaluatedAt,
 	}}
 	id, err := ledger.NewID()
 	if err != nil {
 		return fmt.Errorf("preflight: %w", err)
 	}
 	opts := policy.StampOptions(req.ContextPaths)
-	if _, err := ledger.Append(req.LedgerPath, ledger.EntryDecision, req.Actor, payload, now, id, opts...); err != nil {
+	if _, err := ledger.Append(req.LedgerPath, ledger.EntryDecision, req.Actor, payload, time.Now().UTC(), id, opts...); err != nil {
 		return fmt.Errorf("preflight: %w", err)
 	}
 	return nil
 }
 
-func render(req Request, findings []engine.Finding, overall engine.Verdict, now time.Time, gateState, brokenReason string, checks []ledger.DecisionCheckRecord, durationMS int64) ([]byte, error) {
+func render(req Request, findings []engine.Finding, overall engine.Verdict, now time.Time, gateState, brokenReason string, checks []ledger.DecisionCheckRecord, durationMS int64, proposed ...[]intent.ChangeIntent) ([]byte, error) {
 	rep := report.FromFindings(findings, overall, now, req.Actor, req.ContextWindow)
+	rep.Operation = "preflight"
+	executed := false
+	rep.Executed = &executed
+	if len(proposed) > 0 {
+		rep.Proposed = make([]report.ProposedChange, 0, len(proposed[0]))
+		for _, in := range proposed[0] {
+			rep.Proposed = append(rep.Proposed, report.ProposedChange{
+				Action: string(in.Action), Command: in.Command,
+				Packages: append([]string(nil), in.Packages...),
+				Paths:    append([]string(nil), in.Paths...), TargetPaths: append([]string(nil), in.TargetPaths...),
+				Actor: in.Actor, ContextWindow: in.ContextWindow, Description: in.Description, Source: in.Source,
+			})
+		}
+	}
 	rep.GateState = gateState
 	rep.BrokenReason = brokenReason
 	rep.DurationMS = durationMS

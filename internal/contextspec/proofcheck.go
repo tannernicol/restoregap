@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -60,24 +61,99 @@ type CheckResult struct {
 	Detail string
 }
 
+// EvaluateProof derives the intrinsic state of one proof record. Intrinsic
+// state covers the record's own terminal outcome, signature, and expiry. A
+// guard's require_verified and max_proof_age_hours constraints are deliberately
+// applied by CheckProof after this result: they are requirements of the
+// consumer, not claims made by the proof record itself.
+func EvaluateProof(proof Proof, now time.Time) CheckResult {
+	if proof.Status == ProofRecordUnreachable {
+		return CheckResult{State: StateUnreachable, Detail: fmt.Sprintf(
+			"proof %q is unreachable: the recovery source was not reachable when the drill last ran, so nothing was proven "+
+				"(no data loss is implied); re-run the drill once the source is reachable", proof.ID)}
+	}
+	if proof.Status == ProofRecordDisputed {
+		return CheckResult{State: StateContradicted, Detail: fmt.Sprintf("proof %q is disputed: the recovery ran and did not verify; investigate the copy", proof.ID)}
+	}
+	if proof.Signature != nil {
+		ok, err := verifySignature(proof)
+		if err != nil {
+			return CheckResult{State: StateContradicted, Detail: fmt.Sprintf("proof %q signature invalid: %v", proof.ID, err)}
+		}
+		if !ok {
+			return CheckResult{State: StateContradicted, Detail: fmt.Sprintf("proof %q signature does not verify", proof.ID)}
+		}
+	}
+	if proof.ExpiresAt != nil && now.After(*proof.ExpiresAt) {
+		return CheckResult{State: StateStale, Detail: fmt.Sprintf("proof %q expired at %s", proof.ID, proof.ExpiresAt.Format(time.RFC3339))}
+	}
+	if proof.Status == ProofRecordStale {
+		return CheckResult{State: StateStale, Detail: fmt.Sprintf("proof %q is marked stale", proof.ID)}
+	}
+	return CheckResult{State: StatePresent, Detail: fmt.Sprintf("proof %q is %s and fresh", proof.ID, proof.Status)}
+}
+
 // CheckProof validates a required proof by id against the context's
 // declared proofs: existence, status, signature (if declared), and
 // freshness against both the guard's max_proof_age_hours and the proof's
 // own expires_at. now is injected so preflight can pin evaluation time via
 // --as-of.
 func (c Context) CheckProof(id string, maxProofAgeHours int, requireVerified bool, now time.Time) CheckResult {
+	return c.CheckProofWithBinding(id, maxProofAgeHours, requireVerified, false, now)
+}
+
+// CheckProofWithBinding is CheckProof with the opt-in requirement that the
+// proof is bound to the currently declared recovery recipe and dependencies.
+// CheckProof remains the compatibility wrapper for callers that do not opt in.
+func (c Context) CheckProofWithBinding(id string, maxProofAgeHours int, requireVerified, requireBound bool, now time.Time) CheckResult {
 	proof, ok := c.proofByID(id)
 	if !ok {
 		return CheckResult{State: StateMissing, Detail: fmt.Sprintf("proof %q is not declared", id)}
 	}
-	if proof.Status == ProofRecordUnreachable {
-		return CheckResult{State: StateUnreachable, Detail: fmt.Sprintf(
-			"proof %q is unreachable: the recovery source was not reachable when the drill last ran, so nothing was proven "+
-				"(no data loss is implied); re-run the drill once the source is reachable", id)}
+	result := EvaluateProof(proof, now)
+	if result.State != StatePresent {
+		return result
 	}
-	if proof.Status == ProofRecordDisputed {
-		return CheckResult{State: StateContradicted, Detail: fmt.Sprintf("proof %q is disputed: the recovery ran and did not verify; investigate the copy", id)}
+	bound, bindingFailure := c.validateProofBinding(proof, id, requireBound)
+	if bindingFailure != nil {
+		return *bindingFailure
 	}
+	if result = applyProofRequirements(result, proof, id, requireVerified, maxProofAgeHours, now); result.State != StatePresent {
+		return result
+	}
+	return withProofAssurance(result, proof, bound)
+}
+
+func (c Context) validateProofBinding(proof Proof, id string, requireBound bool) (bool, *CheckResult) {
+	bound := proof.RecipeDigest != "" || proof.Dependencies != nil
+	if !bound {
+		if requireBound {
+			result := CheckResult{State: StateMissing, Detail: fmt.Sprintf("proof %q is legacy evidence without a recovery binding; run `restoregap drill`", id)}
+			return false, &result
+		}
+		return false, nil
+	}
+	if proof.RecipeDigest == "" || proof.Dependencies == nil {
+		result := CheckResult{State: StateContradicted, Detail: fmt.Sprintf("proof %q has an incomplete recovery binding", id)}
+		return true, &result
+	}
+	drill, found := c.drillByProof(id)
+	if !found {
+		result := CheckResult{State: StateContradicted, Detail: fmt.Sprintf("proof %q has a binding but no declared drill", id)}
+		return true, &result
+	}
+	if want := RecipeDigest(drill); proof.RecipeDigest != want {
+		result := CheckResult{State: StateContradicted, Detail: fmt.Sprintf("proof %q recipe binding does not match the declared drill", id)}
+		return true, &result
+	}
+	if !DependenciesEqual(*proof.Dependencies, drill.Dependencies) {
+		result := CheckResult{State: StateContradicted, Detail: fmt.Sprintf("proof %q recovery dependencies do not match the declared drill", id)}
+		return true, &result
+	}
+	return true, nil
+}
+
+func applyProofRequirements(result CheckResult, proof Proof, id string, requireVerified bool, maxProofAgeHours int, now time.Time) CheckResult {
 	// A guard that demands verification is saying an attestation is not enough:
 	// only a drill that reconstructed the artifact and compared the bytes
 	// counts. Treat an unverified proof as absent rather than merely weak, so
@@ -89,28 +165,39 @@ func (c Context) CheckProof(id string, maxProofAgeHours int, requireVerified boo
 				"(run `restoregap drill`)", id, proof.Status),
 		}
 	}
-	if proof.Signature != nil {
-		ok, err := verifySignature(proof)
-		if err != nil {
-			return CheckResult{State: StateContradicted, Detail: fmt.Sprintf("proof %q signature invalid: %v", id, err)}
-		}
-		if !ok {
-			return CheckResult{State: StateContradicted, Detail: fmt.Sprintf("proof %q signature does not verify", id)}
-		}
-	}
-	if proof.ExpiresAt != nil && now.After(*proof.ExpiresAt) {
-		return CheckResult{State: StateStale, Detail: fmt.Sprintf("proof %q expired at %s", id, proof.ExpiresAt.Format(time.RFC3339))}
-	}
 	if maxProofAgeHours > 0 && proof.ObservedAt != nil {
 		age := now.Sub(*proof.ObservedAt)
 		if age > time.Duration(maxProofAgeHours)*time.Hour {
 			return CheckResult{State: StateStale, Detail: fmt.Sprintf("proof %q observed %s ago, exceeds max_proof_age_hours=%d", id, age.Round(time.Hour), maxProofAgeHours)}
 		}
 	}
-	if proof.Status == ProofRecordStale {
-		return CheckResult{State: StateStale, Detail: fmt.Sprintf("proof %q is marked stale", id)}
+	return result
+}
+
+func withProofAssurance(result CheckResult, proof Proof, bound bool) CheckResult {
+	if bound {
+		result.Detail += "; recipe-bound"
+	} else {
+		result.Detail += "; legacy unbound evidence"
+		switch {
+		case proof.Signature == nil:
+			result.Detail += "; unsigned"
+		case proof.Signature.Version == 0:
+			result.Detail += "; legacy signature covers limited fields"
+		default:
+			result.Detail += "; v2 signature without recipe binding"
+		}
 	}
-	return CheckResult{State: StatePresent, Detail: fmt.Sprintf("proof %q is %s and fresh", id, proof.Status)}
+	return result
+}
+
+func (c Context) drillByProof(id string) (Drill, bool) {
+	for _, drill := range c.Drills {
+		if drill.Proof == id {
+			return drill, true
+		}
+	}
+	return Drill{}, false
 }
 
 // CheckFact validates a required fact by id: existence and freshness
@@ -165,8 +252,117 @@ func verifySignature(p Proof) (bool, error) {
 	if p.ObservedAt != nil {
 		observedAt = p.ObservedAt.Format(time.RFC3339)
 	}
-	message := []byte(SignedMessage(p.ID, string(p.Status), observedAt, p.SHA256, p.Measurements))
+	var message []byte
+	switch p.Signature.Version {
+	case 0:
+		if p.RecipeDigest != "" || p.Dependencies != nil {
+			return false, fmt.Errorf("legacy signature does not cover recovery binding fields")
+		}
+		message = []byte(SignedMessage(p.ID, string(p.Status), observedAt, p.SHA256, p.Measurements))
+	case 2:
+		structured, err := SignedMessageV2(p)
+		if err != nil {
+			return false, err
+		}
+		message = []byte(structured)
+	default:
+		return false, fmt.Errorf("unsupported signature version %d", p.Signature.Version)
+	}
 	return ed25519.Verify(pub, message, sig), nil
+}
+
+// VerifyProofSignature checks a proof signature independently of the proof's
+// status, expiry, or other intrinsic health. A proof without a signature is
+// not signed and returns false without an error.
+func VerifyProofSignature(p Proof) (bool, error) {
+	if p.Signature == nil {
+		return false, nil
+	}
+	return verifySignature(p)
+}
+
+type signedMeasurementsV2 struct {
+	RTOSeconds float64         `json:"rto_seconds"`
+	RPOSeconds *float64        `json:"rpo_seconds"`
+	Checks     []signedCheckV2 `json:"checks"`
+}
+
+type signedCheckV2 struct {
+	Type   string `json:"type"`
+	Pass   bool   `json:"pass"`
+	Detail string `json:"detail"`
+}
+
+type signedProofV2 struct {
+	Domain       string                `json:"domain"`
+	Version      int                   `json:"version"`
+	ID           string                `json:"id"`
+	Status       ProofRecordStatus     `json:"status"`
+	ObservedAt   string                `json:"observed_at"`
+	ExpiresAt    *string               `json:"expires_at,omitempty"`
+	Verified     bool                  `json:"verified"`
+	SHA256       string                `json:"sha256"`
+	Command      string                `json:"command"`
+	Measurements *signedMeasurementsV2 `json:"measurements,omitempty"`
+	RecipeDigest string                `json:"recipe_digest"`
+	Dependencies *Dependencies         `json:"dependencies"`
+	Host         *ProofHost            `json:"host,omitempty"`
+	Epoch        string                `json:"epoch,omitempty"`
+}
+
+// SignedMessageV2 builds the domain/version-prefixed structured message for
+// new proof signatures. It covers every decision-bearing proof field and the
+// explicit recovery binding, plus host/epoch when the proof claims stamped
+// origin. Scope defaults are intentionally excluded because they are resolved
+// by the declaring context file rather than by the drill producer.
+func SignedMessageV2(p Proof) (string, error) {
+	observedAt := ""
+	if p.ObservedAt != nil {
+		observedAt = p.ObservedAt.Format(time.RFC3339Nano)
+	}
+	var expiresAt *string
+	if p.ExpiresAt != nil {
+		value := p.ExpiresAt.Format(time.RFC3339Nano)
+		expiresAt = &value
+	}
+	var measurements *signedMeasurementsV2
+	if p.Measurements != nil {
+		checks := make([]signedCheckV2, 0, len(p.Measurements.Checks))
+		for _, check := range p.Measurements.Checks {
+			checks = append(checks, signedCheckV2(check))
+		}
+		measurements = &signedMeasurementsV2{RTOSeconds: p.Measurements.RTOSeconds, RPOSeconds: p.Measurements.RPOSeconds, Checks: checks}
+	}
+	var dependencies *Dependencies
+	if p.Dependencies != nil {
+		value := NormalizeDependencies(*p.Dependencies)
+		dependencies = &value
+	}
+	message := signedProofV2{
+		Domain: "restoregap/proof", Version: 2, ID: p.ID, Status: p.Status,
+		ObservedAt: observedAt, ExpiresAt: expiresAt, Verified: p.Verified,
+		SHA256: p.SHA256, Command: p.Command, Measurements: measurements,
+		RecipeDigest: p.RecipeDigest, Dependencies: dependencies,
+		Host: p.Host, Epoch: p.Epoch,
+	}
+	data, err := json.Marshal(message)
+	if err != nil {
+		return "", fmt.Errorf("canonical v2 proof encoding: %w", err)
+	}
+	return "restoregap-proof-v2\x00" + string(data), nil
+}
+
+// SignProofV2 creates a version-2 signature over the typed proof fields.
+func SignProofV2(private ed25519.PrivateKey, proof Proof) (*Signature, error) {
+	message, err := SignedMessageV2(proof)
+	if err != nil {
+		return nil, err
+	}
+	return &Signature{
+		Version:      2,
+		PublicKeyHex: hex.EncodeToString(private.Public().(ed25519.PublicKey)),
+		SignatureHex: hex.EncodeToString(ed25519.Sign(private, []byte(message))),
+	}, nil
 }
 
 // SignedMessage builds the canonical message a proof's Ed25519 signature

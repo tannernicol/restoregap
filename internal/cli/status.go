@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -129,7 +130,12 @@ func renderStatusReport(s *status.Summary, format string, last, filtered bool, t
 
 func newLedgerCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "ledger", Short: "Inspect and verify the decision ledger"}
-	verify := &cobra.Command{
+	cmd.AddCommand(newLedgerVerifyCmd(), newLedgerAnchorCmd(), newLedgerListCmd(), newLedgerShowCmd())
+	return cmd
+}
+
+func newLedgerVerifyCmd() *cobra.Command {
+	return &cobra.Command{
 		Use:   "verify [ledger.jsonl]",
 		Short: "Verify the ledger's hash chain end to end",
 		Long:  "Verifies the given ledger, or the default one when no path is given: " + ledgerDiscoveryHelp,
@@ -151,6 +157,9 @@ func newLedgerCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newLedgerAnchorCmd() *cobra.Command {
 	var anchorReason, anchorApprovedBy, anchorActor string
 	anchor := &cobra.Command{
 		Use:   "anchor [ledger.jsonl] <entry-id>",
@@ -195,6 +204,10 @@ func newLedgerCmd() *cobra.Command {
 	af.StringVar(&anchorReason, "reason", "", "why the mismatch is accepted rather than treated as tampering (required)")
 	af.StringVar(&anchorApprovedBy, "approved-by", "", "owner who approved anchoring this entry (required)")
 	af.StringVar(&anchorActor, "actor", "", "recording actor (default: human/owner)")
+	return anchor
+}
+
+func newLedgerListCmd() *cobra.Command {
 	list := &cobra.Command{
 		Use:   "list [ledger.jsonl]",
 		Short: "List ledger entries (id, type, actor, time)",
@@ -216,8 +229,265 @@ func newLedgerCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.AddCommand(verify, anchor, list)
-	return cmd
+	return list
+}
+
+func newLedgerShowCmd() *cobra.Command {
+	var showLimit int
+	var showFormat string
+	show := &cobra.Command{
+		Use:   "show [ledger.jsonl]",
+		Short: "Show recent decisions, drills, overrides, and chain health",
+		Long:  "Shows the newest ledger activity first. It reports decisions and proposed intents without executing them: " + ledgerDiscoveryHelp,
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if showLimit <= 0 {
+				return fmt.Errorf("ledger show: --limit must be positive")
+			}
+			if showFormat != "text" && showFormat != "json" {
+				return fmt.Errorf("ledger show: --format must be text or json")
+			}
+			path, err := ledgerArg(args)
+			if err != nil {
+				return err
+			}
+			out, broken, err := renderLedgerShow(path, showLimit, showFormat)
+			if err != nil {
+				return err
+			}
+			if _, err := cmd.OutOrStdout().Write(out); err != nil {
+				return err
+			}
+			if broken {
+				return &ExitError{Code: 1}
+			}
+			return nil
+		},
+	}
+	sf := show.Flags()
+	sf.IntVar(&showLimit, "limit", 10, "maximum number of newest ledger entries to inspect")
+	sf.StringVar(&showFormat, "format", "text", "output format: text or json")
+	return show
+}
+
+type ledgerShowOutput struct {
+	Path      string                `json:"path"`
+	State     string                `json:"state"`
+	Chain     ledgerShowChain       `json:"chain"`
+	Decisions []ledger.DecisionView `json:"decisions,omitempty"`
+	Drills    []ledger.DrillView    `json:"drills,omitempty"`
+	Overrides []ledger.OverrideView `json:"overrides,omitempty"`
+}
+
+type ledgerShowChain struct {
+	OK         bool   `json:"ok"`
+	EntryCount int    `json:"entry_count"`
+	LastHash   string `json:"last_hash,omitempty"`
+	FailedAt   int    `json:"failed_at,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+func renderLedgerShow(path string, limit int, format string) ([]byte, bool, error) {
+	entries, readErr := ledger.ReadAll(path)
+	if readErr != nil {
+		return renderLedgerShowBroken(path, format, readErr)
+	}
+	verify := ledger.VerifyEntries(entries)
+	state := "ok"
+	broken := !verify.OK
+	if len(entries) == 0 {
+		state = "empty"
+	} else if broken {
+		state = "broken"
+	}
+	recent := ledger.Recent(entries, limit)
+	out := ledgerShowOutput{
+		Path: path, State: state,
+		Chain:     ledgerShowChain{OK: verify.OK, EntryCount: verify.EntryCount, LastHash: verify.LastHash, FailedAt: verify.FailedAt, Reason: verify.Reason},
+		Decisions: recent.Decisions, Drills: recent.Drills, Overrides: recent.Overrides,
+	}
+	if format == "json" {
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return nil, broken, err
+		}
+		return append(data, '\n'), broken, nil
+	}
+	return []byte(formatLedgerShowText(out)), broken, nil
+}
+
+func renderLedgerShowBroken(path, format string, cause error) ([]byte, bool, error) {
+	if format == "json" {
+		out := ledgerShowOutput{Path: path, State: "broken", Chain: ledgerShowChain{Reason: cause.Error()}}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return nil, true, err
+		}
+		return append(data, '\n'), true, nil
+	}
+	return []byte(fmt.Sprintf("LEDGER: %s\nCHAIN: BROKEN — %s\n", path, cause)), true, nil
+}
+
+func formatLedgerShowText(out ledgerShowOutput) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "LEDGER: %s\n", out.Path)
+	if out.State == "empty" {
+		return emptyLedgerShowText(&b, out.Path)
+	}
+	writeLedgerChainText(&b, out)
+	writeLedgerDecisionsText(&b, out.Decisions)
+	writeLedgerDrillsText(&b, out.Drills)
+	writeLedgerOverridesText(&b, out.Overrides)
+	b.WriteString("\nRestore Gap did not execute the change. This is a local decision record.\n")
+	return b.String()
+}
+
+func emptyLedgerShowText(b *strings.Builder, path string) string {
+	b.WriteString("CHAIN: EMPTY — no recorded decisions or proof activity\n")
+	b.WriteString("Run `restoregap preflight --intent <intent.yml> --ledger " + path + "` to record a local decision.\n")
+	return b.String()
+}
+
+func writeLedgerChainText(b *strings.Builder, out ledgerShowOutput) {
+	if out.State == "broken" {
+		fmt.Fprintf(b, "CHAIN: BROKEN at entry %d — %s\n", out.Chain.FailedAt, out.Chain.Reason)
+		return
+	}
+	fmt.Fprintf(b, "CHAIN: OK — %d entries\n", out.Chain.EntryCount)
+}
+
+func writeLedgerDecisionsText(b *strings.Builder, decisions []ledger.DecisionView) {
+	if len(decisions) == 0 {
+		return
+	}
+	b.WriteString("\nDECISIONS (newest first)\n")
+	for _, d := range decisions {
+		state := strings.ToUpper(d.Verdict)
+		if d.GateState == "broken" {
+			state = "GATE BROKEN"
+		}
+		fmt.Fprintf(b, "- recorded %s · %s · %s\n", d.CreatedAt.Local().Format("2006-01-02 15:04"), state, d.Actor)
+		if d.EvaluatedAt != nil {
+			fmt.Fprintf(b, "  evaluated as of: %s\n", d.EvaluatedAt.Local().Format(time.RFC3339))
+		}
+		if d.Legacy {
+			b.WriteString("  legacy decision: proposed change details were not recorded\n")
+		} else {
+			writeLedgerIntentText(b, d.Intents)
+			writeLedgerFindingsText(b, d.Findings)
+		}
+		if d.BrokenReason != "" {
+			fmt.Fprintf(b, "  why: %s\n", d.BrokenReason)
+		}
+	}
+}
+
+func writeLedgerIntentText(b *strings.Builder, intents []ledger.IntentRecord) {
+	for _, in := range intents {
+		fmt.Fprintf(b, "  proposed: %s%s%s%s\n", in.Action, formatIntentCommand(in), formatIntentPackages(in), formatIntentPaths(in)+formatIntentDescription(in))
+	}
+}
+
+func writeLedgerFindingsText(b *strings.Builder, findings []ledger.FindingRecord) {
+	for _, f := range findings {
+		fmt.Fprintf(b, "  finding: %s — %s\n", findingHeadline(f), strings.ToUpper(f.Verdict))
+		for _, line := range findingDetailLines(f) {
+			fmt.Fprintf(b, "    %s\n", line)
+		}
+	}
+}
+
+func writeLedgerDrillsText(b *strings.Builder, drills []ledger.DrillView) {
+	if len(drills) == 0 {
+		return
+	}
+	b.WriteString("\nDRILLS (newest first)\n")
+	for _, d := range drills {
+		result := "FAIL"
+		if d.Verified {
+			result = "PASS"
+		}
+		fmt.Fprintf(b, "- %s · %s · %s · %s · %s\n", d.CreatedAt.Local().Format("2006-01-02 15:04"), d.ProofID, d.Mode, result, d.Level)
+	}
+}
+
+func writeLedgerOverridesText(b *strings.Builder, overrides []ledger.OverrideView) {
+	if len(overrides) == 0 {
+		return
+	}
+	b.WriteString("\nOVERRIDES (newest first)\n")
+	for _, o := range overrides {
+		expires := "no expiry recorded"
+		if o.ExpiresAt != nil {
+			expires = o.ExpiresAt.Local().Format(time.RFC3339)
+		}
+		fmt.Fprintf(b, "- %s · %s · approved by %s · expires %s\n  why: %s\n", o.FindingID, o.EntryID, o.ApprovedBy, expires, o.Reason)
+	}
+}
+
+func formatIntentCommand(in ledger.IntentRecord) string {
+	if in.Command == "" {
+		return ""
+	}
+	return " · command: " + in.Command
+}
+
+func formatIntentPackages(in ledger.IntentRecord) string {
+	if len(in.Packages) == 0 {
+		return ""
+	}
+	return " · packages: " + strings.Join(in.Packages, ", ")
+}
+
+func formatIntentPaths(in ledger.IntentRecord) string {
+	if len(in.TargetPaths) > 0 {
+		from := strings.Join(in.Paths, ", ")
+		to := strings.Join(in.TargetPaths, ", ")
+		return " · from: " + from + " · to: " + to
+	}
+	if len(in.Paths) > 0 {
+		return " · paths: " + strings.Join(in.Paths, ", ")
+	}
+	return ""
+}
+
+func formatIntentDescription(in ledger.IntentRecord) string {
+	if in.Description == "" {
+		return ""
+	}
+	return " · " + in.Description
+}
+
+func findingHeadline(f ledger.FindingRecord) string {
+	parts := []string{}
+	if f.Actions != nil {
+		parts = append(parts, strings.Join(f.Actions, ", "))
+	}
+	if f.Resource != "" {
+		parts = append([]string{f.Resource}, parts...)
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "recovery finding")
+	}
+	return strings.Join(parts, " · ")
+}
+
+func findingDetailLines(f ledger.FindingRecord) []string {
+	parts := []string{}
+	if f.Why != "" {
+		parts = append(parts, "why: "+f.Why)
+	}
+	if f.Proof != "" {
+		parts = append(parts, "proof: "+f.Proof)
+	}
+	if f.RequiredNextStep != "" {
+		parts = append(parts, "next: "+f.RequiredNextStep)
+	}
+	if f.Override != nil {
+		parts = append(parts, "override by "+f.Override.ApprovedBy+": "+f.Override.Reason)
+	}
+	parts = append(parts, "finding id: "+f.FindingID)
+	return parts
 }
 
 // ledgerArg resolves the optional single positional ledger-path argument

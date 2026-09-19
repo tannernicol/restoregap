@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	commandrunner "github.com/tannernicol/restoregap/internal/command"
 	"github.com/tannernicol/restoregap/internal/contextspec"
 	"github.com/tannernicol/restoregap/internal/evidence"
 )
@@ -20,15 +21,20 @@ func newEvidenceCmd() *cobra.Command {
 
 	ing := evidence.IngestRequest{}
 	var expiresIn string
+	var timeout time.Duration
 	ingest := &cobra.Command{
 		Use:   "ingest",
 		Short: "Record/refresh a proof: run an optional verifier command, hash its output, update the context",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if timeout <= 0 {
+				return fmt.Errorf("evidence ingest: --timeout must be positive")
+			}
 			path, err := requireContext(cmd, ing.ContextPath, "evidence ingest")
 			if err != nil {
 				return err
 			}
 			ing.ContextPath = path
+			ing.Timeout = timeout
 
 			ledgerPath, _, err := resolveLedger(ing.LedgerPath)
 			if err != nil {
@@ -43,7 +49,7 @@ func newEvidenceCmd() *cobra.Command {
 				}
 				ing.ExpiresIn = d
 			}
-			msg, err := evidence.Ingest(ing)
+			msg, err := evidence.IngestContext(cmd.Context(), ing)
 			if err != nil {
 				return err
 			}
@@ -61,6 +67,8 @@ func newEvidenceCmd() *cobra.Command {
 	f.BoolVar(&ing.Validated, "validated", false, "record as validated (default observed)")
 	f.StringVar(&ing.LedgerPath, "ledger", "", "record the ingestion in this ledger; "+ledgerDiscoveryHelp)
 	f.StringVar(&ing.Actor, "actor", "", "recording actor")
+	f.DurationVar(&timeout, "timeout", commandrunner.DefaultTimeout,
+		"maximum runtime for the optional verifier command")
 
 	exp := evidence.ExportRequest{}
 	var outPath string

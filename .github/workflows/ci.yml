@@ -19,6 +19,7 @@ jobs:
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -race ./...
+      - run: bash docs/examples/preflight-hook.test.sh
       - run: bash scripts/tests/packaging.sh
       - uses: actions/setup-node@v4
         with:

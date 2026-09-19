@@ -78,10 +78,11 @@ func toolDefs() []toolDef {
 	common := map[string]any{
 		"context_path": str("path to restoregap.yml / restoregap.local.yml (omit to discover $RESTOREGAP_CONTEXT / " +
 			"./restoregap.local.yml / ./restoregap.yml, else the built-in default policy)"),
-		"ledger_path":    str("append-only decision ledger (JSONL); the only path tools write to"),
-		"actor":          str("acting identity (default agent/mcp)"),
-		"context_window": str("execution context, e.g. coding-agent"),
-		"as_of":          str("RFC3339 evaluation time (testing)"),
+		"ledger_path":      str("append-only decision ledger (JSONL); the only path tools write to"),
+		"actor":            str("acting identity (default agent/mcp)"),
+		"context_window":   str("execution context, e.g. coding-agent"),
+		"as_of":            str("RFC3339 evaluation time (testing)"),
+		"require_coverage": boolean("strict mode: every addressed path, target, package, and command must be covered by a matching guard"),
 	}
 	intentProps := map[string]any{"intent": str("intent YAML content, inline"), "intent_path": str("path to an intent YAML file")}
 	diffProps := map[string]any{"diff": str("unified diff content, inline"), "diff_path": str("path to a diff file")}
@@ -159,6 +160,7 @@ type toolArgs struct {
 	Actor           string `json:"actor"`
 	ContextWindow   string `json:"context_window"`
 	AsOf            string `json:"as_of"`
+	RequireCoverage bool   `json:"require_coverage"`
 	DecisionID      string `json:"decision_id"`
 	EntryID         string `json:"entry_id"`
 	Acknowledgement string `json:"acknowledgement"`
@@ -373,7 +375,7 @@ func loadDiscoverContext(paths []string) (contextspec.Context, error) {
 func preflightTool(ctx context.Context, name string, a toolArgs) (string, error) {
 	req := preflight.Request{
 		ContextPaths: contextPathsFor(a.ContextPath), LedgerPath: a.LedgerPath, Actor: a.Actor,
-		ContextWindow: a.ContextWindow, AsOf: a.AsOf, Format: "json",
+		ContextWindow: a.ContextWindow, AsOf: a.AsOf, Format: "json", RequireCoverage: a.RequireCoverage,
 	}
 	var err error
 	if name == "preflight_intent" {
