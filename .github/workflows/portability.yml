@@ -12,7 +12,9 @@ on:
     types: [completed]
 
 permissions:
-  contents: read
+  # GitHub only exposes draft release listings to callers with push access.
+  # The workflow downloads assets; it never modifies a release or repository.
+  contents: write
 
 jobs:
   portability:
@@ -61,6 +63,7 @@ jobs:
         with:
           ref: ${{ steps.release.outputs.tag }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Verify archive, binary, and isolated demo
         shell: bash
