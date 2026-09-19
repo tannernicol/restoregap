@@ -1,0 +1,320 @@
+/* Load assets/vendor/fonts.css before this stylesheet; see docs/ADOPTION.md. */
+
+/*
+ * Homelab design system — SINGLE SOURCE OF TRUTH.
+ * Aesthetic: dark, grayscale, minimal, low eye strain (2026-07-22).
+ * Color is functional-only (status/chart); the accent is a brighter neutral.
+ * Edit design HERE — every app references this one stack. Do not fork per-app;
+ * per-app identity is at most one accent token, never a divergent stylesheet.
+ *
+ * Approved reference surface: the canonical homelab UI baseline (reviewed
+ * 2026-09-07 after rejecting a redesign that desaturated a chart). Rules an
+ * agent building or touching ANY homelab UI must follow, no exceptions:
+ *   - Color is functional ONLY: green = a data series / positive delta,
+ *     amber-red = a warning (hidden entirely when it does not apply) —
+ *     everything else stays greyscale. Never add hue for decoration.
+ *   - Panels separate from the page by a 1px border, NOT a background jump.
+ *     Deliberately low page/panel contrast (~1.2:1 on the reference) is the
+ *     design, not a bug — do not "improve" it by lightening panels.
+ *   - Selection is unmistakable: filled pill + border + brighter text, never
+ *     a bare color nudge. Exactly one selected member per group.
+ *   - Numbers in mono (--ui-font-mono), labels in sans (--ui-font-sans), so
+ *     figures line up in a column.
+ *   - One headline number per card (~24px/700), then a delta, then at most
+ *     one line of derivation. Not more.
+ *   - Prose lines capped near 75ch (GOV.UK two-thirds-line-length rule).
+ *   - A tidier UI is not automatically a better one: the rejected redesign
+ *     cut distinct text styles 22 -> 10 and was STILL wrong, because it
+ *     desaturated the chart. Simplification never overrides a rule above.
+ */
+
+:root {
+  color-scheme: dark;
+  --ui-font-sans: 'Space Grotesk', 'Plus Jakarta Sans', 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+  --ui-font-mono: 'JetBrains Mono', 'IBM Plex Mono', 'SFMono-Regular', ui-monospace, monospace;
+
+  /* neutrals — cool-biased, deliberate; ground near-black (never pure), text off-white */
+  --ui-bg: #0e1013;
+  --ui-bg-accent: #121519;
+  --ui-surface: #16191d;
+  --ui-surface-2: #1c2026;
+  --ui-surface-3: #242832;
+  --ui-border: #2a2f38;
+  --ui-text: #dce0e6;
+  --ui-muted: #98a0ab;
+  /* --ui-muted-2 was #666d78, which is 3.13:1 on --ui-surface-2 and fails
+     WCAG AA for the small labels it exists for. axe found 164 contrast
+     failures in money alone from this one token (2026-08-17). #8a919c clears
+     4.5:1 against the LIGHTEST surface here (--ui-surface-3, 4.64:1) and 5.15:1
+     on --ui-surface-2, while staying firmly in the muted band — this is still
+     secondary text, just legible secondary text. */
+  --ui-muted-2: #8a919c;
+
+  /* accent = a brighter neutral. affordance via weight/underline/border, not hue */
+  --ui-accent: #b9c1cc;
+  --ui-accent-strong: #d6dce3;
+  --ui-accent-soft: #20242b;
+  --ui-highlight: #d6dce3;
+  --ui-focus: rgba(185, 193, 204, 0.35);
+
+  /* status — the only color; muted + functional, never decorative */
+  --ui-success: #7fa891;
+  --ui-warning: #c9b487;
+  --ui-danger: #cd8a8f;
+  --ui-info: #8ea6c4;
+
+  --ui-shadow: 0 24px 50px rgba(0, 0, 0, 0.55), 0 8px 18px rgba(0, 0, 0, 0.35);
+  --ui-shadow-soft: 0 12px 26px rgba(0, 0, 0, 0.4), 0 4px 10px rgba(0, 0, 0, 0.28);
+  --ui-radius: 12px;
+  --ui-border-soft: rgba(42, 47, 56, 0.6);
+  --ui-glass: rgba(18, 21, 25, 0.7);
+  --ui-glow: 0 0 0 1px rgba(185, 193, 204, 0.10);
+
+  --bg: var(--ui-bg);
+  --bg-2: var(--ui-bg-accent);
+  --card: var(--ui-surface);
+  --surface: var(--ui-surface);
+  --surface-2: var(--ui-surface-2);
+  --surface-3: var(--ui-surface-3);
+  --border: var(--ui-border);
+  --text: var(--ui-text);
+  --muted: var(--ui-muted);
+  --dim: var(--ui-muted-2);
+  --accent: var(--ui-accent);
+  --accent-strong: var(--ui-accent-strong);
+  --accent-soft: var(--ui-accent-soft);
+  --accent-warm: var(--ui-highlight);
+  --accent-violet: var(--ui-info);
+  --ok: var(--ui-success);
+  --warn: var(--ui-warning);
+  --bad: var(--ui-danger);
+  --green: var(--ui-success);
+  --yellow: var(--ui-warning);
+  --red: var(--ui-danger);
+  --blue: var(--ui-info);
+  --purple: var(--ui-info);
+  --orange: var(--ui-warning);
+  --cyan: var(--ui-info);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+html {
+  /* Always reserve the scrollbar gutter. Without this, a short view (no
+     scrollbar) renders content ~15px wider than a tall one, so every
+     navigation between views nudged the layout sideways. Reserving the space
+     unconditionally keeps width identical on every page. */
+  scrollbar-gutter: stable;
+}
+
+body {
+  margin: 0;
+  font-family: var(--ui-font-sans);
+  line-height: 1.6;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  background: linear-gradient(180deg, #121519 0%, #0e1013 60%, #0c0e11 100%);
+  color: var(--ui-text);
+}
+
+a {
+  color: var(--ui-accent-strong);
+  text-decoration: none;
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+}
+
+a:hover {
+  color: var(--ui-highlight);
+  text-decoration: underline;
+}
+
+::selection {
+  background: rgba(185, 193, 204, 0.28);
+  color: var(--ui-text);
+}
+
+input,
+select,
+textarea,
+button {
+  font-family: inherit;
+  color: inherit;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--ui-focus);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+.ui-card {
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  box-shadow: var(--ui-shadow-soft);
+}
+
+.ui-panel {
+  background: var(--ui-surface-2);
+  border: 1px solid var(--ui-border);
+  border-radius: calc(var(--ui-radius) + 2px);
+  box-shadow: var(--ui-shadow-soft);
+}
+
+.ui-glass {
+  background: var(--ui-glass);
+  border: 1px solid var(--ui-border-soft);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--ui-shadow-soft);
+}
+
+.ui-pill {
+  border-radius: 999px;
+}
+
+.ui-chip {
+  background: var(--ui-surface-2);
+  border: 1px solid var(--ui-border);
+  color: var(--ui-muted);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.ui-muted {
+  color: var(--ui-muted);
+}
+
+.ui-dim {
+  color: var(--ui-muted-2);
+}
+
+.ui-mono {
+  font-family: var(--ui-font-mono);
+}
+
+/*
+ * Signal primitives — additive, `ui-signal-*` prefixed to stay clear of
+ * existing canon classes (.ui-panel, .ui-pill, .ui-stat, ...) and of the
+ * app-local extensions some apps build on top of this file. Encode the
+ * reference-surface rules above as reusable classes; every value below is an
+ * existing token, no new hardcoded colors.
+ */
+
+/* Panel: separated from the page by border only, not a background jump.
+   --ui-bg-accent sits only ~1.04:1 from --ui-bg, mirroring the reference's
+   deliberately low page/panel contrast. */
+.ui-signal-panel {
+  background: var(--ui-bg-accent);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+}
+
+/* Stat/metric card: label -> one headline number -> delta -> at most one
+   derivation line. Compose the parts below inside a .ui-signal-stat. */
+.ui-signal-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.ui-signal-stat-label {
+  font-family: var(--ui-font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ui-muted);
+}
+
+.ui-signal-stat-value {
+  font-family: var(--ui-font-mono);
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--ui-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-signal-stat-delta {
+  font-family: var(--ui-font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ui-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Functional color only: a data series / positive delta is green, a warning
+   is amber-red and rendered only when it applies (add/remove the class). */
+.ui-signal-stat-delta.is-positive {
+  color: var(--ui-success);
+}
+
+.ui-signal-stat-delta.is-negative {
+  color: var(--ui-danger);
+}
+
+.ui-signal-stat-derivation {
+  font-family: var(--ui-font-sans);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ui-muted-2);
+  max-width: 75ch;
+}
+
+/* Selected pill: filled + bordered + brighter text — never a color nudge.
+   Apply is-selected (or aria-selected="true") to exactly one per group. */
+.ui-signal-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--ui-border);
+  background: transparent;
+  color: var(--ui-muted);
+  font-family: var(--ui-font-sans);
+  padding: 2px 10px;
+}
+
+.ui-signal-pill.is-selected,
+.ui-signal-pill[aria-selected="true"] {
+  background: var(--ui-accent-soft);
+  border-color: var(--ui-accent-strong);
+  color: var(--ui-accent-strong);
+  font-weight: 600;
+}
+
+/* Numeric cell: forces the mono face + tabular figures so a column of
+   numbers aligns, independent of the surrounding (sans) font. */
+.ui-signal-num {
+  font-family: var(--ui-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Prose container: caps line length near 75 characters (GOV.UK two-thirds
+   rule) regardless of the parent's width. */
+.ui-signal-prose {
+  max-width: 75ch;
+  font-family: var(--ui-font-sans);
+  line-height: 1.6;
+}

@@ -19,3 +19,15 @@ jobs:
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -race ./...
+      - run: bash scripts/tests/packaging.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: ui
+      - run: npm run build && npm run check
+        working-directory: ui
+      - run: node scripts/build-site.mjs --check
+      - run: git diff --exit-code -- ui/dist site/index.html ui/mark.svg

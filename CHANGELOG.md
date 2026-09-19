@@ -6,6 +6,18 @@ each such change is called out here.
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-09-18
+
+Release packaging and first-run documentation now match the local gate:
+
+- the installer validates the selected release tag and exact archive checksum
+  before extracting or installing, with both `sha256sum` and macOS `shasum`
+  paths;
+- the demo refuses symlinks and non-empty output directories, works with
+  macOS-compatible shell utilities, and has an isolated end-to-end runner;
+- README and walkthrough language describe the opt-in local gate without
+  implying universal command interception or an operating-system sandbox.
+
 ## [0.10.0] — 2026-09-18
 
 Closes the blind spot the 0.9.x line never answered: `check`/`drill`/`preflight`
@@ -112,7 +124,7 @@ First tagged release. Everything before this shipped from `main` and reported
 - `restoregap check <live> <recovery>` — zero-config drift: what exists in
   exactly one place, and what exists in both but is stale in the copy you
   would restore from. Exit 1 on drift, so it can sit in cron or CI today.
-- `restoregap drill` — prove a recovery for real, in a sandbox: `recover:`
+- `restoregap drill` — prove a recovery for real, using a temporary working area: `recover:`
   command + typed `validate:` checks (sqlite integrity/row-counts/freshness,
   git fsck/refs, file trees, key fingerprints, byte-identical, arbitrary
   command) + measured RTO/RPO against declared budgets. Proofs are

@@ -19,6 +19,7 @@
 .platform-gate
 .platform-kind
 .platform-sdk-ref
+.ui-kit.json
 
 # Decided (2026-09-17): stays private. docs/COMPLIANCE_MAP.md is go-to-market
 # pitch language that contradicts the settled positioning (a recovery GATE,

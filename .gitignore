@@ -11,3 +11,4 @@ coverage.out
 .scrub-denylist
 /restoregap-public/
 .gauntlet-steps.log
+/test-results/

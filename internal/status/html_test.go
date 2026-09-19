@@ -454,7 +454,7 @@ func TestRenderHTMLEmptySummaryRendersCompletePage(t *testing.T) {
 	}
 	html := string(out)
 	for _, want := range []string{
-		"<!doctype html>", "restoregap", "No declared drills or proofs yet.",
+		"<!doctype html>", "Restore Gap", "No declared drills or proofs yet.",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %q in empty-summary page, got:\n%s", want, html)
@@ -464,7 +464,7 @@ func TestRenderHTMLEmptySummaryRendersCompletePage(t *testing.T) {
 	// ({{if .Estate.HasAny}}) — an empty shell with a heading and no rows is
 	// worse than its absence, and "No declared drills or proofs yet." above
 	// already says the true thing.
-	if strings.Contains(html, "Recovery estate") {
+	if strings.Contains(html, "Your recovery evidence") {
 		t.Errorf("an empty estate must not render a heading, got:\n%s", html)
 	}
 	if strings.Contains(html, "<script") {
@@ -474,10 +474,10 @@ func TestRenderHTMLEmptySummaryRendersCompletePage(t *testing.T) {
 
 // ---- brand mark: header inline + favicon data URI -------------------------
 
-// markPathData is the shield's path geometry from the addendum's exact
+// markPathData is the stopwatch hand geometry from the addendum's exact
 // source (ui/mark.svg) — no quotes/angle-brackets, so it survives both the
 // raw inline copy and the percent-encoded favicon data URI unchanged.
-const markPathData = `M16 3l11 3.9v9.4c0 6.7-4.9 10.7-11 12.9-6.1-2.2-11-6.2-11-12.9V6.9z`
+const markPathData = `M16 17.5L21.2 14.5`
 
 func TestRenderHTMLIncludesBrandMarkInHeaderAndFavicon(t *testing.T) {
 	s := &Summary{Verdict: "pass"}
@@ -494,7 +494,7 @@ func TestRenderHTMLIncludesBrandMarkInHeaderAndFavicon(t *testing.T) {
 	}
 	header := html[headerStart:headerEnd]
 	if n := strings.Count(header, markPathData); n != 1 {
-		t.Errorf("expected the shield path exactly once in the header, found %d, header:\n%s", n, header)
+		t.Errorf("expected the stopwatch hand exactly once in the header, found %d, header:\n%s", n, header)
 	}
 	if !strings.Contains(header, `aria-hidden="true"`) {
 		t.Errorf("inline header mark must be aria-hidden, header:\n%s", header)
@@ -514,7 +514,7 @@ func TestRenderHTMLIncludesBrandMarkInHeaderAndFavicon(t *testing.T) {
 	// data-URI syntax either way), so compare against that form here.
 	wantPath := strings.ReplaceAll(markPathData, " ", "%20")
 	if !strings.Contains(favicon, wantPath) {
-		t.Errorf("favicon href missing the shield path, got:\n%s", favicon)
+		t.Errorf("favicon href missing the stopwatch hand, got:\n%s", favicon)
 	}
 }
 
