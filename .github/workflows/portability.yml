@@ -1,0 +1,156 @@
+name: portability
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to test (for example v0.10.1)
+        required: true
+        type: string
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  portability:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            expected_os: linux
+            expected_arch: amd64
+          - runner: ubuntu-24.04-arm
+            expected_os: linux
+            expected_arch: arm64
+          - runner: macos-15-intel
+            expected_os: darwin
+            expected_arch: amd64
+          - runner: macos-15
+            expected_os: darwin
+            expected_arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_OS: ${{ matrix.expected_os }}
+      EXPECTED_ARCH: ${{ matrix.expected_arch }}
+    steps:
+      - name: Resolve and validate release tag
+        id: release
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          WORKFLOW_TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$WORKFLOW_TAG}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid release tag: $tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+          fetch-depth: 1
+
+      - name: Verify archive, binary, and isolated demo
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          case "$(uname -s)" in
+            Linux) os=linux ;;
+            Darwin) os=darwin ;;
+            *) echo "unsupported runner OS: $(uname -s)" >&2; exit 1 ;;
+          esac
+          case "$(uname -m)" in
+            x86_64|amd64) arch=amd64 ;;
+            arm64|aarch64) arch=arm64 ;;
+            *) echo "unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          [[ "$os" = "$EXPECTED_OS" && "$arch" = "$EXPECTED_ARCH" ]] || {
+            echo "runner identity mismatch: ${os}/${arch} (expected ${EXPECTED_OS}/${EXPECTED_ARCH})" >&2
+            exit 1
+          }
+
+          command -v sqlite3 >/dev/null || {
+            echo "sqlite3 is required by the shipped demo" >&2
+            exit 1
+          }
+
+          version="${RELEASE_TAG#v}"
+          archive="restoregap_${version}_${os}_${arch}.tar.gz"
+          release_dir="$(mktemp -d "$RUNNER_TEMP/restoregap-release.XXXXXX")"
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$archive" \
+            --pattern checksums.txt \
+            --dir "$release_dir"
+          unset GH_TOKEN GITHUB_TOKEN
+          [[ -f "$release_dir/$archive" && -f "$release_dir/checksums.txt" ]] || {
+            echo "release assets missing exact archive or checksums.txt" >&2
+            exit 1
+          }
+
+          cd "$release_dir"
+          matches="$(awk -v target="$archive" '$2 == target || $2 == "*" target { print }' checksums.txt)"
+          [[ "$(printf '%s\n' "$matches" | awk 'NF { n++ } END { print n + 0 }')" = 1 ]] || {
+            echo "checksums.txt must contain exactly one entry for $archive" >&2
+            exit 1
+          }
+          if command -v sha256sum >/dev/null 2>&1; then
+            printf '%s\n' "$matches" | sha256sum -c - --quiet
+          elif command -v shasum >/dev/null 2>&1; then
+            printf '%s\n' "$matches" | shasum -a 256 -c - --quiet
+          else
+            echo "neither sha256sum nor shasum is available" >&2
+            exit 1
+          fi
+
+          tar -xzf "$archive" restoregap
+          test -x restoregap
+          version_output="$(./restoregap --version)"
+          [[ "$version_output" = "restoregap version $version" ]] || {
+            echo "binary version does not match $RELEASE_TAG: $version_output" >&2
+            exit 1
+          }
+
+          system_path="$PATH"
+          home_dir="$(mktemp -d "$RUNNER_TEMP/restoregap-home.XXXXXX")"
+          status_dir="$(mktemp -d "$RUNNER_TEMP/restoregap-status.XXXXXX")"
+          demo_dir="$(mktemp -d "$RUNNER_TEMP/restoregap-demo.XXXXXX")"
+          state_dir="$home_dir/state"
+          config_dir="$home_dir/config"
+
+          (
+            cd "$status_dir"
+            env -i \
+              HOME="$home_dir" \
+              PATH="$system_path" \
+              TMPDIR="$demo_dir" \
+              XDG_STATE_HOME="$state_dir" \
+              XDG_CONFIG_HOME="$config_dir" \
+              "$release_dir/restoregap" status
+          )
+          (
+            cd "$GITHUB_WORKSPACE"
+            env -i \
+              HOME="$home_dir" \
+              PATH="$system_path" \
+              TMPDIR="$demo_dir" \
+              RESTOREGAP_BIN="$release_dir/restoregap" \
+              XDG_STATE_HOME="$state_dir" \
+              XDG_CONFIG_HOME="$config_dir" \
+              bash demo/run.sh "$demo_dir/fixture"
+          )
