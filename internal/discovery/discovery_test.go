@@ -8,20 +8,21 @@ import (
 	"testing"
 )
 
-// TestMain gives every test in this package an isolated XDG_CONFIG_HOME for
-// the whole run. ContextPaths' final tier reads the user config directory,
-// so without this a "nothing discoverable" test on a machine with a real
-// ~/.config/restoregap (this homelab has one) would find it. RESTOREGAP_CONTEXT
+// TestMain gives every test in this package an isolated HOME for the whole
+// run. ContextPaths' final tier reads the platform-native user config
+// directory, so without this a "nothing discoverable" test on a machine with
+// a real config directory would find it. RESTOREGAP_CONTEXT
 // is cleared so no test result depends on the outer shell's environment.
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "restoregap-discovery-test-config-*")
+	home, err := os.MkdirTemp("", "restoregap-discovery-test-home-*")
 	if err != nil {
 		panic(err)
 	}
-	_ = os.Setenv("XDG_CONFIG_HOME", dir)
+	_ = os.Setenv("HOME", home)
+	_ = os.Unsetenv("XDG_CONFIG_HOME")
 	_ = os.Unsetenv("RESTOREGAP_CONTEXT")
 	code := m.Run()
-	_ = os.RemoveAll(dir)
+	_ = os.RemoveAll(home)
 	os.Exit(code)
 }
 
@@ -102,13 +103,17 @@ func writeConfigContext(t *testing.T, cfgHome, name, body string) string {
 	return path
 }
 
-// newConfigHome returns an empty config-directory root the test can populate
-// and points XDG_CONFIG_HOME at it, so no test ever reads the real
-// ~/.config/restoregap.
+// newConfigHome returns an empty platform-native user config root the test
+// can populate. It follows os.UserConfigDir, the same runtime contract used
+// by discovery, so the fixture works on macOS as well as Unix.
 func newConfigHome(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatalf("UserConfigDir: %v", err)
+	}
 	return dir
 }
 

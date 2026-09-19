@@ -46,10 +46,7 @@ func genGPGKeypair(t *testing.T, dir, name string) string {
 	if _, err := exec.LookPath("gpg"); err != nil {
 		t.Skip("gpg not found on PATH")
 	}
-	genHome := t.TempDir()
-	if err := os.Chmod(genHome, 0o700); err != nil {
-		t.Fatalf("chmod genHome: %v", err)
-	}
+	genHome := newGPGFixtureHome(t)
 	batch := filepath.Join(dir, name+".batch")
 	email := name + "@example.invalid"
 	script := "%no-protection\n" +
@@ -77,7 +74,7 @@ func genGPGKeypair(t *testing.T, dir, name string) string {
 		t.Fatalf("write export: %v", err)
 	}
 
-	showEnv := append(os.Environ(), "GNUPGHOME="+t.TempDir())
+	showEnv := append(os.Environ(), "GNUPGHOME="+newGPGFixtureHome(t))
 	show := exec.Command("gpg", "--show-keys", "--with-colons", exportPath)
 	show.Env = showEnv
 	fp, err := show.Output()
@@ -92,6 +89,30 @@ func genGPGKeypair(t *testing.T, dir, name string) string {
 	}
 	t.Fatalf("no fpr: record in gpg --show-keys output: %s", fp)
 	return ""
+}
+
+// newGPGFixtureHome gives gpg-agent a short, unique homedir. macOS limits
+// Unix-domain socket paths; t.TempDir includes the full test name and can
+// make gpg-agent's socket path too long before key generation starts.
+func newGPGFixtureHome(t *testing.T) string {
+	t.Helper()
+	home, err := os.MkdirTemp("", "rg-gpg-")
+	if err != nil {
+		t.Fatalf("create gpg fixture homedir: %v", err)
+	}
+	if err := os.Chmod(home, 0o700); err != nil {
+		_ = os.RemoveAll(home)
+		t.Fatalf("chmod gpg fixture homedir: %v", err)
+	}
+	t.Cleanup(func() {
+		if gpgconf, err := exec.LookPath("gpgconf"); err == nil {
+			kill := exec.Command(gpgconf, "--homedir", home, "--kill", "gpg-agent")
+			kill.Env = append(os.Environ(), "GNUPGHOME="+home)
+			_ = kill.Run()
+		}
+		_ = os.RemoveAll(home)
+	})
+	return home
 }
 
 // ---- collectors -----------------------------------------------------------

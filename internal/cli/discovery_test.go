@@ -16,13 +16,15 @@ import (
 	"github.com/tannernicol/restoregap/internal/ledger"
 )
 
-// TestMain gives every test in this package an isolated XDG_STATE_HOME and
-// XDG_CONFIG_HOME for the whole run. Several commands now default --ledger
+// TestMain gives every test in this package an isolated HOME and
+// XDG_STATE_HOME for the whole run. The discovery runtime uses os.UserConfigDir
+// (which is HOME/Library/Application Support on macOS), so tests must isolate
+// HOME rather than assuming XDG_CONFIG_HOME controls every platform. Several commands now default --ledger
 // to $XDG_STATE_HOME/restoregap/ledger.jsonl when the flag is omitted, and a
 // good number of existing tests exercise those commands without passing
 // --ledger — without this they would create ~/.local/state/restoregap on
 // whatever machine runs `go test`. Context discovery likewise reads
-// $XDG_CONFIG_HOME/restoregap/*.yml as its final tier, so its zero-config
+// the platform user config directory as its final tier, so its zero-config
 // fallback tests would load a real machine's context files without an
 // isolated empty config home. RESTOREGAP_LEDGER/RESTOREGAP_CONTEXT are
 // cleared so no test result depends on the outer shell's environment.
@@ -31,17 +33,18 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	configDir, err := os.MkdirTemp("", "restoregap-cli-test-config-*")
+	homeDir, err := os.MkdirTemp("", "restoregap-cli-test-home-*")
 	if err != nil {
 		panic(err)
 	}
+	_ = os.Setenv("HOME", homeDir)
 	_ = os.Setenv("XDG_STATE_HOME", stateDir)
-	_ = os.Setenv("XDG_CONFIG_HOME", configDir)
+	_ = os.Unsetenv("XDG_CONFIG_HOME")
 	_ = os.Unsetenv("RESTOREGAP_LEDGER")
 	_ = os.Unsetenv("RESTOREGAP_CONTEXT")
 	code := m.Run()
 	_ = os.RemoveAll(stateDir)
-	_ = os.RemoveAll(configDir)
+	_ = os.RemoveAll(homeDir)
 	os.Exit(code)
 }
 
@@ -194,13 +197,19 @@ func TestDiscoverContextPathsFallsBackToSingleLocalFile(t *testing.T) {
 
 // ---- config-directory tier -------------------------------------------------
 
-// newConfigHome points XDG_CONFIG_HOME at a fresh temp dir and returns it,
-// so config-dir tests never read the real ~/.config/restoregap. Files are
-// written under <cfg>/restoregap/ exactly as the tier expects.
+// newConfigHome points a fresh HOME at an empty platform-native user config
+// root and returns it. os.UserConfigDir is the runtime contract: on macOS
+// this is $HOME/Library/Application Support, while on Unix it is typically
+// $HOME/.config (unless the platform honors an explicit XDG override). Files
+// are written under <cfg>/restoregap/ exactly as the tier expects.
 func newConfigHome(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatalf("UserConfigDir: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Join(dir, "restoregap"), 0o755); err != nil {
 		t.Fatal(err)
 	}
