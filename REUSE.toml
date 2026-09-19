@@ -18,6 +18,10 @@ path = [
   ".platform-kind",
   ".platform-module-exempt",
   ".platform-sdk-ref",
+  ".ui-kit.json",
+  "VERSION",
+  "ui/vendor/**",
+  "tests/ui/*.json",
 ]
 SPDX-FileCopyrightText = "2026 Tanner Nicol"
 SPDX-License-Identifier = "MIT"

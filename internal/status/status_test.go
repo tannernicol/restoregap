@@ -270,7 +270,7 @@ func TestRenderHTMLIncludesInventorySection(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	html := string(out)
-	if !strings.Contains(html, "Recovery estate") {
+	if !strings.Contains(html, "Your recovery evidence") {
 		t.Errorf("missing estate section in HTML output")
 	}
 	if !strings.Contains(html, "money-db-recovery") || !strings.Contains(html, "serves") {

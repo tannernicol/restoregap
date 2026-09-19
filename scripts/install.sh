@@ -29,6 +29,10 @@ else
   tag=$(curl -sSfL "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
   [ -n "$tag" ] || { echo "install.sh: could not determine the latest release" >&2; exit 1; }
 fi
+if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+  echo "install.sh: invalid release tag: $tag (expected vMAJOR.MINOR.PATCH)" >&2
+  exit 1
+fi
 ver=${tag#v}
 archive="restoregap_${ver}_${os}_${arch}.tar.gz"
 base="https://github.com/$REPO/releases/download/$tag"
@@ -43,9 +47,23 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 cd "$tmp"
 curl -sSfLO "$base/$archive"
 curl -sSfLO "$base/checksums.txt"
-if command -v sha256sum >/dev/null; then sha256sum -c checksums.txt --ignore-missing --quiet
-else shasum -a 256 -c checksums.txt --ignore-missing --quiet; fi
+matches=$(awk -v target="$archive" '$2 == target || $2 == "*" target { print }' checksums.txt)
+[ "$(printf '%s\n' "$matches" | awk 'NF { n++ } END { print n + 0 }')" = 1 ] || {
+  echo "install.sh: checksums.txt has no unique entry for $archive" >&2
+  exit 1
+}
+if command -v sha256sum >/dev/null; then
+  printf '%s\n' "$matches" | sha256sum -c - --quiet
+elif command -v shasum >/dev/null; then
+  printf '%s\n' "$matches" | shasum -a 256 -c - --quiet
+else
+  echo "install.sh: need sha256sum or shasum to verify $archive" >&2
+  exit 1
+fi
 tar -xzf "$archive" restoregap
 install -m 0755 restoregap "$bindir/restoregap"
 echo "installed $("$bindir/restoregap" --version) to $bindir/restoregap"
-case ":$PATH:" in *":$bindir:"*) ;; *) echo "note: $bindir is not on your PATH" ;; esac
+case ":$PATH:" in
+  *":$bindir:"*) ;;
+  *) echo "note: $bindir is not on your PATH; add it with: export PATH=\"$bindir:\$PATH\"" ;;
+esac

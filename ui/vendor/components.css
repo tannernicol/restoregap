@@ -1,0 +1,58 @@
+/* Opt-in components. Existing apps keep their approved layout until adoption. */
+:root {
+  --ui-space-1: 0.25rem;
+  --ui-space-2: 0.5rem;
+  --ui-space-3: 0.75rem;
+  --ui-space-4: 1rem;
+  --ui-space-6: 1.5rem;
+  --ui-space-8: 2rem;
+  --ui-control-height: 2.75rem;
+  --ui-type-small: 0.75rem;
+  --ui-type-body: 0.875rem;
+  --ui-type-value: 1.5rem;
+}
+.ui-kit-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ui-space-2);
+  min-height: var(--ui-control-height);
+  min-width: var(--ui-control-height);
+  padding: var(--ui-space-2) var(--ui-space-4);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font-size: var(--ui-type-body);
+  font-weight: 600;
+  cursor: pointer;
+}
+.ui-kit-button[aria-selected="true"],
+.ui-kit-button[aria-pressed="true"],
+.ui-kit-button.is-primary {
+  background: var(--ui-accent-soft);
+  border-color: var(--ui-accent-strong);
+  color: var(--ui-accent-strong);
+}
+.ui-kit-button:disabled { opacity: 0.55; cursor: default; }
+.ui-kit-field { display: grid; gap: var(--ui-space-2); }
+.ui-kit-field input, .ui-kit-field select, .ui-kit-field textarea {
+  width: 100%; min-width: 0; min-height: var(--ui-control-height);
+  padding: var(--ui-space-3); background: var(--ui-bg);
+  border: 1px solid var(--ui-border); border-radius: var(--ui-radius); font-size: 1rem;
+}
+.ui-kit-field [aria-invalid="true"] { border-color: var(--ui-danger); }
+.ui-kit-error { color: var(--ui-danger); font-size: var(--ui-type-body); }
+.ui-kit-alert { border: 1px solid var(--ui-warning); border-radius: var(--ui-radius); padding: var(--ui-space-4); color: var(--ui-warning); }
+.ui-kit-empty { padding: var(--ui-space-8); text-align: center; }
+.ui-kit-empty p { color: var(--ui-muted); margin: var(--ui-space-2) 0 var(--ui-space-4); }
+.ui-kit-table { border-collapse: collapse; width: 100%; font-size: var(--ui-type-body); }
+.ui-kit-table th { color: var(--ui-muted); font-weight: 500; text-align: left; }
+.ui-kit-table th, .ui-kit-table td { padding: var(--ui-space-3) 0; border-bottom: 1px solid var(--ui-border); }
+.ui-kit-table .ui-signal-num { text-align: right; }
+.ui-kit-table td { overflow-wrap: anywhere; }
+.ui-kit-tabs { display: flex; flex-wrap: wrap; gap: var(--ui-space-2); }
+.ui-kit-tabs .ui-kit-button { border-radius: 999px; }
+.ui-kit-skip { position: absolute; left: -10000px; }
+.ui-kit-skip:focus { position: static; display: block; padding: var(--ui-space-4); }
+[hidden] { display: none !important; }

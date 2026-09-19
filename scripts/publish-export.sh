@@ -60,7 +60,7 @@ done < <(git ls-files)
 
 git -C "$OUT" init -q
 git -C "$OUT" add -A
-git -C "$OUT" -c commit.gpgsign=false commit -q -m "Initial public release"
+git -C "$OUT" -c commit.gpgsign=false commit -q -m "chore(export): prepare clean release tree"
 
 echo "exported $(git -C "$OUT" ls-files | wc -l) files to $OUT (1 commit, no history)"
 echo

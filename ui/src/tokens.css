@@ -1,3 +1,6 @@
+@import "../vendor/homelab-ui.css";
+@import "../vendor/components.css";
+
 /* SPDX-License-Identifier: MIT */
 /* SPDX-FileCopyrightText: 2026 Tanner Nicol */
 
@@ -9,8 +12,8 @@
 
 :root {
   /* type */
-  --rg-font: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --rg-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  --rg-font: var(--ui-font-sans);
+  --rg-mono: var(--ui-font-mono);
   --rg-text-xs: 0.75rem;
   --rg-text-sm: 0.8125rem;
   --rg-text-md: 0.9375rem;
@@ -29,38 +32,38 @@
   --rg-radius-sm: 5px;
 
   /* dark theme (default) */
-  --rg-bg: #0d1117;
-  --rg-surface: #141a23;
-  --rg-surface-2: #1b2330;
-  --rg-border: #2a3547;
-  --rg-border-strong: #3d4b63;
-  --rg-text: #e6ebf2;
-  --rg-text-muted: #9aa7b8;
-  --rg-text-faint: #6b7789;
-  --rg-accent: #58a6ff;
-  --rg-accent-contrast: #0d1117;
-  --rg-focus: #58a6ff;
+  --rg-bg: var(--ui-bg);
+  --rg-surface: var(--ui-surface);
+  --rg-surface-2: var(--ui-surface-2);
+  --rg-border: var(--ui-border);
+  --rg-border-strong: var(--ui-muted);
+  --rg-text: var(--ui-text);
+  --rg-text-muted: var(--ui-muted);
+  --rg-text-faint: var(--ui-muted-2);
+  --rg-accent: var(--ui-accent);
+  --rg-accent-contrast: var(--ui-bg);
+  --rg-focus: var(--ui-accent);
 
   /* verdicts */
-  --rg-block: #f85149;
-  --rg-block-bg: #3d1a1c;
-  --rg-warn: #e3b341;
-  --rg-warn-bg: #3a2d10;
-  --rg-pass: #3fb950;
-  --rg-pass-bg: #12321b;
+  --rg-block: var(--ui-danger);
+  --rg-block-bg: var(--ui-surface-2);
+  --rg-warn: var(--ui-warning);
+  --rg-warn-bg: var(--ui-surface-2);
+  --rg-pass: var(--ui-success);
+  --rg-pass-bg: var(--ui-surface-2);
 
   /* severity */
-  --rg-critical: #f85149;
-  --rg-high: #f0883e;
-  --rg-medium: #e3b341;
-  --rg-low: #58a6ff;
-  --rg-info: #8b949e;
+  --rg-critical: var(--ui-danger);
+  --rg-high: var(--ui-warning);
+  --rg-medium: var(--ui-warning);
+  --rg-low: var(--ui-accent);
+  --rg-info: var(--ui-muted);
 
   /* proof status pills (vendor-limits style) */
-  --rg-pill-none: #6b7789;
-  --rg-pill-partial: #e3b341;
-  --rg-pill-cited: #3fb950;
-  --rg-pill-inferred: #8957e5;
+  --rg-pill-none: var(--ui-muted-2);
+  --rg-pill-partial: var(--ui-warning);
+  --rg-pill-cited: var(--ui-success);
+  --rg-pill-inferred: var(--ui-muted);
 
   color-scheme: dark;
 }

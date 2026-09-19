@@ -1,1 +1,0 @@
-internal/drill/keys_test.go	gpg is exercised only inside an isolated GNUPGHOME under t.TempDir() (skips when gpg is absent); the key-fingerprint drill check must be proven against the real binary, not a stub

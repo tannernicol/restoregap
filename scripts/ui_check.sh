@@ -36,6 +36,7 @@ EX_CANNOT_RUN=75
 
 # --- 1. structural checks (always) ------------------------------------------
 fails=0
+node scripts/build-site.mjs --check
 if grep -q '<script' site/index.html; then
     echo "FAIL structural: site/index.html contains a <script> tag — the page is promised JS-free"
     fails=$((fails + 1))
@@ -88,6 +89,8 @@ fi
 
 TMP_DIR=$(mktemp -d -t rg-uicheck-XXXXXX)
 cp -r site/. "$TMP_DIR/"
+go run ./scripts/status-fixture > "$TMP_DIR/status.html"
+go run ./scripts/status-fixture empty > "$TMP_DIR/empty.html"
 SERVE_ADDR="$bridge:$port"
 python3 -m http.server --bind "$bridge" "$port" --directory "$TMP_DIR" >"$TMP_DIR/serve.log" 2>&1 &
 SERVE_PID=$!
@@ -96,7 +99,6 @@ cleanup() {
     # Kill the server by its own argv (bind address + port), which is unique
     # to this run, then the PID — a `python3 -m http.server` child survives
     # a bare parent kill and keeps holding the port.
-    pkill -f -- "--bind $bridge $port" 2>/dev/null || true
     kill "$SERVE_PID" 2>/dev/null || true
     wait "$SERVE_PID" 2>/dev/null || true
     rm -rf "$TMP_DIR"
@@ -120,13 +122,13 @@ rc_overall=0
 saw_run=0
 for viewport in 320x568 390x844 430x932; do
     echo "--- mobile gate: $viewport ---"
+    rc=0
     python3 "$CHECKER" \
         --url "http://$SERVE_ADDR/" \
         --views '.site-nav a[href^="#"]' \
         --screenshot-dir "/tmp/rg-site-shots/$viewport" \
         --viewport "$viewport" \
-        --allow-scroll-x 'pre'
-    rc=$?
+        --allow-scroll-x 'pre' --fail-on-console || rc=$?
     if [ "$rc" -eq "$EX_CANNOT_RUN" ]; then
         echo "SKIP mobile ($viewport): checker could not run here (no browser endpoint?)"
     elif [ "$rc" -ne 0 ]; then
@@ -134,6 +136,10 @@ for viewport in 320x568 390x844 430x932; do
     else
         saw_run=1
     fi
+    python3 "$CHECKER" --url "http://$SERVE_ADDR/status.html" \
+        --views '.rgs-viewswitch label' \
+        --screenshot-dir "/tmp/rg-status-shots/$viewport" \
+        --viewport "$viewport" --fail-on-console || rc_overall=1
 done
 
 if [ "$rc_overall" -ne 0 ]; then
@@ -143,4 +149,9 @@ if [ "$saw_run" -ne 1 ]; then
     exit "$EX_CANNOT_RUN"
 fi
 echo "ui_check: all mobile widths green"
+export HOMELAB_UI_ROOT="${HOMELAB_UI_ROOT:-$HOME/homelab-ui}"
+export UI_KIT_RESULTS_DIR="${UI_KIT_RESULTS_DIR:-$PWD/test-results/release-ui}"
+export RESTOREGAP_UI_URL="http://$SERVE_ADDR"
+mkdir -p "$UI_KIT_RESULTS_DIR"
+"$HOMELAB_UI_ROOT/node_modules/.bin/playwright" test --config tests/ui/playwright.config.cjs
 exit 0

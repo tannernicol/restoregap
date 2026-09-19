@@ -1,150 +1,126 @@
 # Restore Gap
 
-**Everyone tests the alarm. Nobody runs the drill.**
-
-You know the drill.
-
-*Prove your recovery works — then refuse the risky change until it does.*
+**Prove your recovery works. Then make the change.**
 
 [![ci](https://github.com/tannernicol/restoregap/actions/workflows/ci.yml/badge.svg)](https://github.com/tannernicol/restoregap/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/tannernicol/restoregap?include_prereleases&label=release)](https://github.com/tannernicol/restoregap/releases)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![go](https://img.shields.io/github/go-mod/go-version/tannernicol/restoregap)](go.mod)
 
-![restoregap: check finds the stale copy, drill proves the restore, preflight refuses the change until it does](demo/demo.gif)
+Your backup job says **success**. Can you
+recover the thing it protects, and is that proof still fresh when a risky local
+change is about to happen?
 
-> Your nightly backup job says **success**. That was the alarm test — nobody left the building.
-> Restore Gap runs the drill: it restores the backup for real, in a sandbox, with a stopwatch, and writes down the result.
-> Your coding agent goes to `rm app.db`. **BLOCK** — no proof. Under a second later: restored, 95 users, under budget. **PASS.**
-> Thirty days later that proof expires and it's **BLOCK** again — on a clock, whether you feel like it or not. Look alive.
+Restore Gap is a local, MIT-licensed CLI. It records recovery proofs, evaluates
+declared changes against those proofs, and keeps an append-only ledger. It does
+not intercept every command, provide an operating-system sandbox, or replace
+your agent's permissions and deny rules. The gate applies where you explicitly
+wire it: a hook, a CI check, or the MCP server.
 
-One static binary, MIT, no account, no phone-home. Built for people who run their
-own machines and let scripts or agents change them.
+Demo recording: [watch the terminal recording](demo/demo.gif).
 
 ## Quick start
 
+Install the v0.10.1 release, then run the isolated demo fixture. The demo needs
+`sqlite3` because its fixture is a real SQLite database.
+
 ```console
-$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.10.0/scripts/install.sh && sh install.sh   # pinned tag; verifies checksums
-
-# Try it on the bundled fixture: a project, a "backup" that quietly went stale, an agent about to delete the db
-$ demo/setup.sh /tmp/rg-demo && cd /tmp/rg-demo
-$ export RESTOREGAP_LEDGER=$PWD/ledger.jsonl    # a recovery tool must not pollute your real ledger with demo entries
-
-# The proof — a real restore in a sandbox, which diff can't give you:
-$ restoregap drill propose proj/app.db --source backup/app.db > restoregap.local.yml
-$ restoregap preflight --intent rm-app-db.yml   # BLOCK — proof "app-db-recovery" missing        (exit 1)
-$ restoregap drill                              # ✓ app-db-recovery — restored in 0.0s — data-valid (L3): integrity ok; users=95 (>= 90% of live 100 = 90)
-$ restoregap preflight --intent rm-app-db.yml   # PASS — and BLOCK again the day that proof expires (exit 0)
-
-# The zero-config front door — what exists in exactly one place (copy/rsync-style backups):
-$ restoregap check proj backup/proj          # zero config, exit 1 on drift — a project and its stale "backup"
-tree: 3 live / 2 recovery — 1 MISSING FROM RECOVERY, 2 STALE IN RECOVERY
-  these exist in exactly one place:
-    .env
-  these exist in both but the recovery copy is out of date:
-    app.conf
-    app.db
-next: turn this into a proof — restoregap drill propose proj
+$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.10.1/scripts/install.sh
+$ less install.sh
+$ RESTOREGAP_VERSION=v0.10.1 sh install.sh
+$ export PATH="$HOME/.local/bin:$PATH"   # use /usr/local/bin when installing as root
+$ git clone --depth 1 --branch v0.10.1 https://github.com/tannernicol/restoregap.git
+$ cd restoregap
+$ demo/run.sh
 ```
 
-`check` compares directory trees today (and a secret-store shape). If your
-recovery copy is a restic, borg, or ZFS target, it can't see inside it yet —
-say which one you use on [the comparators issue](https://github.com/tannernicol/restoregap/issues/2)
-and it gets built in order of votes.
+`demo/run.sh` creates a fresh temporary fixture, points `RESTOREGAP_CONTEXT`,
+`RESTOREGAP_LEDGER`, and `XDG_STATE_HOME` into it, then runs the real flow:
+drift check, missing-proof block, drill, fresh-proof pass, expiry block, and
+ledger verification. Pass a fresh empty directory to keep the fixture for
+inspection: `demo/run.sh /tmp/restoregap-demo`.
 
-Every line above is real output from the fixture in `demo/setup.sh`. Full
-transcript, the intent file, and the ledger: **[docs/walkthrough.md](docs/walkthrough.md)**.
+The installer supports Linux and macOS on amd64 and arm64. It verifies the
+selected archive against the matching entry in `checksums.txt` before it
+extracts or installs anything. As a normal user it installs to
+`~/.local/bin`; as root it installs to `/usr/local/bin`. It never asks for
+sudo. The release also includes SBOM documents and reproducible build settings.
+
+Or choose an archive from the [releases page](https://github.com/tannernicol/restoregap/releases),
+or build from source with `go install github.com/tannernicol/restoregap/cmd/restoregap@latest`
+(Go 1.25+).
+
+## The local gate
+
+The smallest useful loop is:
+
+| Rung | Command | What it establishes |
+|---|---|---|
+| Drift | `restoregap check <live> <recovery>` | Which entries exist in exactly one place or differ today. |
+| Proof | `restoregap drill` | Whether a declared recovery source can reconstruct the artifact and pass its checks. |
+| Gate | `restoregap preflight` | Whether a declared intent, diff, or Terraform plan has a fresh proof for the guards it touches. |
+
+`drill propose` measures a live artifact and writes a draft context. You review
+that context, then run the drill. A proof expires; an expired proof does not
+clear a guard. The ledger records decisions, drill results, and owner
+overrides. Verify it with `restoregap ledger verify`.
+
+The built-in policy covers SSH keys and recovery bundles even without a custom
+context. For an agent integration, `restoregap mcp serve` exposes the same
+preflight decision surface. The example hook in
+[docs/examples/preflight-hook.sh](docs/examples/preflight-hook.sh) shows how a
+narrow set of destructive command shapes can be translated into intents; it is
+an example integration, not universal command interception.
 
 ## Five words
 
-- **proof** — a recorded, expiring result of a real restore (byte-identical or typed checks) with its RTO/RPO.
-- **drill** — the sandboxed restore that produces a proof; `drill propose` writes one from a live artifact.
+- **proof** — a recorded, expiring result of a real restore with its checks and recovery timing.
+- **drill** — the declared recovery run that produces a proof.
 - **guard** — a rule naming what must be proven before a matching change is allowed.
-- **change / intent** — the thing about to happen: an intent file, a diff, or a Terraform plan; agents send it over MCP.
-- **ledger** — the append-only, hash-chained record of every verdict, proof, and override.
+- **intent** — the change under evaluation: an intent file, diff, or Terraform plan.
+- **ledger** — the append-only, hash-chained record of verdicts and overrides.
 
-## What it does
+## What it does not claim
 
-| Rung | Command | Claim it lets you make |
-|---|---|---|
-| Drift | `restoregap check <live> <recovery>` | "these entries exist in exactly one place" — zero config, exit 1 on drift, `--exclude` (or `.restoregapignore` in `<live>`) drops known-noisy globs before comparing |
-| Proof | `restoregap drill` (+ `drill propose`) | "this restored, byte-identically or by typed checks, inside its RTO/RPO budget" |
-| Gate | `restoregap preflight` (intent / diff / Terraform plan) | "this change is refused until that proof exists and is fresh" |
+Restore Gap checks the recovery process you declare. It does not inspect inside
+every backup product, make an undeclared recovery path safe, provide an OS-level
+sandbox, or turn an agent into a generally safe operator. Your backup tooling,
+host isolation, permissions, and agent controls remain responsible for those
+parts. For restic, borg, or ZFS targets, see the
+[comparators issue](https://github.com/tannernicol/restoregap/issues/2).
 
-With no config at all, SSH keys and recovery bundles are already guarded.
-Why this is a tool and not a 40-line script: [docs/why-not-a-script.md](docs/why-not-a-script.md).
-Agents get the same gates over MCP: `restoregap mcp serve` — see
-[docs/agent-gate.md](docs/agent-gate.md). Restore Gap is the reason to
-allow a guarded change; your agent's deny rules or sandbox are the general
-net — see the shape table in
-[docs/examples/preflight-hook.sh](docs/examples/preflight-hook.sh).
+## A possible hosted layer
 
-## Install
-
-Linux and macOS, amd64 and arm64, one static binary. The installer (pinned to
-a tag, so what you read is what runs) downloads the latest release, verifies
-it against the release's `checksums.txt`, and puts it in `~/.local/bin` —
-never sudo, never `curl | sh`:
-
-```console
-$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.10.0/scripts/install.sh
-$ less install.sh && sh install.sh
-```
-
-Or pick an archive from the [releases page](https://github.com/tannernicol/restoregap/releases)
-yourself, or build from source: `go install github.com/tannernicol/restoregap/cmd/restoregap@latest`
-(Go 1.25+). Windows is one line in `.goreleaser.yml` once someone who runs it
-there asks.
-
-Every release ships a `checksums.txt` next to the archives — verify before you
-run anything: `sha256sum -c checksums.txt --ignore-missing`. Each archive also
-carries SBOMs (`*.spdx.json`, `*.cdx.json`), and the build is reproducible
-(`-trimpath`, pinned module timestamps), so a rebuild of the same tag matches
-its checksum.
-
-## For agents (Claude Code, Codex, …)
-
-Agents are the riskiest operators of your recovery surface. `restoregap mcp
---print-config` gives you the MCP server; every destructive intent then gets
-preflighted against your declared lifelines — fail-closed, ledgered,
-override-only-by-owner.
-
-## Free forever, and what a paid layer would be
-
-The binary is MIT and complete: every rung above — drift, proof, gate, ledger,
-MCP — runs locally, offline, with no account, and always will. Nothing is
-withheld to sell later.
-
-What a single binary structurally cannot give you is *time* and *breadth*:
-drift over months, proofs across all your machines in one view, and a
-recovery proof a third party can verify without shelling into your box. If the
-free tool earns its keep, that hosted layer is the thing to pay for. It does
-not exist yet and will not be started on speculation — if you would pay for
-it, say so on [the interest-check issue](https://github.com/tannernicol/restoregap/issues/1)
-and say what "all your machines" means for you (2? 20?). That number decides
-whether it gets built.
-
-Already running it on more than one host? `bundle export` + `bundle merge` gets you
-that fleet view today, free — see [docs/ENTERPRISE.md](docs/ENTERPRISE.md).
+The binary is complete and stays free, local, offline, and MIT licensed. A
+future hosted service is only a proposal: optional evidence retention and
+custody, expected-proof monitoring over time, and private links for sharing a
+recovery record. It does not exist yet, and no hosted feature is required to
+use the CLI. If that would help, describe the workflow on the
+[interest-check issue](https://github.com/tannernicol/restoregap/issues/1).
 
 ## FAQ
 
-**I already have restic / borg / ZFS snapshots.**
-Good — that's the alarm. When did you last restore from one, and how long did
-it take? `restoregap drill` answers that on a schedule and writes it down —
-say which one you use on [the comparators issue](https://github.com/tannernicol/restoregap/issues/2).
+**I already have restic, borg, or ZFS snapshots.**
+
+Good. Restore Gap sits beside scheduled verification and custom recovery
+scripts as a local evidence and gate layer. `restoregap drill` records whether
+the declared path worked and how long it took, then the guard ties that fresh
+evidence to the local change it protects.
 
 **My agent already has deny rules.**
-Deny rules are the net. Restore Gap is the reason you can say yes: the change
-is allowed because the way back is proven and fresh.
+
+Deny rules remain useful. Restore Gap adds a proof-based decision for the
+specific guarded change you wire into it.
 
 **Isn't this just `diff`?**
-`diff` proves two files match today. A drill proves you can come back
-tomorrow, and how long it takes.
+
+`diff` compares files. A drill performs the declared restore and records which
+checks passed at that time. It cannot guarantee a future restore will succeed.
 
 **Does it phone home?**
-No account, no telemetry, no network calls except the ones your restore
-needs. It doesn't have a home.
+
+No account or telemetry is required. The CLI runs locally and makes network
+calls only when your declared recovery command makes them.
 
 ## Docs
 
@@ -152,6 +128,5 @@ needs. It doesn't have a home.
 [Authoring drills](docs/drill-authoring.md) · [Discover](docs/DISCOVER.md) ·
 [Agent gate](docs/agent-gate.md) · [GitHub Action](docs/github-action.md) ·
 [Schema](docs/SCHEMA.md) · [The recovery story](docs/recovery-story.md) ·
-[Enterprise](docs/ENTERPRISE.md) · [Architecture](docs/ARCHITECTURE.md) ·
-[Contributing](CONTRIBUTING.md) ·
+[Architecture](docs/ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) ·
 [Security](SECURITY.md) · [Changelog](CHANGELOG.md) · MIT.

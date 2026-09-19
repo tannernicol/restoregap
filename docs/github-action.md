@@ -13,7 +13,7 @@ findings, same as running `preflight --diff` locally.
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: tannernicol/restoregap@v0.9.1
+- uses: tannernicol/restoregap@v0.10.1
   with:
     diff-base: origin/${{ github.base_ref }}
 ```
@@ -27,3 +27,7 @@ built-in zero-config guards (SSH keys, recovery bundles) apply.
 Inputs: `version` (release tag, default `latest`), `context` (optional path
 list), `diff-base` (default `origin/${{ github.base_ref }}`), `fail-on`
 (`block` or `warn`, default `block`).
+
+This action evaluates the pull request diff against the guards you declare. It
+does not intercept other commands, provide an operating-system sandbox, or
+replace the repository's own permissions and CI controls.

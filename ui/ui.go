@@ -28,12 +28,8 @@ var GraphJS string
 // theme. Mirrors THEME_BOOT_SNIPPET in src/index.ts.
 const ThemeBoot = `(function(){try{var t=localStorage.getItem("rg-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}})()`
 
-// Mark is the restoregap brand mark: a 32x32 stroke-drawn shield with a
-// broken line across it (the "gap"). Its stroke is a fixed brand teal
-// (#7fa891) baked into the source rather than currentColor or a CSS
-// variable, so it renders identically in light and dark pages. It is
-// decorative wherever wordmark text sits beside it — inline copies should
-// carry aria-hidden="true".
+// Mark is the approved stopwatch, embedded so evidence needs no network.
+// scripts/build-site.mjs derives it from site/assets/logo.svg.
 //
 //go:embed mark.svg
 var Mark string
