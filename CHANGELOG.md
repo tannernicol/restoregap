@@ -6,6 +6,14 @@ each such change is called out here.
 
 ## [Unreleased]
 
+## [0.11.2] — 2026-09-19
+
+- The README opens with a compact SQLite decision-and-ledger example, and the
+  landing page names that concrete workflow before explaining the architecture.
+- The example agent hook refuses unrecognized operations when strict coverage
+  is enabled. Default passthrough behavior stays compatible. This is a narrow
+  hook, not a general shell parser or an operating-system security boundary.
+
 ## [0.11.1] — 2026-09-19
 
 Native macOS release verification exposed Linux assumptions in test fixtures.

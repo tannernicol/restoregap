@@ -59,6 +59,15 @@ check_event() {
     fail=$((fail + 1)); printf 'FAIL  exit=%d (want %d)  %s\n' "$got" "$want" "$label"
   fi
 }
+check_strict_event() {
+  local want="$1" event="$2" label="$3" got=0 err
+  err="$(cd "$fixture" && printf '%s' "$event" | RESTOREGAP_REQUIRE_COVERAGE=1 bash "$repo/docs/examples/preflight-hook.sh" 2>&1 >/dev/null)" || got=$?
+  if [ "$got" -eq "$want" ] && [[ "$err" == *"not evaluated: unrecognized operation"* ]]; then
+    pass=$((pass + 1)); printf 'ok    exit=%d  %s\n' "$got" "$label"
+  else
+    fail=$((fail + 1)); printf 'FAIL  exit=%d (want %d, stderr=%s)  %s\n' "$got" "$want" "$err" "$label"
+  fi
+}
 check_event 2 '{"tool_name":"Edit","tool_input":{"file_path":"proj/app.db"}}' 'file edit is evaluated'
 check_event 2 '{not-json' 'malformed event blocks'
 cat > "$fixture/glob.yml" <<YAML
@@ -70,6 +79,13 @@ guards:
 YAML
 RESTOREGAP_CONTEXT="$fixture/glob.yml" check_event 2 '{"tool_name":"Write","tool_input":{"file_path":"proj/new.db"}}' 'wildcard policy covers new file'
 RESTOREGAP_REQUIRE_COVERAGE=1 check_event 2 '{"tool_name":"Edit","tool_input":{"file_path":"README.md"}}' 'strict coverage blocks unknown file'
+# Strict coverage also blocks operations this narrow parser cannot evaluate;
+# the default mode below remains permissive for those same shapes.
+check_event 0 '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' 'default allows unknown command shape'
+check_strict_event 2 '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' 'strict blocks unknown command shape'
+check_strict_event 2 '{"tool_name":"Bash","tool_input":{}}' 'strict blocks missing command input'
+check_strict_event 2 '{"tool_name":"OtherTool","tool_input":{}}' 'strict blocks unsupported tool'
+check_strict_event 2 '{"tool_name":"Bash","tool_input":{"command":"rm"}}' 'strict blocks malformed recognized command'
 # Unguarded path, unmatched shape, and an unmatched-command shape all pass.
 check 0 rm README.md
 check 0 ls -la
@@ -78,7 +94,7 @@ check 0 git push --force origin main
 # A real drill records the proof; the same deletion is allowed now.
 (cd "$fixture" && restoregap drill) >/dev/null 2>&1
 check 0 rm proj/app.db
-check_event 0 '{"tool_name":"Edit","tool_input":{"file_path":"proj/app.db"}}' 'file edit accepts fresh proof'
+RESTOREGAP_REQUIRE_COVERAGE=1 check_event 0 '{"tool_name":"Edit","tool_input":{"file_path":"proj/app.db"}}' 'strict file edit accepts fresh proof'
 
 total=$((pass + fail))
 echo "$pass/$total"

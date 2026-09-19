@@ -77,7 +77,7 @@ by policy globs. Supported shell shapes are deliberately limited:
 | `truncate`, leading redirection, `dd … of=` | `modify_file` |
 | forceful `git push`, `git branch -D`, `terraform destroy`, `dropdb` | `run_command` |
 
-Unmatched commands pass through this example without evaluation. Quoting, shell
+By default, unmatched commands pass through this example without evaluation. Quoting, shell
 expansion, compound commands, aliases and interpreter code exceed its simple word
 parser. Use your agent's sandbox and deny rules, or a tool integration supplying
 structured operations, for those cases. A `terraform destroy` command match is
@@ -85,7 +85,10 @@ not Terraform-plan or provider-resource analysis.
 
 `RESTOREGAP_CONTEXT` and `RESTOREGAP_LEDGER` select the policy and local ledger.
 Set `RESTOREGAP_REQUIRE_COVERAGE=1` to enable strict coverage for the hook's
-recognized inputs. Malformed events block rather than silently skipping the gate.
+recognized inputs. In strict mode, an operation the narrow parser cannot
+recognize is blocked with `not evaluated: unrecognized operation`; malformed
+events also block rather than silently skipping the gate. Leave it unset to
+retain the example hook's permissive unmatched-command behavior.
 
 Run the fixture from the repository root:
 

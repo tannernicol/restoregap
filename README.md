@@ -7,28 +7,39 @@
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![go](https://img.shields.io/github/go-mod/go-version/tannernicol/restoregap)](go.mod)
 
-Agents can change a system faster than you can review it. Before a risky change,
-ask for the recovery evidence—and keep the reason for the decision.
+Before an agent deletes your database, require a tested way back.
+Restore Gap’s read-only gate checks the proposed change against your recovery
+rules and records why it passed or blocked. It never executes the change.
 
-Restore Gap is a local, MIT-licensed CLI that checks **proposed changes** against
-declared recovery requirements. Its read-only gate returns **pass, warn, or block**
-and records the decision in a local ledger. Separate, explicit drills test your
-recovery procedure and refresh its evidence. The gate never applies a change or
-runs a restore. Wire it into a hook, CI check, or agent through MCP.
+From the [disposable SQLite demo](docs/walkthrough.md), with output shortened:
 
-Demo recording: [watch the terminal recording](demo/demo.gif).
+```console
+$ restoregap preflight --intent rm-app-db.yml
+BLOCK — proof "app-db-recovery" is not declared
+$ restoregap drill --expires-in 1h
+✓ app-db-recovery — restored — integrity ok; users=95
+$ restoregap preflight --intent rm-app-db.yml
+PASS — proof "app-db-recovery" is validated and fresh; recipe-bound
+$ restoregap ledger show
+proposed: delete_file · app.db
+proof: app-db-recovery · validated and fresh; recipe-bound
+Restore Gap did not execute the change.
+```
+
+One MIT-licensed binary. Local, offline, no account.
+[Watch the terminal recording](demo/demo.gif).
 
 ## Quick start
 
-Install the v0.11.1 release, then run the isolated demo fixture. The demo needs
+Install the v0.11.2 release, then run the isolated demo fixture. The demo needs
 `sqlite3` because its fixture is a real SQLite database.
 
 ```console
-$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.11.1/scripts/install.sh
+$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.11.2/scripts/install.sh
 $ less install.sh
-$ RESTOREGAP_VERSION=v0.11.1 sh install.sh
+$ RESTOREGAP_VERSION=v0.11.2 sh install.sh
 $ export PATH="$HOME/.local/bin:$PATH"   # use /usr/local/bin when installing as root
-$ git clone --depth 1 --branch v0.11.1 https://github.com/tannernicol/restoregap.git
+$ git clone --depth 1 --branch v0.11.2 https://github.com/tannernicol/restoregap.git
 $ cd restoregap
 $ demo/run.sh
 ```
