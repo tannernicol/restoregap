@@ -6,6 +6,13 @@ each such change is called out here.
 
 ## [Unreleased]
 
+## [0.11.4] — 2026-09-20
+
+- The agent hook now says why it allowed: it names the proof a declared guard
+  cleared the proposal on, or states that no guard matched and the verdict
+  rests on declared coverage rather than a drill proof. Both are allowed; only
+  the first is evidence, and an agent must not read them as the same answer.
+
 ## [0.11.3] — 2026-09-19
 
 - Agent-first install: `restoregap agent install claude|gemini|cursor` writes

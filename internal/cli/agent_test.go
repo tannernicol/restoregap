@@ -24,6 +24,22 @@ func agentTestEnv(t *testing.T) string {
 	return dir
 }
 
+func TestAgentHookAllowNamesWhyItAllowed(t *testing.T) {
+	dir := agentTestEnv(t)
+	t.Chdir(dir)
+	policy := fmt.Sprintf("version: 2\nguards:\n  - id: file\n    kind: lifeline\n    match: {paths: [%q]}\n", filepath.Join(dir, "guarded"))
+	if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := runAgent(t, hookEvent("Bash", "command", "rm "+filepath.Join(dir, "unguarded.txt"), dir), "hook", "claude")
+	if !strings.Contains(out, "no declared guard matched") {
+		t.Errorf("an allow with no matched guard must say so, got: %s", out)
+	}
+	if strings.Contains(out, "recovery gate passed:") {
+		t.Errorf("an unmatched allow must not claim a proof, got: %s", out)
+	}
+}
+
 func runAgent(t *testing.T, input string, args ...string) string {
 	t.Helper()
 	cmd := newAgentCmd()

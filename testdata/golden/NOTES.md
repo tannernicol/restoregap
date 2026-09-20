@@ -1,9 +1,7 @@
 # restoregap semantic reference cases
 
-Captured 2026-07-16 from the Python CLI (authoritative checkout
-`.work/restore-gap-audit/scanner`, run as `uv run restoregap ...` from the
-checkout root). Scope (per Tanner, 2026-07-16): these are **semantic reference
-cases** for the Go rewrite, not byte-exact parity goldens. Compare the semantic
+Captured 2026-07-16 from the predecessor Python CLI. These are **semantic
+reference cases** for the Go rewrite, not byte-exact parity goldens. Compare the semantic
 content of `out.json` — verdict, which `rule_id`s fired, `decision`,
 `risk_class`, `proof_status`, `required_next_step` — plus the exit code. Do not
 diff bytes.

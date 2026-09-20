@@ -234,9 +234,26 @@ func evaluateAgentHook(cmd *cobra.Command, in hookIntent) (string, string) {
 		return "deny", "recovery gate unavailable: " + rep.BrokenReason
 	}
 	if result.ExitCode == 0 {
-		return "allow", "recovery gate passed"
+		return "allow", hookAllowReason(rep)
 	}
 	return "deny", hookDenyReason(rep, paths)
+}
+
+// hookAllowReason distinguishes a proposal a declared guard cleared on the
+// strength of a proof from one no guard matched at all. Both are allowed, and
+// only the first is evidence, so an agent must never read them as the same
+// answer.
+func hookAllowReason(rep report.Report) string {
+	var proofs []string
+	for _, finding := range rep.Findings {
+		if finding.Proof != "" {
+			proofs = append(proofs, finding.Proof)
+		}
+	}
+	if len(proofs) == 0 {
+		return "no declared guard matched this proposal; allowed on declared coverage, not on a drill proof"
+	}
+	return "recovery gate passed: " + strings.Join(proofs, "; ")
 }
 
 func hookDenyReason(rep report.Report, paths []string) string {
