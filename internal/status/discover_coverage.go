@@ -102,6 +102,9 @@ func gatherDiscoverCoverage(now time.Time) DiscoverCoverage {
 	dc := DiscoverCoverage{State: "fresh", Line: renderDiscoverLine(summary)}
 
 	for _, c := range report.Candidates {
+		if c.Agent != nil {
+			dc.Line += "\n" + discover.AgentCoverageLine(c)
+		}
 		if !c.Covered && !c.Suppressed {
 			dc.Uncovered = append(dc.Uncovered, c)
 		}

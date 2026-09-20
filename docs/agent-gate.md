@@ -1,5 +1,104 @@
 # Put recovery evidence before an agent's change
 
+```sh
+restoregap agent install claude --scope user
+```
+
+Use `gemini` for Gemini CLI. Add `--dry-run` to preview the unified settings
+diff without writing anything, or `--scope project` to install for the current
+project. Repeating an install leaves identical settings untouched. Existing
+hooks, MCP servers, and unrelated settings are preserved. The command uses the
+running binary's absolute path, so install the binary in its permanent location
+first.
+
+User hooks go in `~/.claude/settings.json` or `~/.gemini/settings.json`; project
+hooks go in the corresponding directory under the current project. Both receive
+`mcpServers.restoregap` from `restoregap mcp --print-config`. Claude additionally
+requires its MCP registration in `~/.claude.json` (user) or `.mcp.json` (project),
+so the installer updates that file too and prints both diffs. Restart the agent
+to load the changes; Claude may request approval for project MCP servers.
+
+### Claude Code plugin install
+
+With `restoregap` installed on `PATH`, from a checkout of this repository:
+
+```sh
+claude plugin marketplace add .
+claude plugin install restoregap@restoregap
+```
+
+For a session without installation: `claude --plugin-dir .`. Choose either the
+plugin or `restoregap agent install claude` to avoid evaluating each call twice.
+The plugin registers the same PreToolUse matcher and MCP server. Its launcher
+resolves `restoregap` from `PATH`; if missing, the hook denies with
+`restoregap not installed`. A failed gate process also blocks. Plugin components
+use `${CLAUDE_PLUGIN_ROOT}` so a cached install works from any project directory.
+The manifests follow the [plugin schema](https://code.claude.com/docs/en/plugins-reference)
+and [marketplace schema](https://code.claude.com/docs/en/plugin-marketplaces).
+
+### Cursor
+
+```sh
+restoregap agent install cursor
+```
+
+Use `--scope project` for `.cursor/hooks.json` and `.cursor/mcp.json` in the
+current project; the default writes those files under your home directory.
+The installer preserves existing entries and registers `beforeShellExecution`
+and `beforeMCPExecution` with `failClosed: true`. The adapter returns
+`permission: allow|deny` with `user_message` and `agent_message`, per the
+[Cursor hook contract](https://cursor.com/docs/agent/hooks). Shell commands and
+recognized MCP tool names use the same translations as Claude; unknown operations
+are allowed unless `RESTOREGAP_REQUIRE_COVERAGE=1`. An MCP server launch command
+is never mistaken for the tool's proposed shell operation. These two events do
+not intercept Cursor's native file edits. No Codex adapter is provided.
+
+### Check wiring
+
+`restoregap discover --all` reports each configured agent's hook and MCP wiring;
+`restoregap status` includes those results from the latest discovery snapshot.
+Missing hooks print the corresponding `restoregap agent install` command.
+Coverage here means configured wiring, not proof that the running agent loaded
+it or that every operation has recovery evidence. Discovery reads user and
+current-project settings, including Claude's separate MCP registry; it does not
+inspect the plugin cache or infer plugin activation.
+
+The installed hook runs `restoregap agent hook claude` (or `gemini` / `cursor`). It reads one
+stdin event, resolves paths and policy discovery from the event's `cwd`, and
+returns a structured allow/deny with exit 0. Malformed events deny. A broken
+gate denies with `recovery gate unavailable: <cause>`. Recognized operations use
+the existing evaluator and record the decision in the local ledger. The hook
+never executes the proposed command or the suggested recovery drill.
+
+A real deny from the demo fixture before its first drill:
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Restore Gap preflight could not prove the declared recovery path survives this change.; Refresh or supply proof \"app-db-recovery\", or record an owner override before proceeding.; required proof: app-db-recovery; run: restoregap drill --context '/tmp/restoregap-agent-proof-86xz46yt/restoregap.yml' --proof 'app-db-recovery'"
+  }
+}
+```
+
+The temporary context path above is from that fixture; each response names its
+own context and required proof. Review the named drill before running it, then
+retry the operation. When no drill is declared, the response says so instead of
+inventing a command that could make the guard pass. A drill may also need its
+source or recovery recipe repaired before it can produce acceptable evidence.
+
+Claude emits `hookSpecificOutput.permissionDecision` and
+`permissionDecisionReason`; Gemini emits top-level `decision` and `reason`.
+These follow the [Claude hook contract](https://code.claude.com/docs/en/hooks)
+and [Gemini hook contract](https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md).
+Claude MCP permission rules use `mcp__restoregap__<tool>` names; see the
+[Claude MCP reference](https://code.claude.com/docs/en/mcp). Inspection tools have
+short titles and `readOnlyHint: true`. `preflight_intent`, `preflight_diff`, and
+`acknowledge_risk` advertise `readOnlyHint: false`: they can write ledger records,
+even though preflight never executes the proposed change. MCP exposes no `plan`
+argument; the CLI's separate `preflight --plan` skips decision recording.
+
 Restore Gap evaluates the **proposed operation** and returns a decision. It never
 executes the operation or automatically runs a recovery to make the gate pass.
 The caller must enforce the result before it lets the operation proceed.
@@ -45,13 +144,14 @@ dependencies makes that evidence insufficient. The caller must supply the entire
 change set; separating dependent changes into undisclosed requests hides that
 relationship from any local evaluator.
 
-## Example tool hook
+## Portable shell reference
 
 [preflight-hook.sh](examples/preflight-hook.sh) is a narrow Claude Code
 `PreToolUse` example. It reads the event once, translates supported tool calls to
 an intent, and maps every failing gate result to hook exit 2. It uses Bash 4+,
 `jq` and GNU `realpath -m`; this particular shell adapter is not a portable shell
-parser. The Go CLI and MCP are the portable interfaces.
+parser. The installed Go hook needs no Bash, jq, or realpath. Gemini maps
+`run_shell_command`, `write_file`, and `replace` to the same intent shapes.
 
 Register the script with an absolute path appropriate to your installation:
 
@@ -77,7 +177,7 @@ by policy globs. Supported shell shapes are deliberately limited:
 | `truncate`, leading redirection, `dd … of=` | `modify_file` |
 | forceful `git push`, `git branch -D`, `terraform destroy`, `dropdb` | `run_command` |
 
-By default, unmatched commands pass through this example without evaluation. Quoting, shell
+By default, unmatched commands pass through either hook without evaluation. Quoting, shell
 expansion, compound commands, aliases and interpreter code exceed its simple word
 parser. Use your agent's sandbox and deny rules, or a tool integration supplying
 structured operations, for those cases. A `terraform destroy` command match is
@@ -88,7 +188,7 @@ Set `RESTOREGAP_REQUIRE_COVERAGE=1` to enable strict coverage for the hook's
 recognized inputs. In strict mode, an operation the narrow parser cannot
 recognize is blocked with `not evaluated: unrecognized operation`; malformed
 events also block rather than silently skipping the gate. Leave it unset to
-retain the example hook's permissive unmatched-command behavior.
+retain the hooks' permissive unmatched-command behavior.
 
 Run the fixture from the repository root:
 

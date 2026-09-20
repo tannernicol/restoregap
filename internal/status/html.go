@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tannernicol/restoregap/internal/contextspec"
+	"github.com/tannernicol/restoregap/internal/ledger"
 	"github.com/tannernicol/restoregap/ui"
 )
 
@@ -138,6 +139,7 @@ type decisionCardData struct {
 	Legacy       bool
 	ProposedMore int
 	FindingsMore int
+	NoFinding    string
 	Disclaimer   string
 	LedgerHint   string
 }
@@ -275,22 +277,7 @@ func buildRecentDecision(d *DecisionSummary) *decisionCardData {
 			out.ProposedMore = len(d.Intents) - i
 			break
 		}
-		value := in.Action
-		if in.Command != "" {
-			value += " · command: " + in.Command
-		}
-		if len(in.Packages) > 0 {
-			value += " · packages: " + strings.Join(in.Packages, ", ")
-		}
-		if len(in.TargetPaths) > 0 {
-			value += " · from: " + strings.Join(in.Paths, ", ") + " · to: " + strings.Join(in.TargetPaths, ", ")
-		} else if len(in.Paths) > 0 {
-			value += " · paths: " + strings.Join(in.Paths, ", ")
-		}
-		if in.Description != "" {
-			value += " — " + in.Description
-		}
-		out.Proposed = append(out.Proposed, value)
+		out.Proposed = append(out.Proposed, formatProposedIntent(in))
 	}
 	for i, f := range d.Findings {
 		if i >= 3 {
@@ -307,7 +294,31 @@ func buildRecentDecision(d *DecisionSummary) *decisionCardData {
 		}
 		out.Findings = append(out.Findings, fd)
 	}
+	if len(d.Findings) == 0 && d.BrokenReason == "" && !d.Legacy {
+		out.NoFinding = "No declared guard matched this proposal. The verdict rests on declared coverage, not on a drill proof; widen coverage with restoregap discover or preflight --require-coverage."
+	}
 	return out
+}
+
+// formatProposedIntent renders one proposed operation as the single line the
+// decision card shows: action, then command/packages/paths, then description.
+func formatProposedIntent(in ledger.IntentRecord) string {
+	value := in.Action
+	if in.Command != "" {
+		value += " · command: " + in.Command
+	}
+	if len(in.Packages) > 0 {
+		value += " · packages: " + strings.Join(in.Packages, ", ")
+	}
+	if len(in.TargetPaths) > 0 {
+		value += " · from: " + strings.Join(in.Paths, ", ") + " · to: " + strings.Join(in.TargetPaths, ", ")
+	} else if len(in.Paths) > 0 {
+		value += " · paths: " + strings.Join(in.Paths, ", ")
+	}
+	if in.Description != "" {
+		value += " — " + in.Description
+	}
+	return value
 }
 
 // buildToGreenPrompt renders the To-green panel's folded `next --prompt`
@@ -602,6 +613,10 @@ var statusPageTemplate = template.Must(template.New("status").Parse(estateRowTem
       {{- end}}
     </div>
     {{- if .RecentDecision.FindingsMore}}<p class="rgs-muted">{{.RecentDecision.FindingsMore}} more finding(s). {{.RecentDecision.LedgerHint}}</p>{{end}}
+    {{- end}}
+    {{- if .RecentDecision.NoFinding}}
+    <h3>Why</h3>
+    <p class="rgs-muted rgs-decision-nofinding">{{.RecentDecision.NoFinding}}</p>
     {{- end}}
     <p class="rgs-decision-note">{{.RecentDecision.Disclaimer}}</p>
   </section>

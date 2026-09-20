@@ -324,8 +324,8 @@ func Gather(req Request) (*Summary, error) {
 			return nil, err
 		}
 	}
-	s.DiscoverLine = discoverCoverageLine(now)
 	s.Discover = gatherDiscoverCoverage(now)
+	s.DiscoverLine = s.Discover.Line
 
 	return s, nil
 }

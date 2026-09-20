@@ -243,6 +243,10 @@ func groupedDisplayLine(group []Candidate) displayLine {
 // appending " (covered by <id>)" and/or " (suppressed: <rule>)" and/or
 // " [also: <alt paths>]" when the candidate carries them.
 func writeCandidateLine(b *strings.Builder, c Candidate) {
+	if c.Agent != nil {
+		fmt.Fprintln(b, "agent  "+AgentCoverageLine(c))
+		return
+	}
 	fmt.Fprintf(b, "%s  %s  %s  %d", c.Kind, c.Name, c.Path, c.SizeBytes)
 	if c.CoveredBy != "" {
 		fmt.Fprintf(b, " (covered by %s)", c.CoveredBy)

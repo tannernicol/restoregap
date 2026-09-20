@@ -7,39 +7,53 @@
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![go](https://img.shields.io/github/go-mod/go-version/tannernicol/restoregap)](go.mod)
 
-Before an agent deletes your database, require a tested way back.
-Restore Gap’s read-only gate checks the proposed change against your recovery
-rules and records why it passed or blocked. It never executes the change.
+Your coding agent is about to delete a database. Restore Gap is the hook it
+hits first: a read-only gate that checks the proposed change against your
+recovery rules and answers with a reason the agent can act on. It never
+executes the change, and it never runs a recovery to make itself pass.
 
-From the [disposable SQLite demo](docs/walkthrough.md), with output shortened:
+One command wires it into the agent as a pre-tool hook and an MCP server:
 
 ```console
-$ restoregap preflight --intent rm-app-db.yml
-BLOCK — proof "app-db-recovery" is not declared
-$ restoregap drill --expires-in 1h
-✓ app-db-recovery — restored — integrity ok; users=95
-$ restoregap preflight --intent rm-app-db.yml
-PASS — proof "app-db-recovery" is validated and fresh; recipe-bound
-$ restoregap ledger show
+$ restoregap agent install claude     # or: gemini
+wrote ~/.claude/settings.json: hooks.PreToolUse[restoregap], mcpServers.restoregap
+```
+
+When the agent then proposes `rm app.db`, the hook answers in the agent's own
+decision format. From the [disposable SQLite demo](docs/walkthrough.md), paths
+shortened:
+
+```json
+{"hookSpecificOutput": {"hookEventName": "PreToolUse",
+  "permissionDecision": "deny",
+  "permissionDecisionReason": "BLOCK delete_file app.db: Restore Gap preflight could not prove the declared recovery path survives this change. Required proof: app-db-recovery. Run: restoregap drill --context restoregap.local.yml --proof app-db-recovery"}}
+```
+
+After `restoregap drill` restores the database in a sandbox and passes its
+checks, the same call is allowed and the decision lands in a local ledger:
+
+```console
+$ restoregap ledger show --limit 1
 proposed: delete_file · app.db
 proof: app-db-recovery · validated and fresh; recipe-bound
 Restore Gap did not execute the change.
 ```
 
-One MIT-licensed binary. Local, offline, no account.
-[Watch the terminal recording](demo/demo.gif).
+The same evaluator is an MCP server (`preflight_intent`, `required_proof`,
+`explain_decision`, …) and a plain CLI for CI. One MIT-licensed binary.
+Local, offline, no account. [Watch the terminal recording](demo/demo.gif).
 
 ## Quick start
 
-Install the v0.11.2 release, then run the isolated demo fixture. The demo needs
+Install the v0.11.3 release, then run the isolated demo fixture. The demo needs
 `sqlite3` because its fixture is a real SQLite database.
 
 ```console
-$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.11.2/scripts/install.sh
+$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.11.3/scripts/install.sh
 $ less install.sh
-$ RESTOREGAP_VERSION=v0.11.2 sh install.sh
+$ RESTOREGAP_VERSION=v0.11.3 sh install.sh
 $ export PATH="$HOME/.local/bin:$PATH"   # use /usr/local/bin when installing as root
-$ git clone --depth 1 --branch v0.11.2 https://github.com/tannernicol/restoregap.git
+$ git clone --depth 1 --branch v0.11.3 https://github.com/tannernicol/restoregap.git
 $ cd restoregap
 $ demo/run.sh
 ```

@@ -24,7 +24,7 @@ const promptDisplayLimit = 20
 // — which is exactly why this is a brief for an agent rather than a single
 // command. Kept in exactly one place and reused by both the CLI and the
 // HTML page so they can never drift on the wording.
-const PromptRules = "For each item above, propose a Restore Gap drill: a `recover:` command that " +
+const PromptRules = "For agent wiring gaps, run the listed installer; this is configuration, not recovery proof. For each artifact item above, propose a Restore Gap drill: a `recover:` command that " +
 	"reconstructs it into a sandbox from an off-box copy, and a `validate:` check that proves the " +
 	"RESTORED copy is actually usable — not merely present. Model the validators on the ones already " +
 	"in this estate: a database check opens the db, runs an integrity check, and asserts row counts " +
@@ -71,6 +71,10 @@ func RenderPrompt(report *Report, all bool, scope string) string {
 		b.WriteString("nothing uncovered — every discovered candidate is covered\n\n")
 	}
 	for _, c := range shown {
+		if c.Agent != nil {
+			fmt.Fprintln(&b, "- agent  "+AgentCoverageLine(c))
+			continue
+		}
 		fmt.Fprintf(&b, "- %s  %s  %s  %d bytes\n", c.Kind, c.Name, c.Path, c.SizeBytes)
 	}
 	if remaining > 0 {

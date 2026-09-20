@@ -34,10 +34,10 @@ func newDiscoverCmd() *cobra.Command {
 			"rebuild would need that nothing has necessarily declared: running containers' writable\n" +
 			"bind mounts, local databases over 64KiB, git repos with no remote or with commits not on\n" +
 			"any remote-tracking branch, systemd user units whose declared state lives under $HOME, and\n" +
-			"the fixed machine-id/package-manifest/etc-config floor. A candidate is \"covered\" only when\n" +
+			"the fixed machine-id/package-manifest/etc-config floor. An artifact candidate is \"covered\" only when\n" +
 			"a declared drill's artifact/recovery_source or a guard's matched path already names it —\n" +
-			"discover never marks anything covered itself. Every run is compared against the previous\n" +
-			"one (state under --no-save's default location) so new candidates surface on their own;\n" +
+			"agent candidates instead report installed recovery-hook and MCP wiring. Every run is compared\n" +
+			"against the previous scan (under --no-save's default location) so new candidates surface;\n" +
 			"--no-save skips writing that snapshot. --trend prints the last " +
 			fmt.Sprintf("%d", discover.TrendDisplayLimit) + " scans as a compact table instead of scanning again.\n" +
 			"--prompt emits a ready-to-hand agent brief instead: header (host, coverage, generated-at,\n" +

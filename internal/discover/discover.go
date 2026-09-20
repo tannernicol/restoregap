@@ -62,6 +62,7 @@ func Collect(opts Options) (*Report, error) {
 	}
 
 	candidates := dedupeByRealPath(collectAll(home, sp))
+	candidates = append(candidates, collectAgents(home, cwd)...)
 	covered, suppressedUncovered, err := annotateCandidates(candidates, opts.Context, cwd)
 	if err != nil {
 		return nil, err
@@ -122,6 +123,12 @@ func resolveCollectDefaults(opts Options) (home string, now time.Time, host stri
 func annotateCandidates(candidates []Candidate, ctx contextspec.Context, cwd string) (covered, suppressedUncovered int, err error) {
 	index := newCoverageIndex(ctx)
 	for i := range candidates {
+		if candidates[i].Kind == KindAgent {
+			if candidates[i].Covered {
+				covered++
+			}
+			continue
+		}
 		ok, by := index.cover(candidates[i].Path)
 		candidates[i].Covered = ok
 		candidates[i].CoveredBy = by

@@ -55,9 +55,17 @@ type rpcResponse struct {
 }
 
 type toolDef struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema map[string]any  `json:"inputSchema"`
+	Annotations toolAnnotations `json:"annotations"`
+}
+
+// Preflight tools may append decisions to the ledger, even when the proposed
+// operation is only being planned. Only inspection tools advertise read-only.
+type toolAnnotations struct {
+	Title        string `json:"title"`
+	ReadOnlyHint bool   `json:"readOnlyHint"`
 }
 
 func schema(required []string, props map[string]any) map[string]any {
@@ -91,23 +99,23 @@ func toolDefs() []toolDef {
 		diffProps[k] = v
 	}
 	return []toolDef{
-		{"preflight_intent", "Gate a proposed action (intent YAML) on declared recovery invariants; returns the decision JSON.", schema(nil, intentProps)},
-		{"preflight_diff", "Gate a proposed change (unified diff) on declared recovery invariants; returns the decision JSON.", schema(nil, diffProps)},
+		{"preflight_intent", "Gate a proposed action (intent YAML) on declared recovery invariants; returns the decision JSON.", schema(nil, intentProps), toolAnnotations{"Preflight intent", false}},
+		{"preflight_diff", "Gate a proposed change (unified diff) on declared recovery invariants; returns the decision JSON.", schema(nil, diffProps), toolAnnotations{"Preflight diff", false}},
 		{"acknowledge_risk", "Record an owner-approved override for a blocked decision in the ledger.", schema([]string{"ledger_path", "decision_id", "acknowledgement", "owner"}, map[string]any{
 			"ledger_path": str("ledger to append to"), "decision_id": str("finding/decision id being overridden"),
 			"acknowledgement": str("owner statement"), "owner": str("who approves"),
 			"reason":     str("test-environment | false-positive | disposable-test-data | emergency | other"),
 			"actor":      str("recording actor"),
 			"expires_in": str("how long the override stays active, e.g. 720h (default 30d, maximum 90d — an override is an exception with a deadline, never an amnesty)"),
-		})},
+		}), toolAnnotations{"Acknowledge risk", false}},
 		{"explain_decision", "Explain a recorded decision from the ledger.", schema([]string{"ledger_path"}, map[string]any{
-			"ledger_path": str("ledger to read"), "decision_id": str("finding/decision id"), "entry_id": str("ledger entry id")})},
+			"ledger_path": str("ledger to read"), "decision_id": str("finding/decision id"), "entry_id": str("ledger entry id")}), toolAnnotations{"Explain decision", true}},
 		{"required_proof", "What proof would let a blocked decision pass.", schema([]string{"ledger_path"}, map[string]any{
-			"ledger_path": str("ledger to read"), "decision_id": str("finding/decision id"), "entry_id": str("ledger entry id")})},
+			"ledger_path": str("ledger to read"), "decision_id": str("finding/decision id"), "entry_id": str("ledger entry id")}), toolAnnotations{"Required proof", true}},
 		{"ledger_query", "List ledger entries, optionally filtered by resource or entry id.", schema([]string{"ledger_path"}, map[string]any{
-			"ledger_path": str("ledger to read"), "resource": str("resource substring filter"), "entry_id": str("exact entry id")})},
+			"ledger_path": str("ledger to read"), "resource": str("resource substring filter"), "entry_id": str("exact entry id")}), toolAnnotations{"Query ledger", true}},
 		{"story", "Markdown timeline of decisions for a resource.", schema([]string{"ledger_path"}, map[string]any{
-			"ledger_path": str("ledger to read"), "resource": str("resource substring filter")})},
+			"ledger_path": str("ledger to read"), "resource": str("resource substring filter")}), toolAnnotations{"Decision story", true}},
 		// drill_lint is read-only and static: it parses context_path and reports
 		// per-drill findings, the same checks as `restoregap drill --lint`.
 		// Deliberately NOT a drill-execution tool — a drill runs a user-declared
@@ -119,7 +127,7 @@ func toolDefs() []toolDef {
 			"pin_check or a not-yet-present artifact path is a warning.",
 			schema([]string{"context_path"}, map[string]any{
 				"context_path": str("v2 context file with a drills: block"),
-			})},
+			}), toolAnnotations{"Lint drills", true}},
 		// next_steps is read-only: it reports the same not-green proofs
 		// `restoregap next` does, each with its exact remediation command —
 		// it never runs a drill or writes an acceptance itself.
@@ -129,7 +137,7 @@ func toolDefs() []toolDef {
 			schema([]string{"context_path"}, map[string]any{
 				"context_path": str("path to restoregap.yml / restoregap.local.yml (omit to discover, same as the other tools)"),
 				"layer":        str("only this layer's gaps, e.g. identity-secrets (omit for every layer)"),
-			})},
+			}), toolAnnotations{"Next steps", true}},
 		// discover is read-only in the strongest sense: unlike `restoregap
 		// discover` on the CLI, this tool NEVER writes or rotates the
 		// on-disk snapshot — it only reads whatever the CLI (run by a human
@@ -146,7 +154,7 @@ func toolDefs() []toolDef {
 				"all":          boolean("include covered candidates too (default: only the gaps)"),
 				"trend":        boolean("also include the last scans' coverage-trend rows, oldest first"),
 				"prompt":       boolean("return the ready-to-hand agent brief (same text as `restoregap discover --prompt`) instead of JSON"),
-			})},
+			}), toolAnnotations{"Discover recovery gaps", true}},
 	}
 }
 

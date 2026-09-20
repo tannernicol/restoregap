@@ -14,20 +14,29 @@ judgment about which gaps matter belongs to the agent reading the report.
 | `repo` | a git repo under `$HOME` (depth 3) with no remote, or with commits not on ANY remote-tracking branch (checked across every declared remote, not just `origin`) |
 | `service-state` | an enabled-or-active systemd `--user` unit whose declared content references a path under `$HOME` that looks like state (`/data`, `/state`, `/db`, or `.db`/`.sqlite*`) |
 | `machine-id`, `package-manifest`, `etc-config` | fixed, always-emitted: the machine floor a rebuild needs even though nobody "backs them up" |
+| `agent` | Claude Code, Gemini, and Cursor user/current-project settings; reports Restore Gap hook and MCP wiring |
 
 ## Coverage rule
 
-A candidate is `covered` only when its path is equal to, or a path-ancestor
+An artifact candidate is `covered` only when its path is equal to, or a path-ancestor
 of, a declared drill's `artifact` or `recovery_source` — or matched by a
 guard's declared path glob (`internal/globmatch.MatchPathAny`, the same
 matcher `internal/rules` uses to decide whether a guard applies to a real
-intent). Nothing else can make a candidate covered.
+intent). Nothing else can make an artifact candidate covered.
+
+An `agent` candidate instead measures installed configuration: both the hook and
+MCP entry must be wired, and settings must be readable. A hook gap prints, for
+example, `claude-code: no recovery gate wired (run: restoregap agent install claude)`.
+Use `--all` to include wired agents. The paths come from the same resolver as the
+installer, including Claude's separate MCP registry. Plugin activation and live
+agent loading are not inferred from settings. Wiring is not recovery evidence;
+see [agent-gate.md](agent-gate.md).
 
 ## Weight table (blast-radius hint, from Kind alone)
 
 | weight | kinds | why |
 |---|---|---|
-| 4 | `machine-id`, `package-manifest`, `etc-config` | the machine floor |
+| 4 | `machine-id`, `package-manifest`, `etc-config`, `agent` | the machine floor and agent enforcement |
 | 3 | `database` | a running service's own data |
 | 2 | `container-volume`, `service-state` | host-side state outside the image/package |
 | 1 | `repo` | local, unpushed work, scoped to what's unpushed |
@@ -87,13 +96,13 @@ candidate absent from the previous scan is `new` — surfaced in text output,
 `counts.new`/`new` in JSON, and `restoregap discover --trend`'s table.
 `restoregap status` reads `latest.json` (never runs a scan itself) to print
 one `coverage: N of M candidates covered` line, or `coverage: not scanned`
-when the snapshot is missing, unreadable, or older than 7 days.
+when the snapshot is missing, unreadable, or older than 7 days. A fresh snapshot
+also contributes each agent's hook/MCP wiring lines to status.
 
 ## Integrity rule
 
-**Discovery never marks anything covered, and no caller — including an
-agent over MCP — can make it.** `covered` is recomputed fresh from a
-context's declared drills/guards on every run; a previous scan read back
+**Artifact coverage comes only from declared drills/guards; agent coverage
+comes only from observed settings.** Both are recomputed on every run; a previous scan read back
 from disk is used ONLY to carry forward `first_seen`, never `covered`. The
 MCP `discover` tool additionally never writes the on-disk snapshot at all
 (only the CLI does) — it is read-only in the strongest sense. Coverage

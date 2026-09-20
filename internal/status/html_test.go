@@ -310,6 +310,29 @@ func TestRenderHTMLShowsRecentDecisionAndReadOnlyBoundary(t *testing.T) {
 	}
 }
 
+func TestRenderHTMLNamesAnUnmatchedPassExplicitly(t *testing.T) {
+	executed := false
+	s := &Summary{
+		Verdict: "pass", Origin: "fixture", GeneratedAt: time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC),
+		LedgerOK: true, Last: &DecisionSummary{
+			When: time.Date(2026, 9, 19, 11, 59, 0, 0, time.UTC), Actor: "agent/test",
+			Verdict: "pass", Operation: "preflight", Executed: &executed,
+			Intents: []ledger.IntentRecord{{Action: "modify_file", Paths: []string{"/srv/unguarded.txt"}}},
+		},
+	}
+	rendered, err := s.RenderHTML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(rendered)
+	if !strings.Contains(got, "No declared guard matched this proposal") {
+		t.Errorf("a pass with zero findings must say no guard matched, got:\n%s", got)
+	}
+	if strings.Contains(got, "Why and next step") {
+		t.Errorf("a pass with zero findings must not render an empty findings block")
+	}
+}
+
 // ---- footer: real-scale proof freshness (the footer-collision fix) -------
 
 // mkPresentProofs builds n healthy "present" proofs — the case that used to

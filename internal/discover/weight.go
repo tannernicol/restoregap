@@ -23,6 +23,7 @@ package discover
 //	   push, never the whole estate.
 var weightByKind = map[Kind]int{
 	KindMachineID:       4,
+	KindAgent:           4,
 	KindPackageManifest: 4,
 	KindEtcConfig:       4,
 	KindDatabase:        3,

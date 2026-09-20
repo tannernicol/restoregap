@@ -31,6 +31,7 @@ help:
 	@echo "  test        go test ./..."
 	@echo "  vet         go vet ./..."
 	@echo "  reuse-lint  REUSE/SPDX license check (skips if 'reuse' is not installed)"
+	@echo "  release-status  is the newest release lined up to publish? (tags, export, assets, installed build, bar)"
 	@echo "  clean       remove build artifacts"
 	@echo
 	@echo "note: the full internal verification gauntlet (make verify) needs"
@@ -50,6 +51,11 @@ endif
 clean:
 	rm -f coverage.out
 	rm -f restoregap
+
+# One screen: is VERSION lined up to publish? Exit 0 iff every probe is green.
+.PHONY: release-status
+release-status:
+	scripts/release-status.sh
 
 # Re-record the README demo (needs vhs, ttyd, ffmpeg, sqlite3). See demo/demo.tape.
 .PHONY: demo

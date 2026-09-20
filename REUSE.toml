@@ -95,3 +95,9 @@ path = [
 ]
 SPDX-FileCopyrightText = "2026 Tanner Nicol"
 SPDX-License-Identifier = "MIT"
+
+# Agent plugin manifests are strict JSON.
+[[annotations]]
+path = [".claude-plugin/*.json", "hooks/*.json"]
+SPDX-FileCopyrightText = "2026 Tanner Nicol"
+SPDX-License-Identifier = "MIT"

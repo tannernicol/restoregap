@@ -6,6 +6,24 @@ each such change is called out here.
 
 ## [Unreleased]
 
+## [0.11.3] — 2026-09-19
+
+- Agent-first install: `restoregap agent install claude|gemini|cursor` writes
+  the pre-tool hook and the MCP server entry into the agent's settings file,
+  idempotently, and prints the diff. `restoregap agent hook <vendor>` answers
+  in the vendor's own decision format with the reason, the required proof and
+  the exact drill command. A Claude Code plugin manifest (`.claude-plugin/`)
+  installs the same hook and MCP server; its launcher denies fail-closed when
+  the binary is not on PATH.
+- `restoregap discover` reports every coding agent found on the host and
+  whether the recovery gate is wired, with the install command as the gap.
+- MCP tools carry honest `readOnlyHint` annotations and titles.
+- The README first screen and the landing page lead with the agent workflow:
+  install, deny with reason, drill, allow, ledger.
+- The dashboard names a pass that matched no declared guard instead of
+  showing it as proven. `make release-status` reports whether a release is
+  lined up to publish.
+
 ## [0.11.2] — 2026-09-19
 
 - The README opens with a compact SQLite decision-and-ledger example, and the

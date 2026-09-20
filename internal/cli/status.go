@@ -528,13 +528,10 @@ func newMCPCmd() *cobra.Command {
 			if !printConfig {
 				return cmd.Help()
 			}
-			exe, err := os.Executable()
+			cfg, err := mcpConfig()
 			if err != nil {
-				exe = "restoregap"
+				return err
 			}
-			cfg := map[string]any{"mcpServers": map[string]any{
-				"restoregap": map[string]any{"command": exe, "args": []string{"mcp", "serve"}},
-			}}
 			out, err := json.MarshalIndent(cfg, "", "  ")
 			if err != nil {
 				return err

@@ -12,9 +12,11 @@
 // judgment about which gaps matter belongs to the agent reading the report,
 // not to this binary.
 //
-// Coverage is derived SOLELY from a declared context's drills and guards
-// (coverage.go) — nothing in this package, and no caller, can mark a
-// candidate covered any other way. A previous scan's snapshot (state.go) is
+// Artifact coverage is derived from a declared context's drills and guards
+// (coverage.go) — nothing in this package, and no caller, can mark an
+// artifact candidate covered any other way. Agent coverage instead reports
+// installed hook and MCP wiring, never recovery evidence. A previous scan's
+// snapshot (state.go) is
 // read back only to carry forward FirstSeen and compute the new-since-last-
 // scan list; its Covered/CoveredBy values are never trusted or reused. See
 // docs/DISCOVER.md.
@@ -34,16 +36,18 @@ const (
 	KindPackageManifest Kind = "package-manifest"
 	KindEtcConfig       Kind = "etc-config"
 	KindMachineID       Kind = "machine-id"
+	KindAgent           Kind = "agent"
 )
 
 // Candidate is one recovery candidate discovered on this host, diffed
 // against the declared context.
 type Candidate struct {
-	Kind      Kind   `json:"kind"`
-	Name      string `json:"name"`
-	Path      string `json:"path"`
-	SizeBytes int64  `json:"size_bytes"`
-	Covered   bool   `json:"covered"`
+	Agent     *AgentWiring `json:"agent,omitempty"`
+	Kind      Kind         `json:"kind"`
+	Name      string       `json:"name"`
+	Path      string       `json:"path"`
+	SizeBytes int64        `json:"size_bytes"`
+	Covered   bool         `json:"covered"`
 	// CoveredBy names what covered this candidate — "drill:<proof-id>" or
 	// "guard:<guard-id>" — empty when Covered is false.
 	CoveredBy string `json:"covered_by,omitempty"`
