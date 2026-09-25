@@ -64,14 +64,16 @@ func DestroysSubtree(a Action) bool {
 // ChangeIntent is the normalized, engine-facing description of one proposed
 // change, whether it came from an action-intent YAML file or a diff hunk.
 type ChangeIntent struct {
-	Action        Action
-	Command       string
-	Packages      []string
-	Paths         []string
-	TargetPaths   []string
-	Actor         string
-	ContextWindow string
-	Description   string
+	Action             Action
+	Command            string
+	Packages           []string
+	Paths              []string
+	TargetPaths        []string
+	LexicalPaths       []string
+	LexicalTargetPaths []string
+	Actor              string
+	ContextWindow      string
+	Description        string
 	// Source identifies where this intent came from for evidence rendering:
 	// "action-intent" or "diff".
 	Source string
@@ -89,21 +91,37 @@ func (c ChangeIntent) AllPaths() []string {
 	return out
 }
 
+// MatchPaths returns canonical paths alongside lexical hook paths. The extra
+// forms can only make guard matching stricter; proof checks use AllPaths.
+func (c ChangeIntent) MatchPaths() []string {
+	out := c.AllPaths()
+	if len(c.LexicalPaths) == 0 && len(c.LexicalTargetPaths) == 0 {
+		return out
+	}
+	combined := make([]string, 0, len(out)+len(c.LexicalPaths)+len(c.LexicalTargetPaths))
+	combined = append(combined, out...)
+	combined = append(combined, c.LexicalPaths...)
+	combined = append(combined, c.LexicalTargetPaths...)
+	return combined
+}
+
 // rawIntent is the YAML wire shape of an action-intent file (v2 keeps the
 // Python field set: action, command, packages, paths/path, target_paths/
 // target_path, actor, context_window, description).
 type rawIntent struct {
-	Version       int      `yaml:"version"`
-	Action        string   `yaml:"action"`
-	Path          string   `yaml:"path"`
-	Paths         []string `yaml:"paths"`
-	TargetPath    string   `yaml:"target_path"`
-	TargetPaths   []string `yaml:"target_paths"`
-	Packages      []string `yaml:"packages"`
-	Command       string   `yaml:"command"`
-	Actor         string   `yaml:"actor"`
-	ContextWindow string   `yaml:"context_window"`
-	Description   string   `yaml:"description"`
+	Version            int      `yaml:"version"`
+	Action             string   `yaml:"action"`
+	Path               string   `yaml:"path"`
+	Paths              []string `yaml:"paths"`
+	TargetPath         string   `yaml:"target_path"`
+	TargetPaths        []string `yaml:"target_paths"`
+	LexicalPaths       []string `yaml:"lexical_paths"`
+	LexicalTargetPaths []string `yaml:"lexical_target_paths"`
+	Packages           []string `yaml:"packages"`
+	Command            string   `yaml:"command"`
+	Actor              string   `yaml:"actor"`
+	ContextWindow      string   `yaml:"context_window"`
+	Description        string   `yaml:"description"`
 }
 
 // Parse decodes an action-intent YAML document into a ChangeIntent.
@@ -150,14 +168,16 @@ func Parse(r io.Reader) (ChangeIntent, error) {
 	}
 
 	return ChangeIntent{
-		Action:        action,
-		Command:       raw.Command,
-		Packages:      raw.Packages,
-		Paths:         paths,
-		TargetPaths:   targetPaths,
-		Actor:         raw.Actor,
-		ContextWindow: raw.ContextWindow,
-		Description:   raw.Description,
-		Source:        "action-intent",
+		Action:             action,
+		Command:            raw.Command,
+		Packages:           raw.Packages,
+		Paths:              paths,
+		TargetPaths:        targetPaths,
+		LexicalPaths:       raw.LexicalPaths,
+		LexicalTargetPaths: raw.LexicalTargetPaths,
+		Actor:              raw.Actor,
+		ContextWindow:      raw.ContextWindow,
+		Description:        raw.Description,
+		Source:             "action-intent",
 	}, nil
 }

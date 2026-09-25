@@ -32,14 +32,22 @@ type agentEvent struct {
 }
 
 type hookIntent struct {
-	Version       int      `yaml:"version"`
-	Action        string   `yaml:"action"`
-	Paths         []string `yaml:"paths"`
-	Targets       []string `yaml:"target_paths,omitempty"`
-	Command       string   `yaml:"command,omitempty"`
-	Actor         string   `yaml:"actor"`
-	ContextWindow string   `yaml:"context_window"`
-	Description   string   `yaml:"description"`
+	Version int      `yaml:"version"`
+	Action  string   `yaml:"action"`
+	Paths   []string `yaml:"paths"`
+	Targets []string `yaml:"target_paths,omitempty"`
+	// LexicalPaths and LexicalTargets are the pre-symlink-resolution forms
+	// of Paths/Targets (filepath.Abs only, index-aligned 1:1), carried
+	// alongside so guard matching can catch a symlink at or after a guard
+	// pattern's wildcard that would otherwise resolve the canonical path
+	// outside a pattern that plainly matched the path as typed. See
+	// intent.ChangeIntent.LexicalPaths.
+	LexicalPaths   []string `yaml:"lexical_paths,omitempty"`
+	LexicalTargets []string `yaml:"lexical_target_paths,omitempty"`
+	Command        string   `yaml:"command,omitempty"`
+	Actor          string   `yaml:"actor"`
+	ContextWindow  string   `yaml:"context_window"`
+	Description    string   `yaml:"description"`
 }
 
 var hookDegradedModeOnce sync.Once
@@ -128,21 +136,38 @@ func translateAgentEvent(e agentEvent, vendor string) (hookIntent, error) {
 		in.Command = command
 		parseHookShell(&in)
 	}
-	for i, p := range in.Paths {
-		abs, err := hookAbsolutePath(p)
-		if err != nil {
-			return in, err
-		}
-		in.Paths[i] = abs
+	var err error
+	in.Paths, in.LexicalPaths, err = resolveHookPaths(in.Paths)
+	if err != nil {
+		return in, err
 	}
-	for i, p := range in.Targets {
-		abs, err := hookAbsolutePath(p)
-		if err != nil {
-			return in, err
-		}
-		in.Targets[i] = abs
+	in.Targets, in.LexicalTargets, err = resolveHookPaths(in.Targets)
+	if err != nil {
+		return in, err
 	}
 	return in, nil
+}
+
+// resolveHookPaths resolves each path to its canonical (symlink-resolved)
+// form and, alongside it, records the lexical absolute form (filepath.Abs,
+// no symlink resolution) it was resolved from — so guard matching can still
+// catch a symlink at or after a guard pattern's wildcard that would
+// otherwise resolve the canonical path outside a pattern that plainly
+// matched the path as typed. See intent.ChangeIntent.LexicalPaths.
+func resolveHookPaths(paths []string) (canonical, lexical []string, err error) {
+	for _, p := range paths {
+		lex, err := filepath.Abs(p)
+		if err != nil {
+			return nil, nil, err
+		}
+		abs, err := preflight.ResolveLocalPath(p)
+		if err != nil {
+			return nil, nil, err
+		}
+		canonical = append(canonical, abs)
+		lexical = append(lexical, lex)
+	}
+	return canonical, lexical, nil
 }
 
 var hookRedirect = regexp.MustCompile(`^(:\s*)?>\s*([^\s]+)`)
@@ -219,7 +244,7 @@ func evaluateAgentHook(cmd *cobra.Command, in hookIntent) (string, string) {
 	}
 	defer func() { _ = os.Remove(intentPath) }()
 	paths := discovery.ContextPaths()
-	result, err := preflight.Run(cmd.Context(), preflight.Request{IntentPath: intentPath, ContextPaths: paths, LedgerPath: ledgerPath, Actor: in.Actor, ContextWindow: in.ContextWindow, Format: "json", RequireCoverage: os.Getenv("RESTOREGAP_REQUIRE_COVERAGE") == "1", ToolVersion: Version})
+	result, err := preflight.Run(cmd.Context(), preflight.Request{IntentPath: intentPath, ContextPaths: paths, LedgerPath: ledgerPath, Actor: in.Actor, ContextWindow: in.ContextWindow, Format: "json", RequireCoverage: os.Getenv("RESTOREGAP_REQUIRE_COVERAGE") == "1", ToolVersion: Version, ResolveLocalPaths: true})
 	if err != nil {
 		return broken(err)
 	}
@@ -291,7 +316,7 @@ func evaluateAgentHookDegraded(cmd *cobra.Command, in hookIntent, data []byte, l
 		return "deny", "recovery gate unavailable: " + err.Error()
 	}
 	paths := discovery.ContextPaths()
-	result, err := preflight.Run(cmd.Context(), preflight.Request{Intents: []intent.ChangeIntent{ci}, ContextPaths: paths, LedgerPath: ledgerPath, Actor: in.Actor, ContextWindow: in.ContextWindow, Format: "json", RequireCoverage: os.Getenv("RESTOREGAP_REQUIRE_COVERAGE") == "1", ToolVersion: Version})
+	result, err := preflight.Run(cmd.Context(), preflight.Request{Intents: []intent.ChangeIntent{ci}, ContextPaths: paths, LedgerPath: ledgerPath, Actor: in.Actor, ContextWindow: in.ContextWindow, Format: "json", RequireCoverage: os.Getenv("RESTOREGAP_REQUIRE_COVERAGE") == "1", ToolVersion: Version, ResolveLocalPaths: true})
 	if err != nil {
 		return "deny", "recovery gate unavailable: " + err.Error()
 	}
@@ -395,31 +420,6 @@ func hookNonflags(words []string) []string {
 		}
 	}
 	return args
-}
-
-// Resolve existing symlinks, including a parent of a not-yet-created file,
-// just as the reference's realpath -m does. A symlink alias must not hide a guard.
-func hookAbsolutePath(path string) (string, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err == nil {
-		return resolved, nil
-	}
-	if !os.IsNotExist(err) {
-		return "", err
-	}
-	parent := filepath.Dir(abs)
-	if parent == abs {
-		return abs, nil
-	}
-	resolved, err = hookAbsolutePath(parent)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(resolved, filepath.Base(abs)), nil
 }
 
 // Cursor MCP's top-level command launches the server; it is never the proposed

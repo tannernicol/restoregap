@@ -59,6 +59,9 @@ type GuardRule struct{}
 // RequireCoverage is opt-in so existing hooks retain their established
 // matching and exit behavior.
 type EvaluateOptions struct {
+	// PathAliases supplies resolved local alternatives without filesystem I/O.
+	// Only matching uses these; proof verification uses original declarations.
+	PathAliases     map[string]string
 	RequireCoverage bool
 }
 
@@ -158,7 +161,7 @@ func guardMatches(g contextspec.Guard, ci intent.ChangeIntent) (matched bool, re
 // even though that file is never named. The returned resource spells out why,
 // so the finding explains a directory delete it refused.
 func matchGuardPaths(guardPaths []string, ci intent.ChangeIntent) (string, bool) {
-	intentPaths := ci.AllPaths()
+	intentPaths := ci.MatchPaths()
 	if res, ok := firstMatch(guardPaths, intentPaths, globmatch.MatchPathAny); ok {
 		return res, true
 	}
@@ -222,9 +225,10 @@ func Evaluate(intents []intent.ChangeIntent, ctx contextspec.Context, now time.T
 // same rule applies to target paths, packages, and commands.
 func EvaluateWithOptions(intents []intent.ChangeIntent, ctx contextspec.Context, now time.Time, options EvaluateOptions) []engine.Finding {
 	var findings []engine.Finding
-	dependencyConflicts := recoveryDependencyConflicts(ctx, intents)
+	matchCtx := matchingContext(ctx, options.PathAliases)
+	dependencyConflicts := recoveryDependencyConflicts(matchCtx, intents)
 	for _, ci := range intents {
-		matches := GuardRule{}.Match(ci, ctx)
+		matches := GuardRule{}.Match(ci, matchCtx)
 		for _, m := range matches {
 			findings = append(findings, decide(m, ctx, now, dependencyConflicts))
 		}
@@ -237,7 +241,7 @@ func EvaluateWithOptions(intents []intent.ChangeIntent, ctx contextspec.Context,
 			}
 		}
 		if options.RequireCoverage {
-			findings = append(findings, strictCoverageFindings(ci, ctx)...)
+			findings = append(findings, strictCoverageFindings(ci, matchCtx)...)
 		}
 	}
 	return findings

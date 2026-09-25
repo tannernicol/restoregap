@@ -147,6 +147,24 @@ func assertHookOutput(t *testing.T, output, vendor, want, contains string) strin
 // real drill between the denied and allowed calls. Each invocation executes
 // the agent hook claude command tree and requires successful (exit 0) JSON.
 func TestAgentHookClaudeShellReference21Cases(t *testing.T) {
+	t.Run("direct", testAgentHookClaudeShellReference)
+	t.Run("symlinked temp root", func(t *testing.T) {
+		root := t.TempDir()
+		realRoot := filepath.Join(root, "real")
+		alias := filepath.Join(root, "alias")
+		if err := os.Mkdir(realRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(realRoot, alias); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("TMPDIR", alias)
+		t.Run("flow", testAgentHookClaudeShellReference)
+	})
+}
+
+func testAgentHookClaudeShellReference(t *testing.T) {
+	t.Helper()
 	dir := agentTestEnv(t)
 	repo, err := filepath.Abs("../..")
 	if err != nil {
@@ -421,4 +439,46 @@ func assertMCPRegistry(t *testing.T, data []byte) {
 	if server.Command != exe || !slices.Equal(server.Args, []string{"mcp", "serve"}) {
 		t.Fatalf("registry restoregap = %+v, want command %q and args [mcp serve]", server, exe)
 	}
+}
+
+func TestAgentHookGuardSymlinkLeafEscape(t *testing.T) {
+	dir := agentTestEnv(t)
+	if err := os.MkdirAll(filepath.Join(dir, "proj"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "other"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(dir, "other", "app.db")
+	if err := os.WriteFile(real, []byte("guarded"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	leaf := filepath.Join(dir, "proj", "app.db")
+	if err := os.Symlink(real, leaf); err != nil {
+		t.Fatal(err)
+	}
+	policy := fmt.Sprintf("version: 2\nguards:\n  - id: file\n    kind: lifeline\n    match: {paths: [%q]}\n", filepath.Join(dir, "proj/*.db"))
+	if err := os.WriteFile(os.Getenv("RESTOREGAP_CONTEXT"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkHook(t, "claude", hookEvent("Write", "file_path", leaf, dir), "deny", "")
+}
+
+func TestAgentHookGuardSymlinkedSubdirEscape(t *testing.T) {
+	dir := agentTestEnv(t)
+	if err := os.MkdirAll(filepath.Join(dir, "proj"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "elsewhere"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(dir, "proj", "sub")
+	if err := os.Symlink(filepath.Join(dir, "elsewhere"), sub); err != nil {
+		t.Fatal(err)
+	}
+	policy := fmt.Sprintf("version: 2\nguards:\n  - id: file\n    kind: lifeline\n    match: {paths: [%q]}\n", filepath.Join(dir, "proj/**"))
+	if err := os.WriteFile(os.Getenv("RESTOREGAP_CONTEXT"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkHook(t, "claude", hookEvent("Write", "file_path", filepath.Join(sub, "secret.db"), dir), "deny", "")
 }

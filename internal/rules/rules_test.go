@@ -356,6 +356,23 @@ func TestEvaluateWithOptionsBlocksUnknownIntent(t *testing.T) {
 	}
 }
 
+func TestGuardMatchingCoversLexicalAlternatePath(t *testing.T) {
+	ctx, err := contextspec.Parse(stringsReader(`version: 2
+guards:
+  - id: proj-db
+    kind: guard
+    match: {paths: ["/proj/*.db"]}
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	ci := intent.ChangeIntent{Action: intent.ActionModifyFile, Paths: []string{"/other/app.db"}, LexicalPaths: []string{"/proj/app.db"}}
+	findings := Evaluate([]intent.ChangeIntent{ci}, ctx, fixedNow)
+	if len(findings) != 1 || findings[0].GuardID != "proj-db" {
+		t.Fatalf("lexical alternate must match guard: %+v", findings)
+	}
+}
+
 // TestGuardMatchesAncestorSubtreeDelete covers the dogfood bug where a guard
 // on a file was not fired by an intent to delete or move the DIRECTORY above
 // it — the directory delete destroys the guarded file without naming it.

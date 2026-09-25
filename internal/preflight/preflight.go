@@ -55,7 +55,11 @@ type Request struct {
 	// default remains the established match-any-resource behavior for existing
 	// hooks and callers.
 	RequireCoverage bool
-	AsOf            string // RFC3339; pins evaluation time for proof freshness (empty = now)
+	// ResolveLocalPaths enables filesystem alias matching for local agent hooks.
+	// Hook intents are canonical; relative policy paths use the hook cwd.
+	ResolveLocalPaths bool
+	pathAliases       map[string]string
+	AsOf              string // RFC3339; pins evaluation time for proof freshness (empty = now)
 	// ToolVersion is the CLI version stamped into a durable decision entry.
 	// It is set by internal/cli; non-CLI callers may leave it empty.
 	ToolVersion string
@@ -96,8 +100,10 @@ func evaluationTime(asOf string) (time.Time, error) {
 
 // Run executes a preflight against declared guards and the proofs backing them.
 func Run(_ context.Context, req Request) (*Result, error) {
-	if req.Format != "json" && req.Format != "md" && req.Format != "html" && req.Format != "text" {
-		return nil, fmt.Errorf("preflight: --format must be json, md, or html, got %q", req.Format)
+	switch req.Format {
+	case "json", "md", "html", "text":
+	default:
+		return nil, fmt.Errorf("preflight: --format must be json, md, html, or text, got %q", req.Format)
 	}
 	started := time.Now()
 	var checks []ledger.DecisionCheckRecord
@@ -118,6 +124,15 @@ func Run(_ context.Context, req Request) (*Result, error) {
 		return gateBroken(req, "load_context", err, started, appendCheck(checks, "load_context", "broken", checkStarted), intents)
 	}
 	checks = appendCheck(checks, "load_context", "pass", checkStarted)
+
+	if req.ResolveLocalPaths {
+		checkStarted = time.Now()
+		req.pathAliases, err = localPathAliases(ctxSpec)
+		if err != nil {
+			return gateBroken(req, "resolve_paths", err, started, appendCheck(checks, "resolve_paths", "broken", checkStarted), intents)
+		}
+		checks = appendCheck(checks, "resolve_paths", "pass", checkStarted)
+	}
 
 	// A syntactically readable ledger can still be untrustworthy if its chain
 	// is broken. Preflight must never quietly use its overrides in that state:
@@ -159,7 +174,7 @@ func Run(_ context.Context, req Request) (*Result, error) {
 // evaluate is the policy step: match the intents against the declared guards,
 // downgrade anything an active override covers, and reduce to one verdict.
 func evaluate(req Request, intents []intent.ChangeIntent, ctxSpec contextspec.Context, entries []ledger.Entry, now time.Time) ([]engine.Finding, engine.Verdict, int) {
-	findings := rules.EvaluateWithOptions(intents, ctxSpec, now, rules.EvaluateOptions{RequireCoverage: req.RequireCoverage})
+	findings := rules.EvaluateWithOptions(intents, ctxSpec, now, rules.EvaluateOptions{RequireCoverage: req.RequireCoverage, PathAliases: req.pathAliases})
 	findings = engine.ApplyOverrides(findings, ledger.ActiveOverrides(entries, now))
 	overall := engine.Overall(findings)
 	return findings, overall, engine.ExitCode(overall, req.FailOnWarn)
