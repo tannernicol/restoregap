@@ -6,6 +6,14 @@ each such change is called out here.
 
 ## [Unreleased]
 
+## [0.11.7] — 2026-09-25
+
+- Fixed a regression in 0.11.6: a declared policy path the hook cannot read
+  (for example a root-only directory) made the whole gate report "recovery
+  gate unavailable" and refuse every edit. Canonicalizing policy paths is now
+  best-effort per path; an unreadable one keeps its lexical form and matching
+  continues. Guarded proposals are still denied.
+
 ## [0.11.6] — 2026-09-25
 
 - The agent hook now matches declared guards on both the lexical and the

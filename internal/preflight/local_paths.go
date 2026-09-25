@@ -5,6 +5,7 @@ package preflight
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,7 +48,13 @@ func localPathAliases(ctx contextspec.Context) (map[string]string, error) {
 		}
 		resolved, err := resolveLocalPattern(raw)
 		if err != nil {
-			return err
+			// Policy declarations are already valid lexical matchers. Alias
+			// resolution is only an additional way to match a local hook path,
+			// so an inaccessible policy directory must not make the entire gate
+			// unavailable. Keep the declaration's lexical form and continue.
+			slog.Debug("restoregap: cannot canonicalize policy path; retaining lexical path", "path", raw, "error", err)
+			aliases[raw] = raw
+			return nil
 		}
 		aliases[raw] = resolved
 		return nil
