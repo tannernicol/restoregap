@@ -26,6 +26,7 @@ func TestAgentAdaptersFreshHomeBinary(t *testing.T) {
 	binary := filepath.Join(binDir, "restoregap")
 	build := exec.Command("go", "build", "-o", binary, "./cmd/restoregap")
 	build.Dir = root
+	build.Env = goBuildEnv()
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, out)
 	}
@@ -89,12 +90,8 @@ func TestAgentAdaptersFreshHomeBinary(t *testing.T) {
 			if vendor == "cursor" {
 				input = `{"command":"ls"}`
 			}
-			if output := run(input, "agent", "hook", vendor); !strings.Contains(output, `"allow"`) {
-				t.Fatal(output)
-			}
-			if output := run(`{broken`, "agent", "hook", vendor); !strings.Contains(output, `"deny"`) {
-				t.Fatal(output)
-			}
+			assertHookOutput(t, run(input, "agent", "hook", vendor), vendor, "allow", "not evaluated: unrecognized operation")
+			assertHookOutput(t, run(`{broken`, "agent", "hook", vendor), vendor, "deny", "malformed event:")
 			t.Logf("fresh HOME: %s user/project install idempotent; discover/status hook+MCP wired; allow and malformed deny", vendor)
 		})
 	}
@@ -151,17 +148,21 @@ func TestClaudePluginLauncher(t *testing.T) {
 	}
 	command := entry.Hooks[0].Command
 	output, err := run(command)
-	if err != nil || !strings.Contains(string(output), `"permissionDecision":"deny"`) || !strings.Contains(string(output), "restoregap not installed") {
+	if err != nil {
 		t.Fatalf("%v %s", err, output)
 	}
+	assertHookOutput(t, string(output), "claude", "deny", "restoregap not installed")
 	binary := filepath.Join(binDir, "restoregap")
 	stub := "#!/bin/sh\n[ \"$*\" = 'agent hook claude' ] || exit 1\nIFS= read -r event\n[ -n \"$event\" ] || exit 1\nprintf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"stub invoked\"}}'\n"
 	if err := os.WriteFile(binary, []byte(stub), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	output, err = run(command)
-	if err != nil || !strings.Contains(string(output), "stub invoked") {
+	if err != nil {
 		t.Fatalf("%v %s", err, output)
+	}
+	if reason := assertHookOutput(t, string(output), "claude", "allow", "stub invoked"); reason != "stub invoked" {
+		t.Fatalf("stub reason = %q", reason)
 	}
 	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
 		t.Fatal(err)

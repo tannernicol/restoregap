@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -31,7 +32,7 @@ func TestAgentHookAllowNamesWhyItAllowed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out := runAgent(t, hookEvent("Bash", "command", "rm "+filepath.Join(dir, "unguarded.txt"), dir), "hook", "claude")
+	out := checkHook(t, "claude", hookEvent("Bash", "command", "rm "+filepath.Join(dir, "unguarded.txt"), dir), "allow", "no declared guard matched")
 	if !strings.Contains(out, "no declared guard matched") {
 		t.Errorf("an allow with no matched guard must say so, got: %s", out)
 	}
@@ -40,18 +41,50 @@ func TestAgentHookAllowNamesWhyItAllowed(t *testing.T) {
 	}
 }
 
+func TestAgentHookDegradedRuntimeDirAllowsUnguardedAndDeniesGuarded(t *testing.T) {
+	dir := agentTestEnv(t)
+	t.Chdir(dir)
+	runtime := filepath.Join(dir, "runtime")
+	if err := os.Mkdir(runtime, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(runtime, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(runtime, 0o700) })
+	t.Setenv("RESTOREGAP_RUNTIME_DIR", runtime)
+	policy := fmt.Sprintf("version: 2\nguards:\n  - id: lifeline\n    kind: lifeline\n    match: {paths: [%q]}\n", filepath.Join(dir, "guarded"))
+	if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, stderr := runAgentWithStderr(t, hookEvent("Bash", "command", "rm "+filepath.Join(dir, "benign"), dir), "hook", "claude")
+	assertHookOutput(t, output, "claude", "allow", "degraded mode: cannot write hook intent")
+	if !strings.Contains(stderr, "degraded hook mode") {
+		t.Fatalf("stderr = %q, want degraded-mode note", stderr)
+	}
+	output, _ = runAgentWithStderr(t, hookEvent("Bash", "command", "rm "+filepath.Join(dir, "guarded"), dir), "hook", "claude")
+	assertHookOutput(t, output, "claude", "deny", "cannot write hook intent")
+}
+
 func runAgent(t *testing.T, input string, args ...string) string {
+	t.Helper()
+	out, _ := runAgentWithStderr(t, input, args...)
+	return out
+}
+
+func runAgentWithStderr(t *testing.T, input string, args ...string) (string, string) {
 	t.Helper()
 	cmd := newAgentCmd()
 	var out bytes.Buffer
+	var stderr bytes.Buffer
 	cmd.SetIn(strings.NewReader(input))
 	cmd.SetOut(&out)
-	cmd.SetErr(&out)
+	cmd.SetErr(&stderr)
 	cmd.SetArgs(args)
 	if err := cmd.Execute(); err != nil {
-		t.Fatalf("agent %v: %v\n%s", args, err, out.String())
+		t.Fatalf("agent %v: %v\nstdout: %s\nstderr: %s", args, err, out.String(), stderr.String())
 	}
-	return out.String()
+	return out.String(), stderr.String()
 }
 
 func hookEvent(tool, key, value, cwd string) string {
@@ -61,13 +94,18 @@ func hookEvent(tool, key, value, cwd string) string {
 
 func checkHook(t *testing.T, vendor, event, want, contains string) string {
 	t.Helper()
-	output := runAgent(t, event, "hook", vendor)
+	return assertHookOutput(t, runAgent(t, event, "hook", vendor), vendor, want, contains)
+}
+
+func assertHookOutput(t *testing.T, output, vendor, want, contains string) string {
+	t.Helper()
 	var wire map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(output), &wire); err != nil {
 		t.Fatal(err, output)
 	}
 	var decision, reason string
-	if vendor == "claude" {
+	switch vendor {
+	case "claude":
 		var specific map[string]string
 		if err := json.Unmarshal(wire["hookSpecificOutput"], &specific); err != nil {
 			t.Fatal(err)
@@ -76,7 +114,16 @@ func checkHook(t *testing.T, vendor, event, want, contains string) string {
 			t.Fatal(output)
 		}
 		decision, reason = specific["permissionDecision"], specific["permissionDecisionReason"]
-	} else {
+	case "cursor":
+		var fields map[string]string
+		if err := json.Unmarshal([]byte(output), &fields); err != nil {
+			t.Fatal(err)
+		}
+		if len(fields) != 3 || fields["user_message"] != fields["agent_message"] {
+			t.Fatalf("Cursor messages disagree or unexpected fields: %s", output)
+		}
+		decision, reason = fields["permission"], fields["agent_message"]
+	default:
 		if err := json.Unmarshal(wire["decision"], &decision); err != nil {
 			t.Fatal(err)
 		}
@@ -87,8 +134,11 @@ func checkHook(t *testing.T, vendor, event, want, contains string) string {
 			t.Fatal("Claude shape in Gemini response")
 		}
 	}
-	if decision != want || !strings.Contains(reason, contains) {
-		t.Fatalf("want %s containing %q; got %s", want, contains, output)
+	if decision != want {
+		t.Fatalf("%s decision = %q, want %q", vendor, decision, want)
+	}
+	if !strings.Contains(reason, contains) {
+		t.Fatalf("%s reason = %q, want substring %q", vendor, reason, contains)
 	}
 	return reason
 }
@@ -117,7 +167,7 @@ func TestAgentHookClaudeShellReference21Cases(t *testing.T) {
 	if err := propose.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	contextPath := os.Getenv("RESTOREGAP_CONTEXT")
+	contextPath := filepath.Join(dir, "context.yml")
 	if err := os.WriteFile(contextPath, proposed.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +227,7 @@ func TestAgentHookClaudeShellReference21Cases(t *testing.T) {
 func TestAgentHookGeminiAndBrokenGate(t *testing.T) {
 	dir := agentTestEnv(t)
 	policy := fmt.Sprintf("version: 2\nguards:\n  - id: file\n    kind: lifeline\n    match: {paths: [%q]}\n", filepath.Join(dir, "guarded"))
-	if err := os.WriteFile(os.Getenv("RESTOREGAP_CONTEXT"), []byte(policy), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, tool := range []string{"write_file", "replace"} {
@@ -203,6 +253,7 @@ func TestAgentHookGeminiAndBrokenGate(t *testing.T) {
 }
 
 func TestAgentHookShellShapes(t *testing.T) {
+	t.Chdir(agentTestEnv(t))
 	for _, command := range []string{"> file", ": > file", "git push -f origin main", "git push --force-with-lease origin main", "git branch -D old", "terraform destroy", "dropdb db"} {
 		in, err := translateAgentEvent(agentEvent{Tool: "Bash", Input: map[string]json.RawMessage{"command": json.RawMessage(fmt.Sprintf("%q", command))}}, "claude")
 		if err != nil || in.Action == "" || len(in.Paths) != 1 {
@@ -217,7 +268,7 @@ func TestAgentInstall(t *testing.T) {
 			t.Run(vendor+"/"+scope, func(t *testing.T) {
 				dir := agentTestEnv(t)
 				t.Chdir(dir)
-				base := os.Getenv("HOME")
+				base := filepath.Join(dir, "home")
 				if scope == "project" {
 					base = dir
 				}
@@ -264,13 +315,15 @@ func TestAgentInstall(t *testing.T) {
 					t.Fatal(entry)
 				}
 				if vendor == "claude" {
-					registry := filepath.Join(os.Getenv("HOME"), ".claude.json")
+					registry := filepath.Join(dir, "home", ".claude.json")
 					if scope == "project" {
 						registry = filepath.Join(dir, ".mcp.json")
 					}
-					if data, err := os.ReadFile(registry); err != nil || !bytes.Contains(data, []byte("mcpServers")) {
-						t.Fatalf("MCP registry missing: %v %s", err, data)
+					data, err := os.ReadFile(registry)
+					if err != nil {
+						t.Fatal(err)
 					}
+					assertMCPRegistry(t, data)
 				}
 			})
 		}
@@ -289,8 +342,29 @@ func TestAgentInstallPreservesAndRejects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(c.after, []byte("9007199254740993")) || !bytes.Contains(c.after, []byte(`"KEEP": "yes"`)) || !bytes.Contains(c.after, []byte(`"command": "keep"`)) || !bytes.Contains(c.after, []byte(`"command": "other"`)) {
-		t.Fatal(string(c.after))
+	var merged struct {
+		Large      json.Number
+		Hooks      map[string][]struct{ Hooks []struct{ Command string } }
+		MCPServers map[string]struct {
+			Command string
+			Env     map[string]string
+		}
+	}
+	if err := json.Unmarshal(c.after, &merged); err != nil {
+		t.Fatal(err)
+	}
+	if merged.Large.String() != "9007199254740993" {
+		t.Fatalf("large = %q", merged.Large)
+	}
+	if got := merged.MCPServers["restoregap"].Env["KEEP"]; got != "yes" {
+		t.Fatalf("restoregap env KEEP = %q", got)
+	}
+	if got := merged.MCPServers["other"].Command; got != "keep" {
+		t.Fatalf("other MCP command = %q", got)
+	}
+	entries := merged.Hooks["PreToolUse"]
+	if len(entries) != 2 || len(entries[0].Hooks) != 1 || entries[0].Hooks[0].Command != "other" {
+		t.Fatalf("preserved hooks = %+v", entries)
 	}
 	if err := writeAgentSettings(c); err != nil {
 		t.Fatal(err)
@@ -322,8 +396,29 @@ func TestAgentHookSymlinkAndEventCWD(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := fmt.Sprintf("version: 2\nguards:\n  - id: file\n    kind: lifeline\n    match: {paths: [%q]}\n", filepath.Join(dir, "real/**"))
-	if err := os.WriteFile(os.Getenv("RESTOREGAP_CONTEXT"), []byte(policy), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	checkHook(t, "claude", hookEvent("Write", "file_path", "alias/new.db", dir), "deny", "")
+}
+
+func assertMCPRegistry(t *testing.T, data []byte) {
+	t.Helper()
+	var registry struct {
+		Servers map[string]struct {
+			Command string
+			Args    []string
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &registry); err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := registry.Servers["restoregap"]
+	if server.Command != exe || !slices.Equal(server.Args, []string{"mcp", "serve"}) {
+		t.Fatalf("registry restoregap = %+v, want command %q and args [mcp serve]", server, exe)
+	}
 }

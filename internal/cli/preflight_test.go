@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -21,7 +23,9 @@ func withForcedTTY(t *testing.T, tty bool) {
 // --format not given, must render plain text — no pipe tables, no #/**.
 func TestPreflightForcedTTYRendersPlainText(t *testing.T) {
 	withForcedTTY(t, true)
-	dir := t.TempDir()
+	dir := agentTestEnv(t)
+	t.Setenv("RESTOREGAP_CONTEXT", "")
+	t.Chdir(dir)
 	intentPath := writeFile(t, dir, "intent.yml", zeroConfigBlockIntent)
 
 	cmd := newPreflightCmd()
@@ -44,13 +48,16 @@ func TestPreflightForcedTTYRendersPlainText(t *testing.T) {
 	if !strings.Contains(got, "BLOCK") {
 		t.Errorf("expected the BLOCK headline, got:\n%s", got)
 	}
+	assertPreflightJSONBlock(t, intentPath)
 }
 
 // TestPreflightNonTTYStaysMarkdown: cmd.SetOut(&bytes.Buffer{}) is never a
 // TTY, so the existing markdown default must be unaffected by this feature
 // even without forcing isTTYStdout false explicitly.
 func TestPreflightNonTTYStaysMarkdown(t *testing.T) {
-	dir := t.TempDir()
+	dir := agentTestEnv(t)
+	t.Setenv("RESTOREGAP_CONTEXT", "")
+	t.Chdir(dir)
 	intentPath := writeFile(t, dir, "intent.yml", zeroConfigBlockIntent)
 
 	cmd := newPreflightCmd()
@@ -65,6 +72,7 @@ func TestPreflightNonTTYStaysMarkdown(t *testing.T) {
 	if !strings.HasPrefix(out.String(), "# BLOCK\n") {
 		t.Errorf("non-TTY output must stay markdown, got:\n%s", out.String())
 	}
+	assertPreflightJSONBlock(t, intentPath)
 }
 
 // TestPreflightForcedTTYExplicitFormatWins: --format explicitly given must
@@ -72,7 +80,9 @@ func TestPreflightNonTTYStaysMarkdown(t *testing.T) {
 // terminal — an explicit choice is never silently overridden.
 func TestPreflightForcedTTYExplicitFormatWins(t *testing.T) {
 	withForcedTTY(t, true)
-	dir := t.TempDir()
+	dir := agentTestEnv(t)
+	t.Setenv("RESTOREGAP_CONTEXT", "")
+	t.Chdir(dir)
 	intentPath := writeFile(t, dir, "intent.yml", zeroConfigBlockIntent)
 
 	cmd := newPreflightCmd()
@@ -87,13 +97,16 @@ func TestPreflightForcedTTYExplicitFormatWins(t *testing.T) {
 	if !strings.HasPrefix(out.String(), "# BLOCK\n") {
 		t.Errorf("explicit --format md must win over TTY detection, got:\n%s", out.String())
 	}
+	assertPreflightJSONBlock(t, intentPath)
 }
 
 // TestPreflightExplicitFormatMarkdownAlias: --format markdown is the
 // documented spelling and must render exactly like --format md.
 func TestPreflightExplicitFormatMarkdownAlias(t *testing.T) {
 	withForcedTTY(t, true)
-	dir := t.TempDir()
+	dir := agentTestEnv(t)
+	t.Setenv("RESTOREGAP_CONTEXT", "")
+	t.Chdir(dir)
 	intentPath := writeFile(t, dir, "intent.yml", zeroConfigBlockIntent)
 
 	cmd := newPreflightCmd()
@@ -108,6 +121,7 @@ func TestPreflightExplicitFormatMarkdownAlias(t *testing.T) {
 	if !strings.HasPrefix(out.String(), "# BLOCK\n") {
 		t.Errorf("--format markdown must render markdown even on a forced TTY, got:\n%s", out.String())
 	}
+	assertPreflightJSONBlock(t, intentPath)
 }
 
 // TestPreflightExplicitFormatAutoOnTTYRendersText: --format auto passed
@@ -115,7 +129,9 @@ func TestPreflightExplicitFormatMarkdownAlias(t *testing.T) {
 // default value, not a separate code path).
 func TestPreflightExplicitFormatAutoOnTTYRendersText(t *testing.T) {
 	withForcedTTY(t, true)
-	dir := t.TempDir()
+	dir := agentTestEnv(t)
+	t.Setenv("RESTOREGAP_CONTEXT", "")
+	t.Chdir(dir)
 	intentPath := writeFile(t, dir, "intent.yml", zeroConfigBlockIntent)
 
 	cmd := newPreflightCmd()
@@ -134,13 +150,16 @@ func TestPreflightExplicitFormatAutoOnTTYRendersText(t *testing.T) {
 	if !strings.HasPrefix(got, "BLOCK — ") {
 		t.Errorf("expected the dash-joined BLOCK headline, got:\n%s", got)
 	}
+	assertPreflightJSONBlock(t, intentPath)
 }
 
 // TestPreflightPlanFlagSkipsLedger: an explicit --ledger path must not be
 // created at all when --plan is passed, through the real CLI flag surface
 // (internal/preflight has the Request-level coverage; this is the wiring).
 func TestPreflightPlanFlagSkipsLedger(t *testing.T) {
-	dir := t.TempDir()
+	dir := agentTestEnv(t)
+	t.Setenv("RESTOREGAP_CONTEXT", "")
+	t.Chdir(dir)
 	intentPath := writeFile(t, dir, "intent.yml", zeroConfigBlockIntent)
 	ledgerPath := filepath.Join(dir, "ledger.jsonl")
 
@@ -165,5 +184,30 @@ func TestPreflightExposesRequireCoverageFlag(t *testing.T) {
 	}
 	if flag.DefValue != "false" {
 		t.Errorf("--require-coverage default = %q, want false", flag.DefValue)
+	}
+}
+
+// Keep the render-specific assertions above, and independently check the
+// machine-readable verdict so a headline cannot mask a wrong decision field.
+func assertPreflightJSONBlock(t *testing.T, intentPath string) {
+	t.Helper()
+	cmd := newPreflightCmd()
+	cmd.SilenceUsage = true
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--intent", intentPath, "--format", "json", "--plan", "--ledger", filepath.Join(t.TempDir(), "ledger.jsonl")})
+	var exitErr *ExitError
+	if err := cmd.Execute(); !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("preflight JSON exit = %v, want block exit 1", err)
+	}
+	var report struct {
+		Verdict string `json:"verdict"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("preflight JSON: %v\n%s", err, out.String())
+	}
+	if report.Verdict != "block" {
+		t.Errorf("preflight verdict = %q, want block", report.Verdict)
 	}
 }

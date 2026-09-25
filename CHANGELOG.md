@@ -6,6 +6,20 @@ each such change is called out here.
 
 ## [Unreleased]
 
+## [0.11.5] — 2026-09-24
+
+- The agent hook can now keep its intent files outside an unavailable temporary
+  directory. Set `RESTOREGAP_RUNTIME_DIR` to choose its runtime directory; when
+  it is unset, Restore Gap falls back through the XDG runtime and state
+  directories before using the system temporary directory.
+- If the hook cannot write its intent, it enters explicit degraded mode: an
+  unguarded operation proceeds with a once-logged note, while an operation that
+  matches a declared guard is denied and reports the storage error. A missing
+  runtime directory must never silently weaken a declared recovery gate.
+- The README now links to the companion [deadman](https://github.com/tannernicol/deadman)
+  template: an off-property GitHub Actions watcher for a host that stops
+  emitting its expected heartbeat.
+
 ## [0.11.4] — 2026-09-20
 
 - The agent hook now says why it allowed: it names the proof a declared guard

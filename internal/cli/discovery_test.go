@@ -6,7 +6,9 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,6 +30,29 @@ import (
 // fallback tests would load a real machine's context files without an
 // isolated empty config home. RESTOREGAP_LEDGER/RESTOREGAP_CONTEXT are
 // cleared so no test result depends on the outer shell's environment.
+// originalHome is the real user HOME, captured before TestMain replaces it.
+var originalHome string
+
+// goBuildEnv is the environment for a test that shells out to the Go
+// toolchain: everything the test has, but with the real HOME restored so the
+// build reuses the user's module and build caches instead of downloading
+// ~256 MB into the throwaway HOME (which Go then writes read-only, so the
+// cleanup cannot remove it). 33 such leaks filled a 12 GB /tmp quota on
+// 2026-09-20 and turned every gate red.
+func goBuildEnv() []string {
+	env := os.Environ()
+	if originalHome == "" {
+		return env
+	}
+	out := env[:0]
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "HOME=") {
+			out = append(out, kv)
+		}
+	}
+	return append(out, "HOME="+originalHome)
+}
+
 func TestMain(m *testing.M) {
 	stateDir, err := os.MkdirTemp("", "restoregap-cli-test-state-*")
 	if err != nil {
@@ -37,15 +62,54 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
+	// Tests that shell out to `go build` inherit this HOME. Without an
+	// explicit module/build cache they would re-download the whole module
+	// cache into it on every run — ~256 MB that RemoveAll below then cannot
+	// delete, because Go writes the module cache read-only. Thirty-three of
+	// those leaked dirs filled a 12 GB /tmp quota on 2026-09-20 and turned
+	// every gate red. Pin the caches to the real ones before HOME moves.
+	// Resolve them BEFORE HOME moves, and remember the real HOME so a test
+	// that shells out to `go build` can hand it back (see goBuildEnv). Reading
+	// `go env` after the move would pin a cache inside the throwaway HOME,
+	// which is the leak itself.
+	originalHome, _ = os.UserHomeDir()
+	for _, v := range []string{"GOMODCACHE", "GOCACHE", "GOPATH"} {
+		if os.Getenv(v) != "" {
+			continue
+		}
+		out, err := exec.Command("go", "env", v).Output()
+		if err != nil {
+			continue
+		}
+		if value := strings.TrimSpace(string(out)); value != "" {
+			_ = os.Setenv(v, value)
+		}
+	}
 	_ = os.Setenv("HOME", homeDir)
 	_ = os.Setenv("XDG_STATE_HOME", stateDir)
 	_ = os.Unsetenv("XDG_CONFIG_HOME")
 	_ = os.Unsetenv("RESTOREGAP_LEDGER")
 	_ = os.Unsetenv("RESTOREGAP_CONTEXT")
 	code := m.Run()
-	_ = os.RemoveAll(stateDir)
-	_ = os.RemoveAll(homeDir)
+	removeAllWritable(stateDir)
+	removeAllWritable(homeDir)
 	os.Exit(code)
+}
+
+// removeAllWritable deletes a temp tree even when something inside it was
+// written read-only (a Go module cache is), so a leaked cache can never
+// accumulate against the host's /tmp quota.
+func removeAllWritable(dir string) {
+	if dir == "" {
+		return
+	}
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			_ = os.Chmod(path, 0o700)
+		}
+		return nil
+	})
+	_ = os.RemoveAll(dir)
 }
 
 func newTestCmd() (*cobra.Command, *bytes.Buffer) {

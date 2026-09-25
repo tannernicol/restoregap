@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,10 +13,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 	"github.com/tannernicol/restoregap/internal/contextspec"
 	"github.com/tannernicol/restoregap/internal/discovery"
+	"github.com/tannernicol/restoregap/internal/intent"
 	"github.com/tannernicol/restoregap/internal/policy"
 	"github.com/tannernicol/restoregap/internal/preflight"
 	"github.com/tannernicol/restoregap/internal/report"
@@ -38,6 +41,8 @@ type hookIntent struct {
 	ContextWindow string   `yaml:"context_window"`
 	Description   string   `yaml:"description"`
 }
+
+var hookDegradedModeOnce sync.Once
 
 func agentHook(cmd *cobra.Command, vendor string) (string, string) {
 	var raw json.RawMessage
@@ -208,21 +213,13 @@ func evaluateAgentHook(cmd *cobra.Command, in hookIntent) (string, string) {
 	if err != nil {
 		return broken(err)
 	}
-	f, err := os.CreateTemp("", "restoregap-hook-*.yml")
+	intentPath, err := writeHookIntent(data)
 	if err != nil {
-		return broken(err)
+		return evaluateAgentHookDegraded(cmd, in, data, ledgerPath, err)
 	}
-	defer func() { _ = os.Remove(f.Name()) }()
-	_, err = f.Write(data)
-	closeErr := f.Close()
-	if err != nil {
-		return broken(err)
-	}
-	if closeErr != nil {
-		return broken(closeErr)
-	}
+	defer func() { _ = os.Remove(intentPath) }()
 	paths := discovery.ContextPaths()
-	result, err := preflight.Run(cmd.Context(), preflight.Request{IntentPath: f.Name(), ContextPaths: paths, LedgerPath: ledgerPath, Actor: in.Actor, ContextWindow: in.ContextWindow, Format: "json", RequireCoverage: os.Getenv("RESTOREGAP_REQUIRE_COVERAGE") == "1", ToolVersion: Version})
+	result, err := preflight.Run(cmd.Context(), preflight.Request{IntentPath: intentPath, ContextPaths: paths, LedgerPath: ledgerPath, Actor: in.Actor, ContextWindow: in.ContextWindow, Format: "json", RequireCoverage: os.Getenv("RESTOREGAP_REQUIRE_COVERAGE") == "1", ToolVersion: Version})
 	if err != nil {
 		return broken(err)
 	}
@@ -237,6 +234,77 @@ func evaluateAgentHook(cmd *cobra.Command, in hookIntent) (string, string) {
 		return "allow", hookAllowReason(rep)
 	}
 	return "deny", hookDenyReason(rep, paths)
+}
+
+// hookRuntimeDir chooses a private, durable-enough place for the short-lived
+// intent file. A configured directory is deliberately not skipped when it is
+// broken: falling through to an unexpected filesystem can hide an operator's
+// runtime-dir failure and turn a full /tmp into an unrecoverable hook outage.
+func hookRuntimeDir() string {
+	if dir := os.Getenv("RESTOREGAP_RUNTIME_DIR"); dir != "" {
+		return dir
+	}
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
+		return filepath.Join(dir, "restoregap")
+	}
+	stateHome := os.Getenv("XDG_STATE_HOME")
+	if stateHome == "" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			stateHome = filepath.Join(home, ".local", "state")
+		}
+	}
+	if stateHome != "" {
+		return filepath.Join(stateHome, "restoregap", "run")
+	}
+	return os.TempDir()
+}
+
+func writeHookIntent(data []byte) (string, error) {
+	dir := hookRuntimeDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create hook runtime directory %s: %w", dir, err)
+	}
+	f, err := os.CreateTemp(dir, "restoregap-hook-*.yml")
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+func evaluateAgentHookDegraded(cmd *cobra.Command, in hookIntent, data []byte, ledgerPath string, writeErr error) (string, string) {
+	hookDegradedModeOnce.Do(func() {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "restoregap: degraded hook mode: cannot write intent file: %v\n", writeErr)
+	})
+	ci, err := intent.Parse(bytes.NewReader(data))
+	if err != nil {
+		return "deny", "recovery gate unavailable: " + err.Error()
+	}
+	paths := discovery.ContextPaths()
+	result, err := preflight.Run(cmd.Context(), preflight.Request{Intents: []intent.ChangeIntent{ci}, ContextPaths: paths, LedgerPath: ledgerPath, Actor: in.Actor, ContextWindow: in.ContextWindow, Format: "json", RequireCoverage: os.Getenv("RESTOREGAP_REQUIRE_COVERAGE") == "1", ToolVersion: Version})
+	if err != nil {
+		return "deny", "recovery gate unavailable: " + err.Error()
+	}
+	var rep report.Report
+	if err := json.Unmarshal(result.Rendered, &rep); err != nil {
+		return "deny", "recovery gate unavailable: " + err.Error()
+	}
+	for _, finding := range rep.Findings {
+		if finding.GuardID != "" {
+			return "deny", fmt.Sprintf("recovery gate unavailable: cannot write hook intent: %v; declared guard %s matched", writeErr, finding.GuardID)
+		}
+	}
+	return "allow", fmt.Sprintf("degraded mode: cannot write hook intent: %v; no declared guard matched this proposal; allowed on declared coverage, not on a drill proof", writeErr)
 }
 
 // hookAllowReason distinguishes a proposal a declared guard cleared on the

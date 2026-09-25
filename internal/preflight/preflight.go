@@ -30,6 +30,11 @@ type Request struct {
 	DiffPath   string
 	DiffRoot   string // repo root; makes repo-relative diff paths absolute
 	IntentPath string
+	// Intents supplies already-normalized proposals for callers that cannot
+	// safely create an intent file (for example, a pre-tool hook recovering
+	// from an unavailable runtime directory). It is mutually exclusive with
+	// IntentPath and DiffPath.
+	Intents []intent.ChangeIntent
 	// ContextPaths is repeatable: real deployments keep one context file per
 	// drill (its proof-writing timer rewrites that file, so co-mingling
 	// several drills in one file fights the timer that owns it) — preflight
@@ -204,8 +209,18 @@ func gateBroken(req Request, checkID string, cause error, started time.Time, che
 // loadIntents parses exactly one of --intent or --diff into normalized
 // ChangeIntents, applying --intent-actor / --context-window overrides.
 func loadIntents(req Request) ([]intent.ChangeIntent, error) {
-	if req.IntentPath != "" && req.DiffPath != "" {
-		return nil, fmt.Errorf("preflight: pass only one of --intent or --diff")
+	sources := 0
+	if req.IntentPath != "" {
+		sources++
+	}
+	if req.DiffPath != "" {
+		sources++
+	}
+	if len(req.Intents) > 0 {
+		sources++
+	}
+	if sources > 1 {
+		return nil, fmt.Errorf("preflight: pass only one of --intent, --diff, or normalized intents")
 	}
 
 	var intents []intent.ChangeIntent
@@ -238,6 +253,8 @@ func loadIntents(req Request) ([]intent.ChangeIntent, error) {
 		// failure mode a gate has, because it is indistinguishable from safe.
 		files = intent.Rebase(files, req.DiffRoot)
 		intents = intent.ToChangeIntents(files)
+	case len(req.Intents) > 0:
+		intents = append([]intent.ChangeIntent(nil), req.Intents...)
 	default:
 		return nil, nil
 	}

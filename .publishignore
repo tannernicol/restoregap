@@ -43,3 +43,5 @@ POST_LAUNCH.md
 # internal launch prep (numbers re-verification, launch-day checklist) — never exported
 docs/launch/*
 docs/plans/*
+scripts/test-assertions-hook-proof.py
+docs/testing/*

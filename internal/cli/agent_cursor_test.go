@@ -45,14 +45,12 @@ func TestAgentHookCursorContract(t *testing.T) {
 	}
 	t.Setenv("RESTOREGAP_REQUIRE_COVERAGE", "1")
 	output := runAgent(t, `{"command":"ls"}`, "hook", "cursor")
-	if !strings.Contains(output, `"permission":"deny"`) {
-		t.Fatal(output)
+	if reason := assertHookOutput(t, output, "cursor", "deny", "unrecognized operation"); reason != "not evaluated: unrecognized operation" {
+		t.Fatalf("strict reason = %q", reason)
 	}
 	t.Setenv("RESTOREGAP_CONTEXT", filepath.Join(dir, "missing"))
 	output = runAgent(t, `{"command":"rm guarded"}`, "hook", "cursor")
-	if !strings.Contains(output, `"permission":"deny"`) || !strings.Contains(output, "recovery gate unavailable") {
-		t.Fatal(output)
-	}
+	assertHookOutput(t, output, "cursor", "deny", "recovery gate unavailable: load_context:")
 }
 
 func TestAgentInstallCursorFreshHome(t *testing.T) {
@@ -92,9 +90,10 @@ func TestAgentInstallCursorFreshHome(t *testing.T) {
 				}
 			}
 			data, err = os.ReadFile(registry)
-			if err != nil || !strings.Contains(string(data), `"mcpServers"`) {
+			if err != nil {
 				t.Fatalf("%v %s", err, data)
 			}
+			assertMCPRegistry(t, data)
 		})
 	}
 }

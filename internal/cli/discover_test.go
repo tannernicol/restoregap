@@ -29,6 +29,7 @@ func TestDiscoverRegisteredOnRoot(t *testing.T) {
 // directory or snapshot history.
 func isolatedDiscoverEnv(t *testing.T) {
 	t.Helper()
+	t.Chdir(agentTestEnv(t))
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -47,6 +48,34 @@ func TestDiscoverTextRun(t *testing.T) {
 	}
 	if !bytes.Contains(out.Bytes(), []byte("coverage:")) {
 		t.Errorf("expected a coverage summary line, got:\n%s", out.String())
+	}
+	// The default text rendering is itself a contract; retain its check and
+	// separately validate the coverage fields exposed to machine consumers.
+	out.Reset()
+	cmd = newDiscoverCmd()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--format", "json", "--no-save"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("discover JSON coverage: %v", err)
+	}
+	var report discover.Report
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("discover JSON coverage: %v\n%s", err, out.String())
+	}
+	covered := 0
+	for _, candidate := range report.Candidates {
+		if candidate.Covered {
+			covered++
+		}
+	}
+	if report.Counts.Candidates != len(report.Candidates) {
+		t.Errorf("counts.candidates = %d, want %d", report.Counts.Candidates, len(report.Candidates))
+	}
+	if report.Counts.Covered != covered {
+		t.Errorf("counts.covered = %d, want %d", report.Counts.Covered, covered)
+	}
+	if want := len(report.Candidates) - covered; report.Counts.Uncovered != want {
+		t.Errorf("counts.uncovered = %d, want %d", report.Counts.Uncovered, want)
 	}
 }
 

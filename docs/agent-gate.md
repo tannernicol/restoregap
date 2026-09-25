@@ -70,6 +70,16 @@ gate denies with `recovery gate unavailable: <cause>`. Recognized operations use
 the existing evaluator and record the decision in the local ledger. The hook
 never executes the proposed command or the suggested recovery drill.
 
+The hook writes its short-lived intent file to `RESTOREGAP_RUNTIME_DIR` when it
+is set; otherwise it uses `$XDG_RUNTIME_DIR/restoregap`, then
+`$XDG_STATE_HOME/restoregap/run` (defaulting to
+`~/.local/state/restoregap/run`), and finally the system temp directory. The
+selected directory is created with mode `0700`. If that write fails, the hook
+evaluates the proposal in memory and logs one degraded-mode notice to stderr:
+an operation with no declared guard still passes so the operator can repair
+storage, while an operation matching a declared guard denies and names the
+write error.
+
 A real deny from the demo fixture before its first drill:
 
 ```json
