@@ -6,6 +6,14 @@ each such change is called out here.
 
 ## [Unreleased]
 
+## [0.11.6] — 2026-09-25
+
+- The agent hook now matches declared guards on both the lexical and the
+  canonical form of a path, so a workspace or temporary directory reached
+  through a symlink (macOS keeps `/var` under `/private/var`) no longer lets a
+  guarded change through. Aliases apply to matching only; proof validation is
+  unchanged.
+
 ## [0.11.5] — 2026-09-24
 
 - The agent hook can now keep its intent files outside an unavailable temporary

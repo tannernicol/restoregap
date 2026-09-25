@@ -45,15 +45,15 @@ Local, offline, no account. [Watch the terminal recording](demo/demo.gif).
 
 ## Quick start
 
-Install the v0.11.5 release, then run the isolated demo fixture. The demo needs
+Install the v0.11.6 release, then run the isolated demo fixture. The demo needs
 `sqlite3` because its fixture is a real SQLite database.
 
 ```console
-$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.11.5/scripts/install.sh
+$ curl -sSfLO https://raw.githubusercontent.com/tannernicol/restoregap/v0.11.6/scripts/install.sh
 $ less install.sh
-$ RESTOREGAP_VERSION=v0.11.5 sh install.sh
+$ RESTOREGAP_VERSION=v0.11.6 sh install.sh
 $ export PATH="$HOME/.local/bin:$PATH"   # use /usr/local/bin when installing as root
-$ git clone --depth 1 --branch v0.11.5 https://github.com/tannernicol/restoregap.git
+$ git clone --depth 1 --branch v0.11.6 https://github.com/tannernicol/restoregap.git
 $ cd restoregap
 $ demo/run.sh
 ```
