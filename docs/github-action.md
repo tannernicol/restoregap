@@ -13,16 +13,18 @@ findings, same as running `preflight --diff` locally.
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: tannernicol/restoregap@v0.11.2
+- uses: tannernicol/restoregap@v0.11.7
   with:
+    version: v0.11.7
     diff-base: origin/${{ github.base_ref }}
 ```
 
-It needs a context declared in the repo — `restoregap.yml` or
+Declare guards in a context file — `restoregap.yml` or
 `restoregap.local.yml` at the root, or a path passed via `context` (one per
-line for more than one file) — the same discovery `preflight`/`status` use
-locally. With no context anywhere, the action still runs, but only the
-built-in zero-config guards (SSH keys, recovery bundles) apply.
+line for more than one file) — for this check to evaluate the repository's
+recovery requirements. Without a discovered context, preflight can still pass
+with no findings; that result does not establish recovery coverage for the
+repository.
 
 Inputs: `version` (release tag, default `latest`), `context` (optional path
 list), `diff-base` (default `origin/${{ github.base_ref }}`), `fail-on`
