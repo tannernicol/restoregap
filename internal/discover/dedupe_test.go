@@ -14,7 +14,7 @@ import (
 // one directory is a symlink alias of the other (a compose bind mount and
 // a convenience symlink both pointing at it).
 func TestDedupeByRealPathMergesSymlinkedDuplicate(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalDir(t, t.TempDir())
 	real := filepath.Join(root, "infra-config", "compose", "ntfy", "data")
 	if err := os.MkdirAll(real, 0o755); err != nil {
 		t.Fatal(err)

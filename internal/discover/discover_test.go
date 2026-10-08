@@ -55,12 +55,27 @@ func fixedOptions(t *testing.T, home, stateDir string, now time.Time) Options {
 	}
 }
 
+// canonicalDir returns dir with symlinks resolved. Production canonicalises
+// candidate paths with EvalSymlinks (dedupe.go), and macOS keeps /tmp and
+// /var as symlinks into /private, so a test that builds its expectations
+// from the raw temp dir passes on Linux and fails on macOS. Expectations
+// must be built from this form.
+func canonicalDir(t *testing.T, dir string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", dir, err)
+	}
+	return resolved
+}
+
 func testHome(t *testing.T) string {
 	t.Helper()
 	home, err := os.MkdirTemp("/tmp", "restoregap-discover-test-")
 	if err != nil {
 		t.Fatal(err)
 	}
+	home = canonicalDir(t, home)
 	t.Cleanup(func() {
 		if err := os.RemoveAll(home); err != nil {
 			t.Errorf("remove test home %s: %v", home, err)
@@ -99,6 +114,46 @@ func TestCollectBuildsReportWithCoverageAndPersists(t *testing.T) {
 	}
 	if _, err := os.Stat(LatestPath(stateDir)); err != nil {
 		t.Errorf("expected latest.json to be written by default (NoSave false): %v", err)
+	}
+}
+
+// TestCollectCoversCandidateReachedThroughSymlinkedHome pins the macOS
+// regression end to end: the operator's home (and the drill written under
+// it) is spelled through a symlink, as /tmp and /var are on macOS, while
+// dedupe canonicalises the candidate's Path. The drill must still cover it.
+func TestCollectCoversCandidateReachedThroughSymlinkedHome(t *testing.T) {
+	// The symlink is on a PARENT of home, like /tmp -> /private/tmp: the
+	// walker does not follow a symlink that is itself the walk root.
+	realParent := canonicalDir(t, t.TempDir())
+	realHome := filepath.Join(realParent, "home")
+	if err := os.Mkdir(realHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkParent := filepath.Join(canonicalDir(t, t.TempDir()), "parent-link")
+	if err := os.Symlink(realParent, linkParent); err != nil {
+		t.Fatal(err)
+	}
+	linkHome := filepath.Join(linkParent, "home")
+	if err := os.WriteFile(filepath.Join(realHome, "app.sqlite3"), make([]byte, databaseMinSize+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := fixedOptions(t, linkHome, t.TempDir(), time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC))
+	opts.Context = contextspec.Context{Drills: []contextspec.Drill{
+		{Proof: "app-db", Artifact: filepath.Join(linkHome, "app.sqlite3")},
+	}}
+
+	report, err := Collect(opts)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	var found *Candidate
+	for i := range report.Candidates {
+		if report.Candidates[i].Name == "app.sqlite3" {
+			found = &report.Candidates[i]
+		}
+	}
+	if found == nil || !found.Covered || found.CoveredBy != "drill:app-db" {
+		t.Fatalf("database reached through a symlinked home not covered as expected: %+v", found)
 	}
 }
 

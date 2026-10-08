@@ -16,11 +16,57 @@ import (
 type coverageIndex struct {
 	drills []contextspec.Drill
 	guards []contextspec.Guard
+	// drillForms[i] holds every spelling of drills[i]'s artifact and
+	// recovery_source worth comparing: the lexical form as declared, plus
+	// the symlink-resolved form when it differs (see pathForms).
+	drillForms [][]string
 }
 
 // newCoverageIndex builds a coverageIndex from ctx.
 func newCoverageIndex(ctx contextspec.Context) coverageIndex {
-	return coverageIndex{drills: ctx.Drills, guards: ctx.Guards}
+	forms := make([][]string, len(ctx.Drills))
+	for i, d := range ctx.Drills {
+		forms[i] = append(pathForms(d.Artifact), pathForms(d.RecoverySource)...)
+	}
+	return coverageIndex{drills: ctx.Drills, guards: ctx.Guards, drillForms: forms}
+}
+
+// pathForms returns the normalized lexical form of p and, when it differs,
+// the symlink-resolved form. Coverage must match on both because dedupe
+// canonicalises a candidate's Path (macOS keeps /tmp and /var under
+// /private) while a drill or guard is written in whatever spelling the
+// operator typed; comparing only one spelling would report a path the
+// context plainly names as uncovered. This is the same lexical-plus-
+// canonical matching the agent hook applies to guards (CHANGELOG 0.11.6).
+// Resolution is best-effort: a path that does not exist (an s3:// URL, a
+// restore target not yet created) just keeps its lexical form.
+func pathForms(p string) []string {
+	norm := normalizePath(p)
+	if norm == "" {
+		return nil
+	}
+	forms := []string{norm}
+	if resolved := resolveSymlinkPath(norm); resolved != norm {
+		forms = append(forms, resolved)
+	}
+	return forms
+}
+
+// coverCandidate reports whether c is covered, trying every spelling the
+// candidate is known by: its (canonical) Path and each AlternatePath.
+// dedupeByRealPath records the path as originally discovered in
+// AlternatePaths precisely so it is not lost, which makes it the lexical
+// spelling a guard glob or drill most likely used.
+func (c coverageIndex) coverCandidate(cand Candidate) (bool, string) {
+	if ok, by := c.cover(cand.Path); ok {
+		return true, by
+	}
+	for _, alt := range cand.AlternatePaths {
+		if ok, by := c.cover(alt); ok {
+			return true, by
+		}
+	}
+	return false, ""
 }
 
 // cover reports whether path is covered by a declared drill's artifact or
@@ -33,9 +79,9 @@ func newCoverageIndex(ctx contextspec.Context) coverageIndex {
 // path, so "a guard's matched path" means exactly what it already means
 // everywhere else in this codebase.
 func (c coverageIndex) cover(path string) (bool, string) {
-	norm := normalizePath(path)
-	for _, d := range c.drills {
-		if pathOverlap(norm, normalizePath(d.Artifact)) || pathOverlap(norm, normalizePath(d.RecoverySource)) {
+	forms := pathForms(path)
+	for i, d := range c.drills {
+		if anyOverlap(forms, c.drillForms[i]) {
 			return true, "drill:" + d.Proof
 		}
 	}
@@ -68,4 +114,16 @@ func pathOverlap(a, b string) bool {
 		return true
 	}
 	return strings.HasPrefix(a, b+string(filepath.Separator)) || strings.HasPrefix(b, a+string(filepath.Separator))
+}
+
+// anyOverlap reports whether any spelling in as overlaps any spelling in bs.
+func anyOverlap(as, bs []string) bool {
+	for _, a := range as {
+		for _, b := range bs {
+			if pathOverlap(a, b) {
+				return true
+			}
+		}
+	}
+	return false
 }
