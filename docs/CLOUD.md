@@ -1,0 +1,164 @@
+# Restore Gap Cloud — the operated layer
+
+Restore Gap Cloud is the hosted half of Restore Gap: a small service that
+receives the signed bundles your hosts already export, keeps them, and
+answers the three questions one binary structurally cannot answer on its own:
+
+1. **Time.** How has each proof's state moved over weeks and months, host by
+   host? Which proofs regressed since the last bundle?
+2. **Breadth.** What does the whole estate look like right now, merged, without
+   anyone running `bundle merge` by hand?
+3. **Absence.** Which host stopped sending? A proof that silently stops
+   arriving is a gap nobody is looking at.
+
+Plus one thing a laptop cannot do credibly: a **share link** a third party
+(an auditor, a customer's security reviewer, a board member) can open to see
+the current recovery record and verify its signatures without shelling into
+any of your machines.
+
+The local tool stays free, MIT, offline and complete. Cloud never unlocks a
+recovery check you need; it operates the retention, monitoring and sharing
+around the checks you already run. Cloud's own source is in this repository
+under the same MIT license, so you can run it yourself.
+
+## What leaves your host, and what never does
+
+The only thing Cloud ever sees is a bundle you pushed. A bundle
+(`docs/SCHEMA.md` §6) carries the context files in force, a `--since`-bounded
+ledger slice, and proof-evidence **metadata** (path, size, hash) — never an
+evidence file's bytes and never a path under a secret store. Cloud has no
+agent, no credentials to your machines, and no way to request more than a
+bundle contains.
+
+The binary never pushes on its own initiative. `restoregap bundle push` is an
+explicit command you put in a cron line, a timer or a CI step; nothing else
+in the binary opens a network connection to Cloud.
+
+## Push a bundle
+
+```sh
+restoregap bundle push \
+  --to https://cloud.restoregap.com \
+  --token "$RESTOREGAP_PUSH_TOKEN" \
+  --context restoregap.yml --ledger ledger.jsonl \
+  --signing-key "$RESTOREGAP_SIGNING_SEED" --since 168h
+```
+
+`push` builds the same signed archive `bundle export` builds (same `--context`,
+`--ledger`, `--signing-key`, `--since`, `--env`, `--system`, `--host`; `--summary-only`
+is not supported), sends it, and prints the host, host id, generation time and
+dashboard URL the service answered with. Pass an existing archive instead of
+export flags: `bundle push --to … --token … host.tgz`.
+
+- `--to` is the service's base URL and must be `https://`. Plain `http://` is
+  accepted only for `localhost`, `127.0.0.1` and `::1`, or with `--insecure-http`.
+- The token comes from `--token` or `RESTOREGAP_PUSH_TOKEN` (prefer the
+  environment variable; flags show up in the process list). It is sent only as
+  a bearer header and is never printed.
+- One request, 30 second timeout, no retries, redirects are not followed.
+- Exit 0 on acceptance; 1 when the service refused the bundle (the reason is
+  printed); 2 on a usage error, a network error or any other response.
+
+`bundle push` only runs when you invoke it. No other command contacts Cloud and
+nothing runs in the background; schedule it yourself if you want it recurring.
+
+Tokens are per workspace, created and revoked in **Settings → Tokens**. A
+token can push; it cannot read, delete or change anything.
+
+## Trust on first use
+
+The first bundle from a host pins that host's signing public key to its
+host id. A later bundle for the same host id signed with a different key is
+refused with `409 key mismatch` until an owner rotates the pinned key in the
+host's settings. Every stored bundle keeps its original signature, so a
+reviewer can re-verify any bundle with `restoregap bundle verify
+--expected-key`.
+
+## Monitoring
+
+Each host has an **expected cadence** (default: none). When a host with a
+cadence has not sent a bundle for 1.5× that interval, Cloud records a
+`lapsed` alert and notifies the workspace's email and webhook; the next
+bundle records `recovered`. Between consecutive bundles from one host, a
+proof whose state moved from healthy to `stale`, `missing`, `failed` or
+`contradicted` records a `proof_regressed` alert.
+
+Alerts are facts about bundles arriving or not, and about declared proof
+state. They are not uptime monitoring and not a claim about the host.
+
+## Share links
+
+A share link is a random, revocable URL that renders the current fleet view
+(or one host) read-only, with each contributing bundle's host, generation
+time, signing public key and signature so the reader can verify it
+independently. It never exposes raw context files or the ledger slice. Links
+can carry an expiry.
+
+## Plans
+
+| Plan | Hosts | Retention | Price |
+|---|---:|---:|---:|
+| Solo | 3 | 90 days | $19 / month |
+| Team | 25 | 1 year | $79 / month |
+| Fleet | 100 | 3 years | $249 / month |
+
+Every workspace starts with a 14-day trial of Team. Retention × hosts is the
+pricing axis because it is the cost axis; nothing in the local tool is
+metered. Billing is Stripe Checkout and the Stripe customer portal; Cloud
+stores the Stripe customer and subscription ids and nothing else about
+payment.
+
+Running Cloud yourself without Stripe configured gives one unlimited
+workspace and hides billing pages.
+
+## API
+
+`POST /api/v1/bundles` — `Authorization: Bearer <token>`, body is the
+`.tgz` (`Content-Type: application/gzip`, 8 MiB limit). Responses:
+
+| Status | Body |
+|---|---|
+| 201 | `{"bundle_id","host","host_id","generated_at","url"}` |
+| 401 | `{"error":"unknown or revoked token"}` |
+| 402 | `{"error":"workspace is not active"}` — trial ended or subscription lapsed |
+| 409 | `{"error":"key mismatch …"}` or `{"error":"host limit reached …"}` |
+| 413 | `{"error":"bundle too large"}` |
+| 422 | `{"error":"bundle failed verification: …"}` |
+
+`GET /api/v1/fleet.json` — same token, returns the merged latest-per-host
+fleet in the `fleet.json` shape `bundle merge` writes.
+
+## Run it yourself
+
+```sh
+go build -o restoregap-cloud ./cmd/restoregap-cloud
+RESTOREGAP_CLOUD_DATA=/var/lib/restoregap-cloud \
+RESTOREGAP_CLOUD_BASE_URL=https://cloud.example.com \
+./restoregap-cloud serve --listen 127.0.0.1:8080
+```
+
+Put a TLS-terminating proxy in front. State is one SQLite database plus the
+bundle archives under the data directory; back them up like anything else
+(and drill the restore — `examples/` has a SQLite drill).
+
+Configuration is environment only:
+
+| Variable | Meaning |
+|---|---|
+| `RESTOREGAP_CLOUD_DATA` | data directory (default `./data`) |
+| `RESTOREGAP_CLOUD_BASE_URL` | public URL, used in emails and share links |
+| `RESTOREGAP_CLOUD_SMTP_URL` | `smtp://user:pass@host:587?from=cloud@example.com`; unset logs magic links to stdout |
+| `RESTOREGAP_CLOUD_STRIPE_SECRET` | Stripe secret key; unset disables billing |
+| `RESTOREGAP_CLOUD_STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret |
+| `RESTOREGAP_CLOUD_PRICE_SOLO` / `_TEAM` / `_FLEET` | Stripe price ids |
+| `RESTOREGAP_CLOUD_ALLOW_SIGNUP` | `false` to refuse new workspaces |
+
+`restoregap-cloud admin …` manages workspaces from the shell on the host
+(create, list, set plan) for self-hosters without Stripe.
+
+## What it is not
+
+- Not uptime monitoring, not a backup product, not a storage target for
+  evidence files, and not a certification.
+- Not a daemon on your hosts: you push, it listens.
+- Not required: everything in `restoregap` works with Cloud absent.

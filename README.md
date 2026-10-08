@@ -160,14 +160,20 @@ release. Model relevant files, commands, packages and recovery dependencies
 explicitly. For restic, borg, or ZFS targets, see the
 [comparators issue](https://github.com/tannernicol/restoregap/issues/2).
 
-## A possible hosted layer
+## Restore Gap Cloud (early access)
 
-The binary is complete and stays free, local, offline, and MIT licensed. A
-future hosted service is only a proposal: optional evidence retention and
-custody, expected-proof monitoring over time, and private links for sharing a
-recovery record. It does not exist yet, and no hosted feature is required to
-use the CLI. If that would help, describe the workflow on the
-[interest-check issue](https://github.com/tannernicol/restoregap/issues/1).
+The binary is complete and stays free, local, offline, and MIT licensed.
+Restore Gap Cloud is the operated layer around it: it receives the signed
+bundles your hosts push, keeps proof history over time, merges every enrolled
+host into one fleet view, alerts when a host stops sending or a proof
+regresses, and issues revocable share links a reviewer can verify
+independently. Nothing in the CLI requires it, and the binary never pushes on
+its own: `restoregap bundle push` is an explicit command you schedule.
+
+Cloud's source is in this repository (`cmd/restoregap-cloud`) under the same
+license, so you can self-host it. The operated service is priced by hosts and
+retention: Solo $19, Team $79, Fleet $249 per month, each with a 14-day trial.
+[How Cloud works, its data boundary, and how to run it yourself](docs/CLOUD.md).
 
 ## FAQ
 
@@ -192,7 +198,8 @@ checks passed at that time. It cannot guarantee a future restore will succeed.
 
 No account or telemetry is required. Evaluation and offline evidence verification
 make no network calls. Explicit recovery commands and validation probes may use
-the network you configure.
+the network you configure. `restoregap bundle push` is the one explicit exception:
+it sends a bundle to a Cloud endpoint, and only when you run it.
 
 ## Docs
 
