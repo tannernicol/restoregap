@@ -1,6 +1,8 @@
-# Portable CI: the subset of the platform gauntlet that runs anywhere.
-# Exists for the same reason gitleaks/ntfy carry a tests badge: a stranger's
-# first trust signal is a green check that ran on someone else's machine.
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
+# Portable CI: format, vet, race tests, hook and packaging tests, the UI build
+# and the site check, on machines that are not the maintainer's. A stranger's
+# first trust signal is a green check that ran somewhere else.
 name: ci
 on:
   push:
@@ -12,16 +14,22 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -race ./...
+      # Known-vulnerability scan of the module's dependencies and the standard
+      # library it builds with. CI installs the tool; the Makefile never does.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
       - run: bash docs/examples/preflight-hook.test.sh
       - run: bash scripts/tests/packaging.sh
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: npm
@@ -32,3 +40,16 @@ jobs:
         working-directory: ui
       - run: node scripts/build-site.mjs --check
       - run: git diff --exit-code -- ui/dist site/index.html ui/mark.svg
+
+  # The suite once had macOS-only failures (for example a symlinked temporary
+  # directory) that nobody saw because CI only ran on Linux.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race ./...

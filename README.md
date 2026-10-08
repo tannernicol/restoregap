@@ -74,6 +74,22 @@ Or choose an archive from the [releases page](https://github.com/tannernicol/res
 or build from source with `go install github.com/tannernicol/restoregap/cmd/restoregap@latest`
 (Go 1.25+).
 
+To verify a release independently of the installer: releases after v0.11.7
+sign `checksums.txt` keylessly with [cosign](https://docs.sigstore.dev/) from
+the release workflow. Download `checksums.txt` and `checksums.txt.sigstore.json`
+from the release, then:
+
+```console
+$ cosign verify-blob checksums.txt \
+    --bundle checksums.txt.sigstore.json \
+    --certificate-identity-regexp '^https://github\.com/tannernicol/restoregap/\.github/workflows/release\.yml@refs/tags/v' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+A passing check proves the checksums were produced by that workflow on a
+tagged release. Then compare your archive's SHA-256 with its line in
+`checksums.txt`.
+
 ## The local gate
 
 The smallest useful loop is:
