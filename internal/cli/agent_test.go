@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func agentTestEnv(t *testing.T) string {
@@ -481,4 +482,126 @@ func TestAgentHookGuardSymlinkedSubdirEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkHook(t, "claude", hookEvent("Write", "file_path", filepath.Join(sub, "secret.db"), dir), "deny", "")
+}
+
+// A compound or wrapped command must be judged by every piece it would run:
+// `echo ok && rm guarded` and `ssh nas docker rm vol` both reached a shell the
+// old first-word parser never looked into. Remote operations can only match
+// `commands:` globs, so the guard here is written the way an operator would.
+func TestAgentHookCompoundAndWrappedCommands(t *testing.T) {
+	dir := agentTestEnv(t)
+	t.Chdir(dir)
+	guarded := filepath.Join(dir, "guarded")
+	policy := fmt.Sprintf(`version: 2
+guards:
+  - id: cloud
+    kind: lifeline
+    match: {commands: ["ssh nas docker rm restoregap-cloud*", "*docker volume rm *restoregap*"]}
+    requires: {proofs: [cloud-recovery]}
+    enforcement: block
+  - id: file
+    kind: lifeline
+    match: {paths: [%q, %q]}
+    requires: {proofs: [file-recovery]}
+    enforcement: block
+`, guarded, filepath.Join(dir, "home", "Backups", "**"))
+	writeContext := func(extra string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy+extra), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bash := func(command string) string { return hookEvent("Bash", "command", command, dir) }
+	writeContext("")
+
+	t.Run("remote command denied before proof, allowed after", func(t *testing.T) {
+		t.Cleanup(func() { writeContext("") })
+		checkHook(t, "claude", bash("ssh nas docker rm restoregap-cloud"), "deny", "Required proof: cloud-recovery")
+		checkHook(t, "claude", bash("ssh -p 2222 -i key nas sudo docker rm restoregap-cloud"), "deny", "Required proof: cloud-recovery")
+		writeContext(fmt.Sprintf("proofs:\n  - id: cloud-recovery\n    status: validated\n    observed_at: %q\n", time.Now().UTC().Format(time.RFC3339)))
+		checkHook(t, "claude", bash("ssh nas docker rm restoregap-cloud"), "allow", "recovery gate passed:")
+	})
+	t.Run("unrelated remote command passes with no guard", func(t *testing.T) {
+		reason := checkHook(t, "claude", bash("ssh nas uptime"), "allow", "no declared guard matched")
+		if strings.Contains(reason, "recovery gate passed") {
+			t.Errorf("an unmatched allow must not claim a proof: %s", reason)
+		}
+	})
+	t.Run("one guarded piece of a remote string denies the whole call", func(t *testing.T) {
+		reason := checkHook(t, "claude", bash(`ssh nas "docker volume rm restoregap-cloud_data && rm -rf /data"`), "deny", "Required proof: cloud-recovery")
+		if !strings.Contains(reason, "(2 operations evaluated)") {
+			t.Errorf("deny should say how many operations were evaluated: %s", reason)
+		}
+	})
+	t.Run("remote path never matches a local path guard", func(t *testing.T) {
+		checkHook(t, "claude", bash("ssh nas rm "+guarded), "allow", "no declared guard matched")
+		checkHook(t, "claude", bash("docker exec ctr rm "+guarded), "allow", "no declared guard matched")
+	})
+	t.Run("guarded delete behind && denied", func(t *testing.T) {
+		checkHook(t, "claude", bash("echo hi && rm "+guarded), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash(`bash -lc "cd /tmp && rm `+guarded+`"`), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash("echo $(rm "+guarded+")"), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash(`rm "`+guarded+`"`), "deny", "Required proof: file-recovery")
+	})
+	t.Run("heredoc does not disable the gate", func(t *testing.T) {
+		commit := "git commit -m \"$(cat <<'EOF'\nFix it (it's fine)\n\nrm -rf " + guarded + "\nEOF\n)\""
+		checkHook(t, "claude", bash(commit), "allow", "not evaluated: unrecognized operation")
+		checkHook(t, "claude", bash(commit+" && rm "+guarded), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash("cat <<EOF | tee "+guarded+"\nbody\nEOF"), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash("cat <<EOF\n$(rm "+guarded+")\nEOF"), "deny", "Required proof: file-recovery")
+		// An unterminated heredoc is the one thing still not parsed.
+		checkHook(t, "claude", bash("cat <<EOF\nrm "+guarded), "allow", "not evaluated: could not parse command (unterminated heredoc)")
+	})
+	t.Run("cd moves what relative paths mean", func(t *testing.T) {
+		checkHook(t, "claude", bash("cd /somewhere/else && rm guarded"), "allow", "no declared guard matched")
+		checkHook(t, "claude", bash("cd sub && cd .. && rm guarded"), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash("cd sub; rm ../guarded"), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash("cd "+dir+"/other && rm ../guarded"), "deny", "Required proof: file-recovery")
+		// A pipe or subshell does not carry the cd out.
+		checkHook(t, "claude", bash("(cd /somewhere/else; true); rm guarded"), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash("cd /somewhere/else | cat; rm guarded"), "deny", "Required proof: file-recovery")
+	})
+	t.Run("tilde means home", func(t *testing.T) {
+		checkHook(t, "claude", bash("echo ok && rm -rf ~/Backups/x"), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash("cd ~/Backups && rm x"), "deny", "Required proof: file-recovery")
+	})
+	t.Run("ledger records every evaluated operation", func(t *testing.T) {
+		checkHook(t, "claude", bash("ls | xargs rm"), "allow", "no declared guard matched")
+		ledger, err := os.ReadFile(os.Getenv("RESTOREGAP_LEDGER"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{`"command":"xargs rm"`, `"command":"ssh nas docker volume rm restoregap-cloud_data"`, `"command":"ssh nas rm -rf /data"`} {
+			if !strings.Contains(string(ledger), want) {
+				t.Errorf("ledger missing %s", want)
+			}
+		}
+	})
+	t.Run("unparseable command is not evaluated", func(t *testing.T) {
+		unparseable := bash("diff <(ls a) b && rm " + guarded)
+		checkHook(t, "claude", unparseable, "allow", "not evaluated: could not parse command (process substitution)")
+		t.Setenv("RESTOREGAP_REQUIRE_COVERAGE", "1")
+		checkHook(t, "claude", unparseable, "deny", "not evaluated: could not parse command (process substitution)")
+	})
+	t.Run("strict mode refuses a line it only partly understood", func(t *testing.T) {
+		t.Setenv("RESTOREGAP_REQUIRE_COVERAGE", "1")
+		checkHook(t, "claude", bash("mystery | xargs rm"), "deny", "")
+		// With every recognized piece covered and passing, the unrecognized
+		// sibling is what is left, and it is named.
+		all := filepath.Join(dir, "strict.yml")
+		strict := "version: 2\nguards:\n  - id: any\n    kind: lifeline\n    match: {commands: [\"*\"]}\n    requires: {proofs: [any-recovery]}\n    enforcement: block\n  - id: any-path\n    kind: lifeline\n    match: {paths: [\"/**\"]}\n    requires: {proofs: [any-recovery]}\n    enforcement: block\nproofs:\n  - id: any-recovery\n    status: validated\n    observed_at: " + fmt.Sprintf("%q", time.Now().UTC().Format(time.RFC3339)) + "\n"
+		if err := os.WriteFile(all, []byte(strict), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("RESTOREGAP_CONTEXT", all)
+		checkHook(t, "claude", bash("mystery | xargs rm"), "deny", "not evaluated: unrecognized operation in compound command")
+		checkHook(t, "claude", bash("xargs rm"), "allow", "recovery gate passed")
+		// Builtins and read-only tools are not mystery pieces.
+		checkHook(t, "claude", bash("ls | xargs rm"), "allow", "recovery gate passed")
+		checkHook(t, "claude", bash("cd /tmp && rm x"), "allow", "recovery gate passed")
+		checkHook(t, "claude", bash("cd /tmp && git status && echo done && rm x"), "allow", "recovery gate passed")
+		checkHook(t, "claude", bash("cd /tmp && mystery && rm x"), "deny", "not evaluated: unrecognized operation in compound command")
+		// Nothing recognized stays the old answer, benign or not.
+		checkHook(t, "claude", bash("cd /tmp && ls"), "deny", "not evaluated: unrecognized operation")
+	})
 }

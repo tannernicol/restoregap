@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -92,6 +93,9 @@ func toolDefs() []toolDef {
 		"as_of":            str("RFC3339 evaluation time (testing)"),
 		"require_coverage": boolean("strict mode: every addressed path, target, package, and command must be covered by a matching guard"),
 	}
+	// ledgerRead describes ledger_path for the read tools, where omitting it
+	// falls back to the same default ledger the CLI uses.
+	ledgerRead := str("ledger to read; omit to use the default ledger (" + defaultLedgerHelp + ")")
 	intentProps := map[string]any{"intent": str("intent YAML content, inline"), "intent_path": str("path to an intent YAML file")}
 	diffProps := map[string]any{"diff": str("unified diff content, inline"), "diff_path": str("path to a diff file")}
 	for k, v := range common {
@@ -101,21 +105,21 @@ func toolDefs() []toolDef {
 	return []toolDef{
 		{"preflight_intent", "Gate a proposed action (intent YAML) on declared recovery invariants; returns the decision JSON.", schema(nil, intentProps), toolAnnotations{"Preflight intent", false}},
 		{"preflight_diff", "Gate a proposed change (unified diff) on declared recovery invariants; returns the decision JSON.", schema(nil, diffProps), toolAnnotations{"Preflight diff", false}},
-		{"acknowledge_risk", "Record an owner-approved override for a blocked decision in the ledger.", schema([]string{"ledger_path", "decision_id", "acknowledgement", "owner"}, map[string]any{
-			"ledger_path": str("ledger to append to"), "decision_id": str("finding/decision id being overridden"),
+		{"acknowledge_risk", "Record an owner-approved override for a blocked decision in the ledger.", schema([]string{"decision_id", "acknowledgement", "owner"}, map[string]any{
+			"ledger_path": str("ledger to append to; omit to use the default ledger (" + defaultLedgerHelp + ")"), "decision_id": str("finding/decision id being overridden"),
 			"acknowledgement": str("owner statement"), "owner": str("who approves"),
 			"reason":     str("test-environment | false-positive | disposable-test-data | emergency | other"),
 			"actor":      str("recording actor"),
 			"expires_in": str("how long the override stays active, e.g. 720h (default 30d, maximum 90d — an override is an exception with a deadline, never an amnesty)"),
 		}), toolAnnotations{"Acknowledge risk", false}},
-		{"explain_decision", "Explain a recorded decision from the ledger.", schema([]string{"ledger_path"}, map[string]any{
-			"ledger_path": str("ledger to read"), "decision_id": str("finding/decision id"), "entry_id": str("ledger entry id")}), toolAnnotations{"Explain decision", true}},
-		{"required_proof", "What proof would let a blocked decision pass.", schema([]string{"ledger_path"}, map[string]any{
-			"ledger_path": str("ledger to read"), "decision_id": str("finding/decision id"), "entry_id": str("ledger entry id")}), toolAnnotations{"Required proof", true}},
-		{"ledger_query", "List ledger entries, optionally filtered by resource or entry id.", schema([]string{"ledger_path"}, map[string]any{
-			"ledger_path": str("ledger to read"), "resource": str("resource substring filter"), "entry_id": str("exact entry id")}), toolAnnotations{"Query ledger", true}},
-		{"story", "Markdown timeline of decisions for a resource.", schema([]string{"ledger_path"}, map[string]any{
-			"ledger_path": str("ledger to read"), "resource": str("resource substring filter")}), toolAnnotations{"Decision story", true}},
+		{"explain_decision", "Explain a recorded decision from the ledger.", schema(nil, map[string]any{
+			"ledger_path": ledgerRead, "decision_id": str("finding/decision id"), "entry_id": str("ledger entry id")}), toolAnnotations{"Explain decision", true}},
+		{"required_proof", "What proof would let a blocked decision pass.", schema(nil, map[string]any{
+			"ledger_path": ledgerRead, "decision_id": str("finding/decision id"), "entry_id": str("ledger entry id")}), toolAnnotations{"Required proof", true}},
+		{"ledger_query", "List ledger entries, optionally filtered by resource or entry id.", schema(nil, map[string]any{
+			"ledger_path": ledgerRead, "resource": str("resource substring filter"), "entry_id": str("exact entry id")}), toolAnnotations{"Query ledger", true}},
+		{"story", "Markdown timeline of decisions for a resource.", schema(nil, map[string]any{
+			"ledger_path": ledgerRead, "resource": str("resource substring filter")}), toolAnnotations{"Decision story", true}},
 		// drill_lint is read-only and static: it parses context_path and reports
 		// per-drill findings, the same checks as `restoregap drill --lint`.
 		// Deliberately NOT a drill-execution tool — a drill runs a user-declared
@@ -182,8 +186,32 @@ type toolArgs struct {
 	Prompt          bool   `json:"prompt"`
 }
 
+// DefaultVersion is the serverInfo.version reported when the caller does not
+// inject a build version with WithVersion.
+const DefaultVersion = "0.0.0-dev"
+
+// Option configures Serve.
+type Option func(*serverConfig)
+
+type serverConfig struct{ version string }
+
+// WithVersion sets the serverInfo.version reported on initialize. The caller
+// (internal/cli) injects its ldflags-stamped build version; this package
+// cannot import internal/cli without a cycle. An empty version is ignored.
+func WithVersion(v string) Option {
+	return func(c *serverConfig) {
+		if v != "" {
+			c.version = v
+		}
+	}
+}
+
 // Serve runs the stdio server until EOF.
-func Serve(ctx context.Context, in io.Reader, out io.Writer) error {
+func Serve(ctx context.Context, in io.Reader, out io.Writer, opts ...Option) error {
+	cfg := serverConfig{version: DefaultVersion}
+	for _, o := range opts {
+		o(&cfg)
+	}
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	enc := json.NewEncoder(out)
@@ -197,7 +225,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 			_ = enc.Encode(rpcResponse{JSONRPC: "2.0", Error: &rpcError{Code: -32700, Message: "parse error"}})
 			continue
 		}
-		resp := handle(ctx, req)
+		resp := handle(ctx, req, cfg)
 		if resp != nil { // notifications get no response
 			if err := enc.Encode(resp); err != nil {
 				return err
@@ -207,7 +235,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	return scanner.Err()
 }
 
-func handle(ctx context.Context, req rpcRequest) *rpcResponse {
+func handle(ctx context.Context, req rpcRequest, cfg serverConfig) *rpcResponse {
 	if req.ID == nil && strings.HasPrefix(req.Method, "notifications/") {
 		return nil
 	}
@@ -217,7 +245,7 @@ func handle(ctx context.Context, req rpcRequest) *rpcResponse {
 		resp.Result = map[string]any{
 			"protocolVersion": "2024-11-05",
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "restoregap", "version": "0.1.0"},
+			"serverInfo":      map[string]any{"name": "restoregap", "version": cfg.version},
 		}
 	case "tools/list":
 		resp.Result = map[string]any{"tools": toolDefs()}
@@ -252,10 +280,11 @@ func callTool(ctx context.Context, name string, a toolArgs) (string, error) {
 	case "acknowledge_risk":
 		return acknowledgeRiskTool(a)
 	case "explain_decision", "required_proof", "ledger_query", "story":
-		if a.LedgerPath == "" {
-			return "", fmt.Errorf("%s requires ledger_path", name)
+		lp, err := resolveLedgerPath(a.LedgerPath, false)
+		if err != nil {
+			return "", err
 		}
-		entries, err := ledger.ReadAll(a.LedgerPath)
+		entries, err := ledger.ReadAll(lp)
 		if err != nil {
 			return "", err
 		}
@@ -567,12 +596,48 @@ func nonEmpty(v, fallback string) string {
 	return v
 }
 
+const defaultLedgerHelp = "$RESTOREGAP_LEDGER, then $XDG_STATE_HOME/restoregap/ledger.jsonl, then ~/.local/state/restoregap/ledger.jsonl"
+
+// resolveLedgerPath returns explicit unchanged when set (an explicit argument
+// is authoritative). Otherwise it applies the same default the CLI uses
+// (internal/cli defaultLedgerPath, which this package cannot import):
+// $RESTOREGAP_LEDGER, then $XDG_STATE_HOME/restoregap/ledger.jsonl, then
+// ~/.local/state/restoregap/ledger.jsonl. Only a writing caller (mkdir=true)
+// creates the parent directory; reads never touch the filesystem.
+func resolveLedgerPath(explicit string, mkdir bool) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	path := os.Getenv("RESTOREGAP_LEDGER")
+	if path == "" {
+		stateDir := os.Getenv("XDG_STATE_HOME")
+		if stateDir == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("resolve default ledger path: %w", err)
+			}
+			stateDir = filepath.Join(home, ".local", "state")
+		}
+		path = filepath.Join(stateDir, "restoregap", "ledger.jsonl")
+	}
+	if mkdir {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return "", fmt.Errorf("default ledger: %w", err)
+		}
+	}
+	return path, nil
+}
+
 // acknowledgeRiskTool records an owner-approved override. Split out of
 // callTool so the deadline rule (NewOverridePayload) reads as its own step
 // rather than one branch of a growing switch.
 func acknowledgeRiskTool(a toolArgs) (string, error) {
-	if a.LedgerPath == "" || a.DecisionID == "" || a.Acknowledgement == "" || a.Owner == "" {
-		return "", fmt.Errorf("acknowledge_risk requires ledger_path, decision_id, acknowledgement, owner")
+	if a.DecisionID == "" || a.Acknowledgement == "" || a.Owner == "" {
+		return "", fmt.Errorf("acknowledge_risk requires decision_id, acknowledgement, owner")
+	}
+	lp, err := resolveLedgerPath(a.LedgerPath, true)
+	if err != nil {
+		return "", err
 	}
 	// Every new override goes through NewOverridePayload so the deadline
 	// rule is enforced at the WRITE path, not only in the reader: this is
@@ -592,7 +657,7 @@ func acknowledgeRiskTool(a toolArgs) (string, error) {
 		return "", fmt.Errorf("acknowledge_risk: %w", err)
 	}
 	payload.Acknowledgement = a.Acknowledgement
-	entry, err := ledger.AppendNow(a.LedgerPath, ledger.EntryOverride, a.Actor, ledger.Payload{Override: payload})
+	entry, err := ledger.AppendNow(lp, ledger.EntryOverride, a.Actor, ledger.Payload{Override: payload})
 	if err != nil {
 		return "", err
 	}

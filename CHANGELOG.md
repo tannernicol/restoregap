@@ -6,6 +6,32 @@ each such change is called out here.
 
 ## [Unreleased]
 
+- The agent hook (`restoregap agent hook`) now parses shell commands instead of
+  reading the first word of the first line. It honors quoting, splits on
+  `&&`, `||`, `;`, `|`, `&` and newlines, follows `$(...)` and backtick
+  substitutions, and unwraps `sudo`, `env`, `nice`, `timeout`, `bash -c`,
+  `ssh host CMD`, `docker exec`, `docker compose exec` and `kubectl exec`.
+  Every recognized operation in one call is evaluated in a single preflight,
+  so `echo ok && rm -rf ~/Backups/x` and `ssh nas docker rm restoregap-cloud`
+  no longer pass unexamined. Remote and container operations are
+  `run_command` with the wrapper kept as a prefix (`ssh nas docker rm ...`), so
+  they match `commands:` globs and never local path guards. Many more
+  destructive shapes are recognized (`find -delete`, `tee`, `cp`/`rsync`
+  destinations, `chmod`, `git reset --hard`/`clean`, `docker rm`/`volume rm`/
+  `compose down`, `kubectl delete`, SQL `DROP`, `restic`/`borg`/`rclone`/`aws s3`
+  deletes, and more). Heredoc bodies are skipped, and `cd` is tracked across
+  `&&`/`;`/newline so `cd /guarded && rm -rf *` resolves against `/guarded`.
+  Unparseable commands (unbalanced quotes, process substitution) are allowed
+  with `not evaluated: could not parse command`, or denied under
+  `RESTOREGAP_REQUIRE_COVERAGE=1`, which also denies a compound command that
+  contains an unrecognized piece other than a builtin or read-only tool. See the shell section of `docs/agent-gate.md`.
+- `restoregap mcp serve` now reports the build version in `serverInfo.version`
+  instead of a hard-coded `0.1.0`.
+- MCP `required_proof`, `explain_decision`, `ledger_query`, `story` and
+  `acknowledge_risk` no longer fail when `ledger_path` is omitted; they use the
+  default ledger (`$RESTOREGAP_LEDGER`, then `$XDG_STATE_HOME/restoregap/ledger.jsonl`,
+  then `~/.local/state/restoregap/ledger.jsonl`). An explicit `ledger_path` still wins.
+
 ## [0.12.0] — 2026-10-08
 
 - CI now also runs format, vet and the race-enabled test suite on macOS, and
