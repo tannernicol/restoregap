@@ -83,29 +83,54 @@ type Fleet struct {
 	Conflicts   []FleetConflict   `json:"conflicts"`
 }
 
+// VerifiedBundle is one already-verified bundle the caller loaded (e.g. from
+// a service's store) with the label fleet rows should carry as SourceBundle.
+// Verification is the caller's job (bundle.LoadVerified / LoadVerifiedBytes);
+// nothing here re-checks a signature.
+type VerifiedBundle struct {
+	Label    string
+	Manifest bundle.Manifest
+	Context  contextspec.Context
+}
+
 // MergeBundles verifies and loads every bundle path (bundle.LoadVerified —
 // a bundle that fails verification aborts the whole merge rather than
-// silently ingesting partial/untrusted data), classifies each bundle's own
-// proofs exactly as a single-host `status` would, and merges them keyed by
-// FleetProof.MergeKey: later Manifest.GeneratedAt wins per key, and every
-// collision is recorded in Conflicts (never silently dropped).
+// silently ingesting partial/untrusted data), then merges them with
+// MergeVerified using each path as its label.
 func MergeBundles(paths []string) (Fleet, error) {
 	if len(paths) == 0 {
 		return Fleet{}, fmt.Errorf("bundle merge: at least one bundle is required")
 	}
-	fleet := Fleet{GeneratedAt: time.Now().UTC()}
-	byKey := map[string]FleetProof{}
-
+	items := make([]VerifiedBundle, 0, len(paths))
 	for _, p := range paths {
 		manifest, ctx, err := bundle.LoadVerified(p)
 		if err != nil {
 			return Fleet{}, fmt.Errorf("bundle merge: %w", err)
 		}
+		items = append(items, VerifiedBundle{Label: p, Manifest: manifest, Context: ctx})
+	}
+	return MergeVerified(items, time.Now().UTC())
+}
+
+// MergeVerified builds a Fleet from already-verified bundles: it classifies
+// each bundle's own proofs exactly as a single-host `status` would
+// (FleetRows) and merges them keyed by FleetProof.MergeKey — later
+// Manifest.GeneratedAt wins per key, and every collision is recorded in
+// Conflicts (never silently dropped). Fleet.GeneratedAt is now. This is the
+// one merge implementation; MergeBundles is the path-loading front end.
+func MergeVerified(items []VerifiedBundle, now time.Time) (Fleet, error) {
+	if len(items) == 0 {
+		return Fleet{}, fmt.Errorf("bundle merge: at least one bundle is required")
+	}
+	fleet := Fleet{GeneratedAt: now}
+	byKey := map[string]FleetProof{}
+
+	for _, item := range items {
 		fleet.Bundles = append(fleet.Bundles, FleetBundleInfo{
-			Path: p, Host: manifest.Host.Name, HostID: manifest.Host.ID,
-			Epoch: manifest.Epoch, GeneratedAt: manifest.GeneratedAt,
+			Path: item.Label, Host: item.Manifest.Host.Name, HostID: item.Manifest.Host.ID,
+			Epoch: item.Manifest.Epoch, GeneratedAt: item.Manifest.GeneratedAt,
 		})
-		for _, row := range fleetRowsForBundle(ctx, manifest, p) {
+		for _, row := range FleetRows(item) {
 			mergeFleetRow(byKey, &fleet.Conflicts, row)
 		}
 	}
@@ -113,6 +138,14 @@ func MergeBundles(paths []string) (Fleet, error) {
 	fleet.Proofs = sortedFleetProofs(byKey)
 	sort.Slice(fleet.Conflicts, func(i, j int) bool { return fleet.Conflicts[i].Key < fleet.Conflicts[j].Key })
 	return fleet, nil
+}
+
+// FleetRows classifies one verified bundle's proofs — the per-bundle half of
+// MergeVerified, so a service can store rows per bundle on ingest and later
+// merge stored rows without re-classifying. Each row carries item.Label as
+// SourceBundle.
+func FleetRows(item VerifiedBundle) []FleetProof {
+	return fleetRowsForBundle(item.Context, item.Manifest, item.Label)
 }
 
 // WriteFleet writes fleet's fleet.json (machine-readable, every merged

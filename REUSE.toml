@@ -31,8 +31,10 @@ SPDX-License-Identifier = "MIT"
 [[annotations]]
 path = [
   ".gitignore",
+  ".dockerignore",
   ".publishignore",
   ".scrub-denylist.example",
+  "deploy/cloud.env.example",
 ]
 SPDX-FileCopyrightText = "2026 Tanner Nicol"
 SPDX-License-Identifier = "MIT"

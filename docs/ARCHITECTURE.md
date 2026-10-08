@@ -132,8 +132,10 @@ of the actual observation.
   state and fixture paths so they do not depend on the maintainer's machine.
 - No backup-storage engine, provider crawler, generic policy language, plugin
   marketplace, remote shell or automatic undo engine.
-- An optional operated retention/lapse-monitoring service remains a proposal.
-  Local evaluation and offline verification do not depend on it.
+- Restore Gap Cloud (`cmd/restoregap-cloud`, [CLOUD.md](CLOUD.md)) is an optional
+  operated retention, lapse-monitoring and sharing service fed only by bundles an
+  operator explicitly pushes. Local evaluation and offline verification do not
+  depend on it.
 
 ## Verification
 

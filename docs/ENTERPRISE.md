@@ -2,7 +2,7 @@
 
 Everything below runs on the free, MIT binary, on your own machines, with no
 account and no phone-home. This doc is "how a company with many hosts wires
-it up", not a pitch for something that doesn't exist yet — see the end.
+it up"; the operated layer that adds time and breadth is at the end.
 
 ## The shape
 
@@ -33,18 +33,17 @@ it up", not a pitch for something that doesn't exist yet — see the end.
    the local ledger is the source of truth; nothing needs a central
    database to answer that question for a single host.
 
-## What a hosted tier would add (not built, not started on speculation)
+## What Cloud adds
 
 A single binary structurally cannot give you *time* and *breadth* across an
-estate: drift trends over months, every host's fleet view already merged
-without you running `bundle merge` by hand, retention scaled to host count,
-alerts when a bundle stops arriving, and a verify URL a third party (an
+estate. Restore Gap Cloud ([docs/CLOUD.md](CLOUD.md)) does: drift over months,
+every host's fleet view already merged, retention scaled to host count,
+alerts when a bundle stops arriving, and a share link a third party (an
 auditor, a customer) can check without shelling into any of your boxes.
-Retention × hosts is the actual pricing axis — a 3-host estate and a
-300-host estate are not the same product.
-
-None of this exists yet. It will not be built speculatively; see the
-interest-check issue linked from the README.
+Retention × hosts is the pricing axis because it is the cost axis: a 3-host
+estate and a 300-host estate are not the same product. Cloud's source is in
+this repository under `cmd/restoregap-cloud`; self-host it, or use the
+operated service.
 
 ## What it never does, hosted or not
 

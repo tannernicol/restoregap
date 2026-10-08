@@ -10,7 +10,9 @@ never have read, matters more than usual.
   It compares metadata — names, counts, fingerprints. There is no code path
   for content, by design.
 - It never phones home. No telemetry, no update check, no network calls
-  except the ones *you* declare in a drill's `recover:` command.
+  except the ones *you* declare in a drill's `recover:` command, and
+  `restoregap bundle push`, which sends a signed bundle to the URL you give it
+  and only runs when you invoke it.
 - It never executes anything outside a drill you declared. `check`,
   `preflight`, `status`, `ledger`, `evidence` are read-only apart from the
   ledger append.

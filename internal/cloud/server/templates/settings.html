@@ -1,0 +1,170 @@
+{{/* SPDX-License-Identifier: MIT */}}
+{{/* SPDX-FileCopyrightText: 2026 Tanner Nicol */}}
+{{define "content"}}
+{{- with .Data}}
+<h1>Settings</h1>
+
+{{- if .NewToken}}
+<section class="rg-banner" data-verdict="pass">
+  <span class="rg-verdict">NEW TOKEN</span>
+  <span>Token "{{.NewTokenName}}" is shown once. It can push bundles; it cannot read, delete or change anything.</span>
+  <span class="rg-next"><code class="cl-secret">{{.NewToken}}</code></span>
+</section>
+{{- end}}
+{{- if .NewShareURL}}
+<section class="rg-banner" data-verdict="pass">
+  <span class="rg-verdict">NEW SHARE LINK</span>
+  <span>Anyone with this link can see the read-only view. It is shown once.</span>
+  <span class="rg-next"><code class="cl-secret">{{.NewShareURL}}</code></span>
+</section>
+{{- end}}
+{{- if .NewWebhookSecret}}
+<section class="rg-banner" data-verdict="pass">
+  <span class="rg-verdict">WEBHOOK SECRET</span>
+  <span>Deliveries are signed with HMAC-SHA256 of the body in the X-RestoreGap-Signature header. The secret is shown once.</span>
+  <span class="rg-next"><code class="cl-secret">{{.NewWebhookSecret}}</code></span>
+</section>
+{{- end}}
+
+<section class="cl-section">
+  <h2>Push tokens</h2>
+  <p class="cl-lede">A token pushes bundles for this workspace. Treat it like a password and give each host or job its own, so one can be revoked alone.</p>
+  <form class="cl-form" method="post" action="/app/settings/tokens">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <div class="ui-kit-field">
+      <label for="token-name">Name</label>
+      <input id="token-name" name="name" required maxlength="100" placeholder="for example: web-1 cron">
+    </div>
+    <div><button class="ui-kit-button is-primary" type="submit">Create token</button></div>
+  </form>
+  {{- if .Tokens}}
+  <div class="rg-tablewrap">
+    <table class="rg-table">
+      <thead><tr><th>Name</th><th>Prefix</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+      <tbody>
+        {{- range .Tokens}}
+        <tr>
+          <td class="cl-wrap">{{.Name}}</td>
+          <td class="cl-hex">{{.Prefix}}…</td>
+          <td title="{{abs .CreatedAt}}">{{rel .CreatedAt}}</td>
+          <td title="{{absp .LastUsedAt}}">{{relp .LastUsedAt}}</td>
+          <td>
+            {{- if .RevokedAt}}<span class="cl-badge" data-kind="revoked">revoked</span>
+            {{- else}}
+            <form class="cl-row-form" method="post" action="/app/settings/tokens/{{.ID}}/revoke">
+              <input type="hidden" name="csrf" value="{{$.CSRF}}">
+              <button class="ui-kit-button" type="submit">Revoke</button>
+            </form>
+            {{- end}}
+          </td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+  </div>
+  {{- else}}
+  <div class="rg-empty">No tokens yet.</div>
+  {{- end}}
+</section>
+
+<section class="cl-section">
+  <h2>Notifications</h2>
+  <p class="cl-lede">Lapsed, recovered and regressed-proof alerts go to these destinations. With none set they are only recorded on the Alerts page.</p>
+  <form class="cl-form" method="post" action="/app/settings/notify">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <div class="ui-kit-field">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" value="{{.WS.NotifyEmail}}" maxlength="254" autocomplete="off">
+      {{- if not .MailEnabled}}
+      <p class="cl-hint">This instance has no SMTP relay configured, so email alerts are written to the server log instead of being sent.</p>
+      {{- end}}
+    </div>
+    <div class="ui-kit-field">
+      <label for="webhook_url">Webhook URL</label>
+      <input id="webhook_url" name="webhook_url" type="url" value="{{.WS.NotifyWebhookURL}}" maxlength="2000" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="ui-kit-field">
+      <label for="webhook_secret">Webhook secret</label>
+      <input id="webhook_secret" name="webhook_secret" type="password" maxlength="200" autocomplete="new-password" placeholder="{{if .HasSecret}}set; leave blank to keep it{{else}}leave blank to generate one{{end}}">
+      <p class="cl-hint">Never shown again after it is saved.</p>
+    </div>
+    {{- if .HasSecret}}
+    <label class="cl-check"><input type="checkbox" name="regenerate" value="1"> Generate a new secret</label>
+    {{- end}}
+    <div><button class="ui-kit-button is-primary" type="submit">Save notifications</button></div>
+  </form>
+</section>
+
+<section class="cl-section">
+  <h2>Share links</h2>
+  <p class="cl-lede">A share link shows the current fleet, or one host, read-only, with each contributing bundle's signing key and signature so the reader can verify it without access to your machines. It never exposes raw context files or the ledger, but it does show host names, context file names and evidence file paths, so share it only with people who may see those.</p>
+  <form class="cl-form" method="post" action="/app/share">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <div class="ui-kit-field">
+      <label for="scope">What to share</label>
+      <select id="scope" name="scope">
+        <option value="fleet">Whole fleet</option>
+        {{- range .Hosts}}
+        <option value="host:{{.ID}}">Host {{.Name}}</option>
+        {{- end}}
+      </select>
+    </div>
+    <div class="ui-kit-field">
+      <label for="expires">Expires</label>
+      <select id="expires" name="expires">
+        {{- range .Expiries}}
+        <option value="{{.Value}}">{{.Label}}</option>
+        {{- end}}
+      </select>
+    </div>
+    <div><button class="ui-kit-button is-primary" type="submit">Create share link</button></div>
+  </form>
+  {{- if .Links}}
+  <div class="rg-tablewrap">
+    <table class="rg-table">
+      <thead><tr><th>Scope</th><th>Created</th><th>Expires</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        {{- range .Links}}
+        <tr>
+          <td class="cl-wrap">{{.Scope}}</td>
+          <td title="{{abs .Link.CreatedAt}}">{{rel .Link.CreatedAt}}</td>
+          <td>{{if .Link.ExpiresAt}}<span title="{{absp .Link.ExpiresAt}}">{{relp .Link.ExpiresAt}}</span>{{else}}never{{end}}</td>
+          <td><span class="cl-badge" data-kind="{{.State}}">{{.State}}</span></td>
+          <td>
+            {{- if eq .State "active"}}
+            <form class="cl-row-form" method="post" action="/app/share/{{.Link.ID}}/revoke">
+              <input type="hidden" name="csrf" value="{{$.CSRF}}">
+              <button class="ui-kit-button" type="submit">Revoke</button>
+            </form>
+            {{- end}}
+          </td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+  </div>
+  {{- else}}
+  <div class="rg-empty">No share links.</div>
+  {{- end}}
+</section>
+
+<section class="cl-section">
+  <h2>Workspace</h2>
+  <dl class="rg-kv">
+    <dt>Name</dt><dd>{{.WS.Name}}</dd>
+    <dt>Plan</dt><dd>{{.WS.Plan}}</dd>
+  </dl>
+  <h2>Members</h2>
+  <div class="rg-tablewrap">
+    <table class="rg-table">
+      <thead><tr><th>Email</th><th>Role</th></tr></thead>
+      <tbody>
+        {{- range .Members}}
+        <tr><td class="cl-wrap">{{.Email}}</td><td>{{.Role}}</td></tr>
+        {{- end}}
+      </tbody>
+    </table>
+  </div>
+</section>
+{{- end}}
+{{end}}

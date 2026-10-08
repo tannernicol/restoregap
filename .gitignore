@@ -12,3 +12,6 @@ coverage.out
 /restoregap-public/
 .gauntlet-steps.log
 /test-results/
+
+# self-host config with secrets (see deploy/cloud.env.example)
+deploy/cloud.env

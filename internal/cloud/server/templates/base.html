@@ -1,0 +1,49 @@
+{{/* SPDX-License-Identifier: MIT */}}
+{{/* SPDX-FileCopyrightText: 2026 Tanner Nicol */}}
+{{define "base"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · Restore Gap Cloud</title>
+<meta name="robots" content="noindex, nofollow">
+<script>{{.ThemeBoot}}</script>
+<style>{{.CSS}}</style>
+<script type="module">{{.JS}}</script>
+</head>
+<body>
+<div class="rg-shell">
+  <header class="rg-topbar">
+    <a class="rg-brand" href="{{if .Authed}}/app{{else}}/{{end}}">{{.Mark}}restore<b>gap</b></a>
+    <span class="rg-meta">Cloud</span>
+    <span class="rg-spacer"></span>
+    {{- if .Authed}}
+    <nav class="cl-nav" aria-label="Main">
+      <a href="/app"{{if eq .Active "dashboard"}} aria-current="page"{{end}}>Dashboard</a>
+      <a href="/app/hosts"{{if eq .Active "hosts"}} aria-current="page"{{end}}>Hosts</a>
+      <a href="/app/alerts"{{if eq .Active "alerts"}} aria-current="page"{{end}}>Alerts</a>
+      <a href="/app/settings"{{if eq .Active "settings"}} aria-current="page"{{end}}>Settings</a>
+      {{- if .BillingOn}}
+      <a href="/app/billing"{{if eq .Active "billing"}} aria-current="page"{{end}}>Billing</a>
+      {{- end}}
+      <form class="cl-inline" method="post" action="/logout">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <button class="cl-link-button" type="submit" title="Signed in as {{.Email}}">Sign out</button>
+      </form>
+    </nav>
+    {{- end}}
+    <button class="rg-theme-toggle" type="button" data-rg-theme-toggle>theme</button>
+  </header>
+
+  <main>
+    {{- if .Flash}}
+    <p class="cl-flash" role="status">{{.Flash}}</p>
+    {{- end}}
+    {{template "content" .}}
+  </main>
+
+  <footer class="rg-footer">Restore Gap Cloud · MIT licensed, self-hostable · no tracking, no third-party requests · <a href="https://restoregap.com/terms.html">Terms</a> · <a href="https://restoregap.com/privacy.html">Privacy</a></footer>
+</div>
+</body>
+</html>
+{{end}}

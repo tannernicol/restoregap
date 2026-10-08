@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
+
+# Self-host Restore Gap Cloud behind your own TLS proxy. Copy deploy/cloud.env.example
+# to deploy/cloud.env, fill it in, then `docker compose -f deploy/docker-compose.yml up -d`.
+services:
+  restoregap-cloud:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: restoregap-cloud:local
+    restart: unless-stopped
+    env_file: cloud.env
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - cloud-data:/data
+
+volumes:
+  cloud-data:

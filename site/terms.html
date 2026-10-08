@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2026 Tanner Nicol -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Restore Gap Cloud — Terms of Service</title>
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<style>
+:root{color-scheme:dark;--bg:#0e1013;--text:#dce0e6;--muted:#98a0ab;--border:#2a2f38;--accent:#d6dce3}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 "Space Grotesk","IBM Plex Sans","Segoe UI",system-ui,sans-serif}
+main{max-width:46rem;margin:0 auto;padding:2.5rem 1rem 4rem}
+h1{font-size:1.75rem;line-height:1.2;margin:0 0 .25rem}h2{font-size:1.15rem;margin:2rem 0 .5rem}
+p,li{color:var(--text)}.muted{color:var(--muted)}a{color:var(--accent)}
+nav a{margin-right:1rem}hr{border:0;border-top:1px solid var(--border);margin:2rem 0}
+</style>
+</head>
+<body>
+<main>
+<nav><a href="index.html">Restore Gap</a><a href="privacy.html">Privacy</a><a href="https://github.com/tannernicol/restoregap/blob/main/docs/CLOUD.md">How Cloud works</a></nav>
+<h1>Terms of Service</h1>
+<p class="muted">Restore Gap Cloud · effective 2026-10-08</p>
+
+<p>These terms cover <strong>Restore Gap Cloud</strong>, the operated service at cloud.restoregap.com, run by Tanner Nicol ("we", "us") from Seattle, Washington, USA. They do not cover the open-source <code>restoregap</code> binary or the Cloud server source, which are licensed to you under the MIT License in the repository and need no account.</p>
+
+<h2>1. The service</h2>
+<p>Cloud receives signed bundles that you explicitly push with <code>restoregap bundle push</code>, stores them for your plan's retention period, shows the merged state of your enrolled hosts, records alerts when a host stops sending or a declared proof regresses, and issues share links you create. It does nothing on your machines and holds no credentials to them.</p>
+
+<h2>2. Your account and workspace</h2>
+<p>You sign in with an email address you control. You are responsible for who can read that mailbox, for the push tokens and share links you create, and for everything pushed to your workspace. Revoke a token or link as soon as you suspect it has leaked.</p>
+
+<h2>3. Early access, and billing if it ever starts</h2>
+<ul>
+<li>During early access the service is free, with no payment method and no time limit. We may limit the number of hosts or the retention for a workspace if it threatens the service for others, and we will tell you first.</li>
+<li>If we introduce paid plans, we email every early-access workspace at least 30 days before anything changes for it, with the price, what stays free, and a way to export everything. Nothing is charged without you choosing a plan.</li>
+<li>Any future payment would be handled by Stripe, cancellable at any time from a billing portal, ending at the close of the paid period, with no refunds of partial periods except where the law requires it.</li>
+</ul>
+
+<h2>4. Acceptable use</h2>
+<p>Push only bundles produced for hosts you operate or are authorised to report on. Do not use the service to store anything other than Restore Gap bundles, to probe or overload it, or to share links with people who may not see the paths those links expose. We may suspend a workspace that breaks these rules or that is used to harm others, and we will tell you why.</p>
+
+<h2>5. Your data</h2>
+<p>Bundles, alerts and settings in your workspace are yours. We use them only to operate the service for you and to keep it secure. You can export your bundles at any time (each stored archive is the exact bytes you pushed) and delete your workspace by emailing us; deletion completes within 30 days. The <a href="privacy.html">privacy policy</a> describes what we store.</p>
+
+<h2>6. What the service does not promise</h2>
+<p>A stored proof is a record that a drill passed at a time, under a policy you declared. The service does not test your recovery, does not certify compliance, insurance acceptance or recoverability, and is not a backup of your data or of your bundles' evidence files. Alerts depend on bundles arriving and on your declared cadence; they are not uptime monitoring. The service is provided "as is", without warranties of any kind, to the extent the law allows.</p>
+
+<h2>7. Availability and support</h2>
+<p>This is a small service run by one person. We aim for it to be available continuously and will tell you about planned maintenance by email, but we do not offer a formal uptime guarantee. Support is by email and through the repository's issues, in English, with a best-effort response within a few business days.</p>
+
+<h2>8. Liability</h2>
+<p>To the extent permitted by law, our total liability for any claim relating to the service is limited to the amount you paid us in the three months before the claim arose. We are not liable for indirect or consequential loss, including loss of data on your own systems, which the service never touches.</p>
+
+<h2>9. Changes and ending the agreement</h2>
+<p>We may update these terms; material changes are announced by email at least 30 days before they apply, and continuing to use the service after that date accepts them. You may end the agreement at any time by cancelling and deleting your workspace. We may end it with 30 days' notice, or immediately for a breach of section 4, and will give you a way to export your data first where we can.</p>
+
+<h2>10. Law</h2>
+<p>These terms are governed by the laws of the State of Washington, USA, and disputes are heard in the courts of King County, Washington, unless the law where you live gives you a right to something else.</p>
+
+<hr>
+<p class="muted">Questions: open an issue on <a href="https://github.com/tannernicol/restoregap/issues">GitHub</a> or write to the address in the repository's SECURITY.md for anything sensitive.</p>
+</main>
+</body>
+</html>

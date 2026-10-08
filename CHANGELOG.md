@@ -18,6 +18,18 @@ each such change is called out here.
   `packaging-test` and `site-check`; `make help` lists them.
 - Added issue forms for bug reports and drill contributions, and a pull
   request template.
+- Added `restoregap bundle push --to <base-url> --token <token>`, which sends a
+  signed bundle (built with the `bundle export` flags, or an existing `.tgz`) to
+  a Restore Gap Cloud endpoint with a single `POST /api/v1/bundles`. It is the
+  one explicit network action the binary has and only runs when you invoke it.
+  The token can come from `RESTOREGAP_PUSH_TOKEN`; redirects are not followed;
+  plain `http://` is refused except for localhost or with `--insecure-http`.
+- Added Restore Gap Cloud, the operated layer: `cmd/restoregap-cloud` is a
+  self-hostable service that receives pushed bundles, keeps proof history,
+  merges enrolled hosts into one fleet view, alerts when a host stops sending
+  or a proof regresses, issues revocable share links a reviewer can verify
+  independently. It carries dormant Stripe support; the operated service is
+  free during early access. Nothing in the CLI requires it. See `docs/CLOUD.md`.
 
 ## [0.11.7] — 2026-09-25
 

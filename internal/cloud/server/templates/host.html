@@ -1,0 +1,107 @@
+{{/* SPDX-License-Identifier: MIT */}}
+{{/* SPDX-FileCopyrightText: 2026 Tanner Nicol */}}
+{{define "content"}}
+{{- with .Data}}
+<h1>{{.Host.Name}} {{if .Host.LapsedAt}}<span class="cl-badge" data-kind="lapsed">lapsed</span>{{end}}</h1>
+<dl class="rg-kv">
+  <dt>Host id</dt><dd class="cl-hex">{{.Host.HostID}}</dd>
+  <dt>Epoch</dt><dd class="cl-hex">{{.Host.Epoch}}</dd>
+  <dt>First seen</dt><dd title="{{abs .Host.FirstSeenAt}}">{{rel .Host.FirstSeenAt}}</dd>
+  <dt>Last seen</dt><dd title="{{abs .Host.LastSeenAt}}">{{rel .Host.LastSeenAt}}</dd>
+  <dt>Expected cadence</dt><dd>{{cadence .Host.ExpectedEvery}}</dd>
+  {{- if .Host.LapsedAt}}
+  <dt>Lapsed</dt><dd title="{{absp .Host.LapsedAt}}">{{relp .Host.LapsedAt}}</dd>
+  {{- end}}
+</dl>
+
+<section class="cl-section">
+  <h2>Pinned signing key</h2>
+  <p class="cl-hint">Trust on first use: the first bundle from this host pinned this Ed25519 public key. Bundles signed by any other key are refused.</p>
+  <pre class="rg-code">{{.Host.PublicKeyHex}}</pre>
+  <p class="cl-hint">Re-verify any bundle you hold, independently of this service:</p>
+  <pre class="rg-code">{{.Verify}}</pre>
+</section>
+
+<section class="cl-section">
+  <h2>Latest proofs</h2>
+  {{- if .Proofs}}
+  <div class="rg-tablewrap">
+    <table class="rg-table">
+      <thead><tr><th>Proof</th><th>State</th><th>Level</th><th>Layer</th><th>Why</th></tr></thead>
+      <tbody>
+        {{- range .Proofs}}
+        <tr>
+          <td class="cl-wrap"><a href="/app/hosts/{{$.Data.Host.ID}}/proofs/{{pathEscape .Proof}}"><code>{{.Proof}}</code></a></td>
+          <td>{{.State}}</td><td>{{.Level}}</td><td>{{.Layer}}</td><td class="cl-wrap">{{.Why}}</td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+  </div>
+  {{- else}}
+  <div class="rg-empty">No proofs in the latest bundle.</div>
+  {{- end}}
+</section>
+
+<section class="cl-section">
+  <h2>Recent bundles</h2>
+  {{- if .Bundles}}
+  <div class="rg-tablewrap">
+    <table class="rg-table">
+      <thead><tr><th>Generated</th><th>Received</th><th>Guards</th><th>Proofs</th><th>Entries</th><th>Size</th><th>SHA-256</th></tr></thead>
+      <tbody>
+        {{- range .Bundles}}
+        <tr id="b-{{.ID}}">
+          <td title="{{abs .GeneratedAt}}">{{rel .GeneratedAt}}</td>
+          <td title="{{abs .ReceivedAt}}">{{rel .ReceivedAt}}</td>
+          <td>{{.Guards}}</td><td>{{.Proofs}}</td><td>{{.LedgerEntries}}</td>
+          <td>{{bytes .SizeBytes}}</td>
+          <td class="cl-hex">{{short .SHA256 12}}</td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+  </div>
+  <p class="cl-hint">The newest {{len .Bundles}} are listed.</p>
+  {{- else}}
+  <div class="rg-empty">No bundles stored for this host.</div>
+  {{- end}}
+</section>
+
+<section class="cl-section">
+  <h2>Host settings</h2>
+  <form class="cl-form" method="post" action="/app/hosts/{{.Host.ID}}">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <div class="ui-kit-field">
+      <label for="name">Name</label>
+      <input id="name" name="name" value="{{.Host.Name}}" required maxlength="200">
+      <p class="cl-hint">Replaces the machine's own hostname everywhere in Cloud; later pushes keep your name.</p>
+    </div>
+    <div class="ui-kit-field">
+      <label for="cadence">Expected cadence</label>
+      <select id="cadence" name="cadence">
+        {{- $cur := .Cadence}}
+        {{- range cadences}}
+        <option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Label}}</option>
+        {{- end}}
+      </select>
+      <p class="cl-hint">When a host sends nothing for 1.5 times this interval, Cloud records a lapsed alert.</p>
+    </div>
+    <div><button class="ui-kit-button is-primary" type="submit">Save</button></div>
+  </form>
+
+  {{- if .IsOwner}}
+  <h2>Rotate pinned key</h2>
+  <form class="cl-form" method="post" action="/app/hosts/{{.Host.ID}}/key">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <div class="ui-kit-field">
+      <label for="public_key">New Ed25519 public key (64 hex characters)</label>
+      <input id="public_key" name="public_key" required pattern="[0-9a-fA-F]{64}" maxlength="64" autocomplete="off" spellcheck="false">
+      <p class="cl-hint">Only do this after you rotated the host's signing key yourself. Old bundles keep their original signatures.</p>
+    </div>
+    <div><button class="ui-kit-button" type="submit">Replace pinned key</button></div>
+  </form>
+  {{- end}}
+</section>
+{{- end}}
+{{end}}

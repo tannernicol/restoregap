@@ -25,7 +25,7 @@ import (
 // the original host's live state.
 func newBundleCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "bundle", Short: "Export, verify, inspect, and merge portable signed bundles"}
-	cmd.AddCommand(newBundleExportCmd(), newBundleVerifyCmd(), newBundleInspectCmd(), newBundleMergeCmd())
+	cmd.AddCommand(newBundleExportCmd(), newBundlePushCmd(), newBundleVerifyCmd(), newBundleInspectCmd(), newBundleMergeCmd())
 	return cmd
 }
 
@@ -86,10 +86,69 @@ func printBundleMergeSummary(cmd *cobra.Command, fleet status.Fleet, jsonPath, h
 	}
 }
 
+// bundleExportFlags holds the flags `bundle export` and `bundle push` share
+// for building a full archive. Both commands register and resolve them
+// through this one type so the two cannot drift.
+type bundleExportFlags struct {
+	since, env, system, host, signingKey, ledgerPath string
+	contextPaths                                     []string
+}
+
+// bundleExportFlagNames lists the flags register adds, so `bundle push` can
+// refuse them next to a positional archive.
+var bundleExportFlagNames = []string{"context", "ledger", "signing-key", "since", "env", "system", "host"}
+
+func (f *bundleExportFlags) register(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&f.since, "since", "", "bound the ledger slice to entries within this window (e.g. 30d, 720h); empty = every entry")
+	cmd.Flags().StringVar(&f.env, "env", "", "narrow proof counts/evidence to this scope.environment")
+	cmd.Flags().StringVar(&f.system, "system", "", "narrow proof counts/evidence to this scope.system")
+	cmd.Flags().StringVar(&f.host, "host", "", "narrow proof counts/evidence to this scope.host")
+	cmd.Flags().StringVar(&f.signingKey, "signing-key", "", "hex ed25519 seed to sign the bundle (required)")
+	cmd.Flags().StringVar(&f.ledgerPath, "ledger", "", "ledger to slice; "+ledgerDiscoveryHelp)
+	cmd.Flags().StringArrayVar(&f.contextPaths, "context", nil, "path to restoregap.yml / restoregap.local.yml; "+contextDiscoveryHelpRepeatable)
+}
+
+// bundleExportInputs is the resolved, validated form of bundleExportFlags.
+type bundleExportInputs struct {
+	paths  []string
+	since  time.Duration
+	ledger string
+}
+
+// resolve discovers the context files, parses --since and resolves the
+// ledger path. name is the command name used in error messages
+// ("bundle export" or "bundle push").
+func (f *bundleExportFlags) resolve(cmd *cobra.Command, name string) (bundleExportInputs, error) {
+	paths := discoverContextPaths(cmd, f.contextPaths)
+	if len(paths) == 0 {
+		cmd.SilenceUsage = true
+		return bundleExportInputs{}, &ExitError{Code: 2, Message: name + ": no context file found — pass --context or run `restoregap context init`"}
+	}
+	sinceDur, err := parseSince(f.since)
+	if err != nil {
+		cmd.SilenceUsage = true
+		return bundleExportInputs{}, &ExitError{Code: 2, Message: name + ": " + err.Error()}
+	}
+	ledgerP, _, err := resolveLedger(f.ledgerPath)
+	if err != nil {
+		return bundleExportInputs{}, err
+	}
+	return bundleExportInputs{paths: paths, since: sinceDur, ledger: ledgerP}, nil
+}
+
+// request builds the full-archive ExportRequest writing to out.
+func (f *bundleExportFlags) request(in bundleExportInputs, out string) bundle.ExportRequest {
+	return bundle.ExportRequest{
+		ContextPaths: in.paths, LedgerPath: in.ledger, Since: in.since,
+		Environment: f.env, System: f.system, Host: f.host,
+		SigningKey: f.signingKey, Out: out,
+	}
+}
+
 func newBundleExportCmd() *cobra.Command {
-	var out, since, env, system, host, signingKey, ledgerPath, asOf, label string
+	var out, asOf, label string
 	var summaryOnly bool
-	var contextPaths []string
+	var flags bundleExportFlags
 	cmd := &cobra.Command{
 		Use:   "export",
 		Short: "Export a signed full archive or fixed-field offline JSON summary",
@@ -103,22 +162,12 @@ func newBundleExportCmd() *cobra.Command {
 			"discovery is the same as `restoregap status`: " + contextDiscoveryHelpRepeatable + ".",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			paths := discoverContextPaths(cmd, contextPaths)
-			if len(paths) == 0 {
-				cmd.SilenceUsage = true
-				return &ExitError{Code: 2, Message: "bundle export: no context file found — pass --context or run `restoregap context init`"}
-			}
-			sinceDur, err := parseSince(since)
-			if err != nil {
-				cmd.SilenceUsage = true
-				return &ExitError{Code: 2, Message: "bundle export: " + err.Error()}
-			}
-			ledgerP, _, err := resolveLedger(ledgerPath)
+			in, err := flags.resolve(cmd, "bundle export")
 			if err != nil {
 				return err
 			}
 			if summaryOnly {
-				if since != "" {
+				if flags.since != "" {
 					cmd.SilenceUsage = true
 					return fmt.Errorf("bundle export: --since cannot be combined with --summary-only")
 				}
@@ -128,11 +177,11 @@ func newBundleExportCmd() *cobra.Command {
 					return err
 				}
 				path, err := bundle.ExportSummary(bundle.SummaryExportRequest{
-					ContextPaths: paths,
-					LedgerPath:   ledgerP,
-					SigningKey:   signingKey,
+					ContextPaths: in.paths,
+					LedgerPath:   in.ledger,
+					SigningKey:   flags.signingKey,
 					Out:          out,
-					Scope:        bundle.ScopeFilter{Environment: env, System: system, Host: host},
+					Scope:        bundle.ScopeFilter{Environment: flags.env, System: flags.system, Host: flags.host},
 					AsOf:         asOfTime,
 					Label:        label,
 				})
@@ -140,18 +189,14 @@ func newBundleExportCmd() *cobra.Command {
 					cmd.SilenceUsage = true
 					return err
 				}
-				printSummaryExportSuccess(cmd, path, signingKey)
+				printSummaryExportSuccess(cmd, path, flags.signingKey)
 				return nil
 			}
 			if asOf != "" || label != "" {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("bundle export: --as-of and --label require --summary-only")
 			}
-			path, err := bundle.Export(bundle.ExportRequest{
-				ContextPaths: paths, LedgerPath: ledgerP, Since: sinceDur,
-				Environment: env, System: system, Host: host,
-				SigningKey: signingKey, Out: out,
-			})
+			path, err := bundle.Export(flags.request(in, out))
 			if err != nil {
 				cmd.SilenceUsage = true
 				return err
@@ -162,15 +207,9 @@ func newBundleExportCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&out, "out", "", "output path: tar.gz archive by default, JSON summary with --summary-only")
 	cmd.Flags().BoolVar(&summaryOnly, "summary-only", false, "write a signed fixed-field offline JSON summary without raw context or ledger contents")
-	cmd.Flags().StringVar(&since, "since", "", "bound the ledger slice to entries within this window (e.g. 30d, 720h); empty = every entry")
-	cmd.Flags().StringVar(&env, "env", "", "narrow proof counts/evidence to this scope.environment")
-	cmd.Flags().StringVar(&system, "system", "", "narrow proof counts/evidence to this scope.system")
-	cmd.Flags().StringVar(&host, "host", "", "narrow proof counts/evidence to this scope.host")
-	cmd.Flags().StringVar(&signingKey, "signing-key", "", "hex ed25519 seed to sign the bundle (required)")
 	cmd.Flags().StringVar(&asOf, "as-of", "", "evaluate proof outcomes as of this RFC3339 time (summary only; empty = generated time)")
 	cmd.Flags().StringVar(&label, "label", "", "optional operator-supplied display label, signed but not independently verified (summary only)")
-	cmd.Flags().StringVar(&ledgerPath, "ledger", "", "ledger to slice; "+ledgerDiscoveryHelp)
-	cmd.Flags().StringArrayVar(&contextPaths, "context", nil, "path to restoregap.yml / restoregap.local.yml; "+contextDiscoveryHelpRepeatable)
+	flags.register(cmd)
 	return cmd
 }
 
