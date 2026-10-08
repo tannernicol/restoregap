@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -275,7 +277,12 @@ func TestCorruptAndTamperedArchivesAreRefused(t *testing.T) {
 	if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(out["error"], "digest mismatch") {
 		t.Fatalf("tampered context = %d %v", resp.StatusCode, out)
 	}
-	if strings.Contains(out["error"], "restoregap-bundle-ctx") || strings.Contains(out["error"], "/tmp") || strings.Contains(out["error"], "/var/") {
+	// The tar member name ("context/tmp__…") is the pusher's own path, mangled
+	// by the pusher; what must never appear is the SERVER's staging directory.
+	// On Linux os.TempDir() is "/tmp", so the check needs the trailing slash
+	// or it would match the member name's "context/tmp__" and fail for the
+	// wrong reason.
+	if strings.Contains(out["error"], "restoregap-bundle-ctx") || strings.Contains(out["error"], filepath.Clean(os.TempDir())+string(filepath.Separator)) {
 		t.Fatalf("error leaks a server path: %q", out["error"])
 	}
 	if n, _ := e.st.CountHosts(ws.ID); n != 0 {
