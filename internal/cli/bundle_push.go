@@ -50,7 +50,7 @@ func newBundlePushCmd() *cobra.Command {
 			"--to must be https://; plain http:// is accepted only for localhost/127.0.0.1/::1 or with\n" +
 			"--insecure-http. Redirects are not followed, there is a 30s timeout, and there are no retries.\n" +
 			"\n" +
-			"Exit 0 when the service accepts the bundle; 1 when it refuses it (401/402/409/413/422 — the\n" +
+			"Exit 0 when the service accepts the bundle (or already holds that exact archive); 1 when it refuses it (401/402/409/413/422 — the\n" +
 			"reason is printed); 2 on a usage error, a network error, or any other response.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -198,7 +198,13 @@ func postBundle(endpoint, token string, body []byte) (int, []byte, error) {
 func reportPush(cmd *cobra.Command, status int, body []byte) error {
 	out := cmd.OutOrStdout()
 	switch status {
-	case http.StatusCreated:
+	case http.StatusCreated, http.StatusOK:
+		// 200 is the service saying "this exact archive is already stored": a
+		// retried cron or a double run, which is success, not a failure.
+		verb := "pushed"
+		if status == http.StatusOK {
+			verb = "already stored"
+		}
 		var r struct {
 			Host        string `json:"host"`
 			HostID      string `json:"host_id"`
@@ -206,10 +212,10 @@ func reportPush(cmd *cobra.Command, status int, body []byte) error {
 			URL         string `json:"url"`
 		}
 		if err := json.Unmarshal(body, &r); err != nil {
-			_, _ = fmt.Fprintln(out, "pushed: the service accepted the bundle (201) but returned an unreadable response")
+			_, _ = fmt.Fprintf(out, "%s: the service accepted the bundle (%d) but returned an unreadable response\n", verb, status)
 			return nil
 		}
-		_, _ = fmt.Fprintf(out, "pushed: %s (%s) generated %s → %s\n",
+		_, _ = fmt.Fprintf(out, "%s: %s (%s) generated %s → %s\n", verb,
 			cleanServerText(r.Host), cleanServerText(r.HostID), cleanServerText(r.GeneratedAt), cleanServerText(r.URL))
 		return nil
 	case http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusConflict,

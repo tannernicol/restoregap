@@ -121,6 +121,20 @@ func TestBundlePushExistingArchiveSuccess(t *testing.T) {
 	}
 }
 
+func TestBundlePushDuplicateArchiveIsSuccess(t *testing.T) {
+	_, _, archive := pushFixture(t)
+	srv, _ := pushServer(t, 200, `{"bundle_id":"b1","host":"push-host","host_id":"0123456789abcdef","generated_at":"2026-10-07T00:00:00Z","url":"https://cloud.example/hosts/0123"}`)
+	t.Setenv(pushTokenEnv, "")
+	out, err := runBundle(t, "push", "--to", srv.URL, "--token", pushTestToken, archive)
+	if err != nil {
+		t.Fatalf("a 200 (already stored) must exit 0: %v — %s", err, out)
+	}
+	want := "already stored: push-host (0123456789abcdef) generated 2026-10-07T00:00:00Z → https://cloud.example/hosts/0123\n"
+	if out != want {
+		t.Errorf("output = %q, want %q", out, want)
+	}
+}
+
 func TestBundlePushBuildsArchiveFromExportFlags(t *testing.T) {
 	ctxPath, ledgerPath, _ := pushFixture(t)
 	srv, c := pushServer(t, 201, `{"host":"push-host","host_id":"0123456789abcdef","generated_at":"t","url":"u"}`)
