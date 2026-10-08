@@ -263,6 +263,10 @@ and similar removed:
 
 Guard these with `commands:` globs such as `ssh nas docker rm restoregap-cloud*`
 or `*docker volume rm *restoregap*`. A `user@` prefix on the ssh host is dropped.
+A guard constrains every match dimension it lists at once, so one guard with
+both `paths:` and `commands:` matches only an operation that has both. Declare
+the backup set under one guard and the deployment commands under another, each
+requiring the same proof.
 A remote string is re-parsed, so each command in it is evaluated separately.
 Every wrapped command is evaluated, including harmless ones such as
 `ssh nas uptime`, which pass as "no declared guard matched" unless a guard
