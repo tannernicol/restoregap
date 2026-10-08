@@ -6,6 +6,8 @@ each such change is called out here.
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-10-08
+
 - CI now also runs format, vet and the race-enabled test suite on macOS, and
   scans dependencies with `govulncheck` on Linux. Third-party GitHub Actions
   are pinned to commit SHAs, and Dependabot proposes grouped weekly updates.

@@ -107,3 +107,20 @@ proof into a workspace on the same service.
   new version.
 - Retention pruning and alert delivery run inside the process every
   `--monitor-every` (default 1m); nothing else is scheduled.
+
+## The early-access instance (maintainer notes)
+
+cloud.restoregap.com currently runs on the NAS as two containers on a
+dedicated Docker network, `restoregap-cloud` (the static binary bind-mounted
+into `gcr.io/distroless/static-debian12:nonroot`, data under
+`Container/restoregap-cloud/data`, signup closed, billing off) and
+`restoregap-cloud-tunnel` (`cloudflare/cloudflared` with the token stored in
+`pass cloudflare/restoregap-cloud-tunnel-token`). The Cloudflare tunnel is
+named `restoregap-cloud` and is separate from the homelab tunnel; the DNS
+record is a proxied CNAME `cloud` → `<tunnel-id>.cfargotunnel.com`.
+
+Create a workspace for someone: `docker exec restoregap-cloud /restoregap-cloud
+admin workspace create --email them@example.com` prints a single-use sign-in
+link valid 24 hours. Tear it all down: remove the two containers and the
+network, delete the DNS record and the tunnel in Cloudflare, remove the
+`Container/restoregap-cloud` directory.

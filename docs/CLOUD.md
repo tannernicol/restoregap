@@ -189,8 +189,11 @@ restoregap-cloud admin token create <workspace-id> --name web-1   # prints the t
 
 The operated service runs under the [terms](https://restoregap.com/terms.html)
 and [privacy policy](https://restoregap.com/privacy.html) on restoregap.com.
-Hosting provider for the operated service: not yet chosen (early access);
-this line is updated when it is. Early access is free; see Plans.
+The early-access instance at cloud.restoregap.com runs on the maintainer's
+own hardware behind a Cloudflare tunnel, with signup closed: ask for a
+workspace on the interest-check issue and you get a sign-in link. Early
+access is free; see Plans. It will move to a hosting provider before any
+paid tier exists; this line is updated when it does.
 
 ## What it is not
 
