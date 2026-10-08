@@ -160,7 +160,7 @@ release. Model relevant files, commands, packages and recovery dependencies
 explicitly. For restic, borg, or ZFS targets, see the
 [comparators issue](https://github.com/tannernicol/restoregap/issues/2).
 
-## Restore Gap Cloud (early access)
+## Restore Gap Cloud (free early access)
 
 The binary is complete and stays free, local, offline, and MIT licensed.
 Restore Gap Cloud is the operated layer around it: it receives the signed
@@ -171,8 +171,10 @@ independently. Nothing in the CLI requires it, and the binary never pushes on
 its own: `restoregap bundle push` is an explicit command you schedule.
 
 Cloud's source is in this repository (`cmd/restoregap-cloud`) under the same
-license, so you can self-host it. The operated service is priced by hosts and
-retention: Solo $19, Team $79, Fleet $249 per month, each with a 14-day trial.
+license, so you can self-host it. The operated service is free while it is in
+early access; whether and how it is ever priced will follow from what early
+users say. Ask for a workspace on the
+[interest-check issue](https://github.com/tannernicol/restoregap/issues/1).
 [How Cloud works, its data boundary, and how to run it yourself](docs/CLOUD.md).
 
 ## FAQ

@@ -28,8 +28,8 @@ each such change is called out here.
   self-hostable service that receives pushed bundles, keeps proof history,
   merges enrolled hosts into one fleet view, alerts when a host stops sending
   or a proof regresses, issues revocable share links a reviewer can verify
-  independently, and bills through Stripe (Solo/Team/Fleet by hosts and
-  retention). Nothing in the CLI requires it. See `docs/CLOUD.md`.
+  independently. It carries dormant Stripe support; the operated service is
+  free during early access. Nothing in the CLI requires it. See `docs/CLOUD.md`.
 
 ## [0.11.7] — 2026-09-25
 

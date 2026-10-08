@@ -117,20 +117,16 @@ who must not see them.
 
 ## Plans
 
-| Plan | Hosts | Retention | Price |
-|---|---:|---:|---:|
-| Solo | 3 | 90 days | $19 / month |
-| Team | 25 | 1 year | $79 / month |
-| Fleet | 100 | 3 years | $249 / month |
+Early access is free: one workspace per person, no host limit, no payment
+method, no time limit. The point of early access is feedback on whether
+retention, monitoring and share links are worth operating at all, and for
+whom. If a paid tier is ever introduced, existing early-access workspaces
+get at least 30 days' notice and a way to export everything first.
 
-Every workspace starts with a 14-day trial of Team. Retention × hosts is the
-pricing axis because it is the cost axis; nothing in the local tool is
-metered. Billing is Stripe Checkout and the Stripe customer portal; Cloud
-stores the Stripe customer and subscription ids and nothing else about
-payment.
-
-Running Cloud yourself without Stripe configured gives one unlimited
-workspace and hides billing pages.
+The service carries dormant Stripe support (a three-plan table keyed by hosts
+and retention) so that a paid tier would not need a rewrite. It is inert
+unless the operator sets the Stripe variables below; the operated service
+does not set them.
 
 ## API
 
@@ -142,7 +138,7 @@ workspace and hides billing pages.
 | 201 | `{"bundle_id","host","host_id","generated_at","url"}` |
 | 200 | the same body, for an archive this host already pushed (nothing changes) |
 | 401 | `{"error":"unknown or revoked token"}` |
-| 402 | `{"error":"workspace is not active"}` — trial ended or subscription lapsed |
+| 402 | `{"error":"workspace is not active"}` — only possible when billing is enabled |
 | 409 | `{"error":"key mismatch …"}` or `{"error":"host limit reached …"}` |
 | 413 | `{"error":"bundle too large"}` |
 | 422 | `{"error":"bundle failed verification: …"}` |
@@ -170,7 +166,7 @@ Configuration is environment only:
 | `RESTOREGAP_CLOUD_DATA` | data directory (default `./data`) |
 | `RESTOREGAP_CLOUD_BASE_URL` | public URL, used in emails and share links |
 | `RESTOREGAP_CLOUD_SMTP_URL` | `smtp://user:pass@host:587?from=cloud@example.com`; unset logs magic links to stdout |
-| `RESTOREGAP_CLOUD_STRIPE_SECRET` | Stripe secret key; unset disables billing |
+| `RESTOREGAP_CLOUD_STRIPE_SECRET` | Stripe secret key; unset (the default, and early access) disables billing |
 | `RESTOREGAP_CLOUD_STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret; required when the Stripe secret is set |
 | `RESTOREGAP_CLOUD_PRICE_SOLO` / `_TEAM` / `_FLEET` | Stripe price ids |
 | `RESTOREGAP_CLOUD_ALLOW_SIGNUP` | `false` to refuse new workspaces |
@@ -194,7 +190,7 @@ restoregap-cloud admin token create <workspace-id> --name web-1   # prints the t
 The operated service runs under the [terms](https://restoregap.com/terms.html)
 and [privacy policy](https://restoregap.com/privacy.html) on restoregap.com.
 Hosting provider for the operated service: not yet chosen (early access);
-this line is updated when it is.
+this line is updated when it is. Early access is free; see Plans.
 
 ## What it is not
 
