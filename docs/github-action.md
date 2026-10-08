@@ -13,9 +13,9 @@ findings, same as running `preflight --diff` locally.
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: tannernicol/restoregap@v0.11.7
+- uses: tannernicol/restoregap@v0.12.0
   with:
-    version: v0.11.7
+    version: v0.12.0
     diff-base: origin/${{ github.base_ref }}
 ```
 

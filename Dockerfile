@@ -17,6 +17,9 @@ RUN CGO_ENABLED=0 go build -trimpath \
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/restoregap-cloud /restoregap-cloud
 ENV RESTOREGAP_CLOUD_DATA=/data
+# Bundle context files are staged under TMPDIR during verification; run with
+# `--read-only --tmpfs /tmp` rather than making the root writable.
+ENV TMPDIR=/tmp
 VOLUME ["/data"]
 EXPOSE 8080
 USER nonroot:nonroot
