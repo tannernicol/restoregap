@@ -124,6 +124,11 @@ data under `Container/restoregap-cloud/data`, signup closed, billing off) and
 named `restoregap-cloud` and is separate from the homelab tunnel; the DNS
 record is a proxied CNAME `cloud` → `<tunnel-id>.cfargotunnel.com`.
 
+A host that first pushed with a throwaway key is pinned to it; rotate from
+the NAS with `docker exec restoregap-cloud /restoregap-cloud admin host set-key
+<workspace> <host-id> <hex-public-key>` (`admin host list <workspace>` shows
+them).
+
 Create a workspace for someone: `docker exec restoregap-cloud /restoregap-cloud
 admin workspace create --email them@example.com` prints a single-use sign-in
 link valid 24 hours. Tear it all down: remove the two containers and the

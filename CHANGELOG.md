@@ -6,6 +6,9 @@ each such change is called out here.
 
 ## [Unreleased]
 
+- Cloud: `restoregap-cloud admin host list` and `admin host set-key` let a
+  self-hoster see and rotate a host's pinned signing key from the shell.
+
 ## [0.12.1] — 2026-10-08
 
 - The agent hook (`restoregap agent hook`) now parses shell commands instead of

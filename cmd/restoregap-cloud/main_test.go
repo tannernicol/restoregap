@@ -198,3 +198,48 @@ func TestServeRefusesBadInput(t *testing.T) {
 }
 
 func slogTo(w io.Writer) *slog.Logger { return slog.New(slog.NewTextHandler(w, nil)) }
+
+func TestAdminHostListAndSetKey(t *testing.T) {
+	env := testEnv(t)
+	out, _, err := run(t, env, "admin", "workspace", "create", "--email", "ops@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wsID := regexp.MustCompile(`workspace ([0-9a-f]{32}) `).FindStringSubmatch(out)[1]
+
+	st, err := store.Open(env("RESTOREGAP_CLOUD_DATA"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldKey := strings.Repeat("ab", 32)
+	if _, err := st.UpsertHostOnBundle(wsID, "deadbeefdeadbeef", "box", "epoch1", oldKey, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+
+	out, _, err = run(t, env, "admin", "host", "list", wsID)
+	if err != nil || !strings.Contains(out, "deadbeefdeadbeef") || !strings.Contains(out, oldKey) {
+		t.Fatalf("host list = %q, %v", out, err)
+	}
+
+	if _, _, err := run(t, env, "admin", "host", "set-key", wsID, "deadbeefdeadbeef", "not-hex"); err == nil {
+		t.Fatal("a malformed key was accepted")
+	}
+	if _, _, err := run(t, env, "admin", "host", "set-key", wsID, "0000000000000000", strings.Repeat("cd", 32)); err == nil {
+		t.Fatal("an unknown host was accepted")
+	}
+	newKey := strings.ToUpper(strings.Repeat("cd", 32))
+	out, _, err = run(t, env, "admin", "host", "set-key", wsID, "deadbeefdeadbeef", newKey)
+	if err != nil || !strings.Contains(out, "now pinned to key cdcdcdcdcdcd") {
+		t.Fatalf("set-key = %q, %v", out, err)
+	}
+	st, err = store.Open(env("RESTOREGAP_CLOUD_DATA"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	h, err := st.GetHostByHostID(wsID, "deadbeefdeadbeef")
+	if err != nil || h.PublicKeyHex != strings.ToLower(newKey) {
+		t.Fatalf("pinned key after rotation = %q, %v", h.PublicKeyHex, err)
+	}
+}

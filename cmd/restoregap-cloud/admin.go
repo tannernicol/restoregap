@@ -48,8 +48,70 @@ func newAdminCmd(env func(string) string, stdout, stderr io.Writer) *cobra.Comma
 		newWorkspaceSetPlanCmd(env, stdout))
 	tok := &cobra.Command{Use: "token", Short: "Create push tokens"}
 	tok.AddCommand(newTokenCreateCmd(env, stdout, stderr))
-	admin.AddCommand(ws, tok)
+	host := &cobra.Command{Use: "host", Short: "List hosts and rotate a pinned signing key"}
+	host.AddCommand(newHostListCmd(env, stdout), newHostSetKeyCmd(env, stdout))
+	admin.AddCommand(ws, tok, host)
 	return admin
+}
+
+func newHostListCmd(env func(string) string, stdout io.Writer) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list <workspace-id>",
+		Short: "List a workspace's hosts with their pinned keys",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			_, st, err := openAdmin(env)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = st.Close() }()
+			hosts, err := st.ListHosts(args[0])
+			if err != nil {
+				return err
+			}
+			tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(tw, "HOST-ID\tNAME\tPUBLIC-KEY\tLAST-SEEN\tLAPSED")
+			for _, h := range hosts {
+				lapsed := ""
+				if h.LapsedAt != nil {
+					lapsed = h.LapsedAt.UTC().Format(time.RFC3339)
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", h.HostID, h.Name, h.PublicKeyHex, h.LastSeenAt.UTC().Format(time.RFC3339), lapsed)
+			}
+			return tw.Flush()
+		},
+	}
+}
+
+// newHostSetKeyCmd is the shell form of the owner's key rotation on the host
+// page: a self-hoster without SMTP has no quick way to a browser session, and
+// the first push from a machine pins whatever key it happened to sign with.
+func newHostSetKeyCmd(env func(string) string, stdout io.Writer) *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-key <workspace-id> <host-id> <hex-ed25519-public-key>",
+		Short: "Replace the signing key pinned to a host (owner key rotation)",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(_ *cobra.Command, args []string) error {
+			key := strings.ToLower(strings.TrimSpace(args[2]))
+			if len(key) != 64 || strings.Trim(key, "0123456789abcdef") != "" {
+				return fmt.Errorf("public key must be 64 hex characters (an Ed25519 public key)")
+			}
+			_, st, err := openAdmin(env)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = st.Close() }()
+			h, err := st.GetHostByHostID(args[0], args[1])
+			if err != nil {
+				return fmt.Errorf("host %q in workspace %q: %w", args[1], args[0], err)
+			}
+			if err := st.SetHostPublicKey(h.ID, key); err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "host %s (%s) now pinned to key %s…\n", h.HostID, h.Name, key[:12])
+			return nil
+		},
+	}
 }
 
 func newWorkspaceListCmd(env func(string) string, stdout io.Writer) *cobra.Command {
