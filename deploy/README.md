@@ -59,6 +59,11 @@ systemctl daemon-reload && systemctl enable --now restoregap-cloud
 journalctl -u restoregap-cloud -f
 ```
 
+The service stages each pushed bundle's context files in the temp directory
+while it verifies them, so a read-only root filesystem needs a writable
+tmpfs at `/tmp` (the unit file's `PrivateTmp=yes` provides one; in Docker use
+`--read-only --tmpfs /tmp`). Found the hard way on the first live push.
+
 Put Caddy or nginx in front with a certificate for the hostname, proxying to
 `127.0.0.1:8080`. With Caddy the whole config is:
 
@@ -112,8 +117,8 @@ proof into a workspace on the same service.
 
 cloud.restoregap.com currently runs on the NAS as two containers on a
 dedicated Docker network, `restoregap-cloud` (the static binary bind-mounted
-into `gcr.io/distroless/static-debian12:nonroot`, data under
-`Container/restoregap-cloud/data`, signup closed, billing off) and
+into `gcr.io/distroless/static-debian12:nonroot`, `--read-only --tmpfs /tmp`,
+data under `Container/restoregap-cloud/data`, signup closed, billing off) and
 `restoregap-cloud-tunnel` (`cloudflare/cloudflared` with the token stored in
 `pass cloudflare/restoregap-cloud-tunnel-token`). The Cloudflare tunnel is
 named `restoregap-cloud` and is separate from the homelab tunnel; the DNS
