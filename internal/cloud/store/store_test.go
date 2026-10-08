@@ -136,16 +136,23 @@ func TestTokenLifecycleAndNoPlaintextAtRest(t *testing.T) {
 	if _, _, err := s.LookupToken(plain + "x"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown token err = %v", err)
 	}
-	if err := s.RevokeToken(tok.ID); err != nil {
+	other := mustWS(t, s, "other")
+	if err := s.RevokeToken(other.ID, tok.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-workspace revoke err = %v", err)
+	}
+	if _, _, err := s.LookupToken(plain); err != nil {
+		t.Fatalf("cross-workspace revoke must not disable the token: %v", err)
+	}
+	if err := s.RevokeToken(ws.ID, tok.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RevokeToken(tok.ID); err != nil {
+	if err := s.RevokeToken(ws.ID, tok.ID); err != nil {
 		t.Fatalf("second revoke should be idempotent: %v", err)
 	}
 	if _, _, err := s.LookupToken(plain); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("revoked token err = %v", err)
 	}
-	if err := s.RevokeToken("nope"); !errors.Is(err, ErrNotFound) {
+	if err := s.RevokeToken(ws.ID, "nope"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("revoke unknown err = %v", err)
 	}
 	list, err := s.ListTokens(ws.ID)
@@ -621,5 +628,82 @@ func TestConcurrentSaveBundle(t *testing.T) {
 		if rows, _ := s.ProofsForBundle(ws.ID, b.ID); len(rows) != 2 {
 			t.Errorf("bundle %s has %d proof rows", b.ID, len(rows))
 		}
+	}
+}
+
+func TestEnsureUserAndListMembers(t *testing.T) {
+	s := openTemp(t)
+	u, err := s.EnsureUser("  Owner@Example.COM ")
+	if err != nil || u.Email != "owner@example.com" {
+		t.Fatalf("EnsureUser = %+v, %v", u, err)
+	}
+	again, err := s.EnsureUser("owner@example.com")
+	if err != nil || again.ID != u.ID {
+		t.Fatalf("EnsureUser must be idempotent: %+v, %v", again, err)
+	}
+	if _, err := s.EnsureUser("not-an-email"); err == nil {
+		t.Fatal("EnsureUser accepted an address without @")
+	}
+
+	ws, err := s.CreateWorkspace("acme", "team", "active", nil, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.EnsureUser("b-member@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddMembership(ws.ID, m.ID, "member"); err != nil {
+		t.Fatal(err)
+	}
+	other := mustWS(t, s, "other")
+	members, err := s.ListMembers(ws.ID)
+	if err != nil || len(members) != 2 || members[0].Role != "owner" || members[0].Email != u.Email ||
+		members[1].Email != "b-member@example.com" {
+		t.Fatalf("ListMembers = %+v, %v", members, err)
+	}
+	if none, _ := s.ListMembers(other.ID); len(none) != 0 {
+		t.Fatalf("members leaked across workspaces: %+v", none)
+	}
+}
+
+func TestSetHostNameSurvivesPush(t *testing.T) {
+	s := openTemp(t)
+	ws := mustWS(t, s, "acme")
+	other := mustWS(t, s, "other")
+	t0 := time.Now().UTC().Truncate(time.Second)
+	h, err := s.UpsertHostOnBundle(ws.ID, "web-1", "machine-name", "e1", "aa", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetHostName(other.ID, h.ID, "hijack"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-workspace rename err = %v", err)
+	}
+	if err := s.SetHostName(ws.ID, h.ID, "   "); err == nil {
+		t.Fatal("blank host name accepted")
+	}
+	if err := s.SetHostName(ws.ID, h.ID, "Web One"); err != nil {
+		t.Fatal(err)
+	}
+	h2, err := s.UpsertHostOnBundle(ws.ID, "web-1", "renamed-by-machine", "e2", "aa", t0.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h2.Name != "Web One" || h2.Epoch != "e2" {
+		t.Fatalf("owner name must survive a push while epoch still updates: %+v", h2)
+	}
+}
+
+func TestCountBundlesPerHost(t *testing.T) {
+	s := openTemp(t)
+	ws := mustWS(t, s, "acme")
+	a, b := mustHost(t, s, ws, "a"), mustHost(t, s, ws, "b")
+	t0 := time.Now().UTC().Truncate(time.Second)
+	saveAt(t, s, a, t0)
+	saveAt(t, s, a, t0.Add(time.Hour))
+	saveAt(t, s, b, t0)
+	got, err := s.CountBundlesPerHost(ws.ID)
+	if err != nil || got[a.ID] != 2 || got[b.ID] != 1 || len(got) != 2 {
+		t.Fatalf("CountBundlesPerHost = %v, %v", got, err)
 	}
 }

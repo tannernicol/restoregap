@@ -143,4 +143,7 @@ CREATE TABLE sessions (
 	expires_at   TEXT NOT NULL
 );
 `,
+	// v2: an owner-chosen host name must survive the next push, which would
+	// otherwise overwrite it with the machine's own hostname.
+	`ALTER TABLE hosts ADD COLUMN name_locked INTEGER NOT NULL DEFAULT 0;`,
 }

@@ -76,17 +76,18 @@ func (s *Store) LookupToken(plaintext string) (APIToken, Workspace, error) {
 	return tok, ws, nil
 }
 
-// RevokeToken disables a token. It takes no workspace id (per the store
-// contract), so callers must confirm the token belongs to the acting
-// workspace first, e.g. via ListTokens.
-func (s *Store) RevokeToken(id string) error {
+// RevokeToken disables a token in the given workspace. Scoping the lookup by
+// workspace means a handler holding only a user-supplied id can never revoke
+// another tenant's token. Revoking an already revoked token succeeds.
+func (s *Store) RevokeToken(workspaceID, id string) error {
 	var one int
-	err := s.db.QueryRow(`SELECT 1 FROM api_tokens WHERE id = ?`, id).Scan(&one)
+	err := s.db.QueryRow(`SELECT 1 FROM api_tokens WHERE workspace_id = ? AND id = ?`,
+		workspaceID, id).Scan(&one)
 	if err != nil {
 		return mapNoRows(err)
 	}
-	_, err = s.db.Exec(`UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
-		fmtTime(s.now()), id)
+	_, err = s.db.Exec(`UPDATE api_tokens SET revoked_at = ? WHERE workspace_id = ? AND id = ? AND revoked_at IS NULL`,
+		fmtTime(s.now()), workspaceID, id)
 	return err
 }
 

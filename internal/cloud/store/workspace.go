@@ -207,6 +207,58 @@ func scanUser(sc scanner) (User, error) {
 	return u, err
 }
 
+// EnsureUser returns the user for an email, creating it if absent. The admin
+// CLI needs a user id to attach an owner membership before that person has
+// ever logged in; ConsumeLoginToken only creates users as a side effect of
+// burning a link.
+func (s *Store) EnsureUser(email string) (User, error) {
+	email = normalizeEmail(email)
+	if email == "" || !strings.Contains(email, "@") {
+		return User{}, errors.New("store: invalid email")
+	}
+	if u, err := s.UserByEmail(email); err == nil {
+		return u, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return User{}, err
+	}
+	id, err := newID()
+	if err != nil {
+		return User{}, err
+	}
+	// INSERT OR IGNORE then re-read: two racing callers both end up with the
+	// one row the UNIQUE(email) constraint allowed.
+	if _, err := s.db.Exec(`INSERT OR IGNORE INTO users (id, email, created_at) VALUES (?, ?, ?)`,
+		id, email, fmtTime(s.now())); err != nil {
+		return User{}, fmt.Errorf("store: create user: %w", err)
+	}
+	return s.UserByEmail(email)
+}
+
+// Member is a user's email and role within one workspace, for display.
+type Member struct {
+	UserID, Email, Role string
+}
+
+// ListMembers returns a workspace's members, owners first, then by email.
+func (s *Store) ListMembers(workspaceID string) ([]Member, error) {
+	rows, err := s.db.Query(`SELECT u.id, u.email, m.role FROM memberships m
+		JOIN users u ON u.id = m.user_id WHERE m.workspace_id = ?
+		ORDER BY CASE m.role WHEN 'owner' THEN 0 ELSE 1 END, u.email`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Member
+	for rows.Next() {
+		var m Member
+		if err := rows.Scan(&m.UserID, &m.Email, &m.Role); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // AddMembership grants a user a role in a workspace; ErrConflict if present.
 func (s *Store) AddMembership(workspaceID, userID, role string) error {
 	if !validRoles[role] {

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -83,8 +84,11 @@ func (s *Store) UpsertHostOnBundle(workspaceID, hostID, name, epoch, pubkey stri
 		}
 		// max() so a late-arriving older bundle cannot move last-seen backwards
 		// and make a healthy host look lapsed.
-		if _, err := tx.Exec(`UPDATE hosts SET name = ?, epoch = ?, last_seen_at = max(last_seen_at, ?),
-			lapsed_at = NULL WHERE id = ?`, name, epoch, fmtTime(seenAt), h.ID); err != nil {
+		// name_locked: an owner-chosen name (SetHostName) is not overwritten
+		// by the machine's own hostname on the next push.
+		if _, err := tx.Exec(`UPDATE hosts SET name = CASE WHEN name_locked = 1 THEN name ELSE ? END,
+			epoch = ?, last_seen_at = max(last_seen_at, ?), lapsed_at = NULL WHERE id = ?`,
+			name, epoch, fmtTime(seenAt), h.ID); err != nil {
 			return Host{}, err
 		}
 		h, err = scanHost(tx.QueryRow(`SELECT `+hostCols+` FROM hosts WHERE id = ?`, h.ID))
@@ -136,6 +140,17 @@ func (s *Store) CountHosts(workspaceID string) (int, error) {
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM hosts WHERE workspace_id = ?`, workspaceID).Scan(&n)
 	return n, err
+}
+
+// SetHostName is the owner's rename. It is scoped by workspace and pins the
+// name so later pushes keep it (see UpsertHostOnBundle).
+func (s *Store) SetHostName(workspaceID, id, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > 200 {
+		return errors.New("store: host name must be 1-200 characters")
+	}
+	return requireRows(s.db.Exec(`UPDATE hosts SET name = ?, name_locked = 1 WHERE workspace_id = ? AND id = ?`,
+		name, workspaceID, id))
 }
 
 // SetHostExpectedEvery sets the cadence; zero turns lapse monitoring off.

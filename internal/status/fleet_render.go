@@ -27,6 +27,10 @@ type FleetTaxRow struct {
 	EnvSlug    string
 	SystemSlug string
 	HostSlug   string
+	// Source is the row's FleetProof.SourceBundle: the label its bundle was
+	// merged under. A service that merged bundles by host label uses it to
+	// link a rendered row back to the host it came from.
+	Source string
 }
 
 // FleetTaxCategory is one category's rows within a FleetTaxLayer.
@@ -203,7 +207,7 @@ func buildFleetTaxRow(p FleetProof, sets *fleetScopeSets) (FleetTaxRow, bool) {
 	return FleetTaxRow{
 		Proof: p.Proof, Artifact: orEmDashTax(p.Artifact), State: p.State, Bucket: bucket,
 		Why: p.Why, Level: p.Level, Host: hostLabelFor(p.Host),
-		EnvSlug: envSlug, SystemSlug: sysSlug, HostSlug: hostSlug,
+		EnvSlug: envSlug, SystemSlug: sysSlug, HostSlug: hostSlug, Source: p.SourceBundle,
 	}, open
 }
 

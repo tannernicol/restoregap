@@ -224,6 +224,27 @@ func (s *Store) ListBundles(workspaceID, hostRowID string, limit int) ([]Bundle,
 	return queryBundles(s, q, args...)
 }
 
+// CountBundlesPerHost maps a host row id to how many bundles are stored for it,
+// so the hosts table does not have to load every bundle row to count them.
+func (s *Store) CountBundlesPerHost(workspaceID string) (map[string]int, error) {
+	rows, err := s.db.Query(`SELECT host_row_id, COUNT(*) FROM bundles WHERE workspace_id = ? GROUP BY host_row_id`,
+		workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
 // LatestBundlePerHost returns each host's newest bundle: the fleet view.
 func (s *Store) LatestBundlePerHost(workspaceID string) ([]Bundle, error) {
 	return queryBundles(s, `SELECT `+bundleCols+` FROM (
