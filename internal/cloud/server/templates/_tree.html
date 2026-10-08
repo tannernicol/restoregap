@@ -1,0 +1,79 @@
+{{/* SPDX-License-Identifier: MIT */}}
+{{/* SPDX-FileCopyrightText: 2026 Tanner Nicol */}}
+{{/* The fleet tree: status.FleetPageData rendered with the design system's
+     classes. It mirrors internal/status/fleet_html.go's body (same layers,
+     chips and rows, same zero-JavaScript :has() filter) minus that file's
+     standalone shell, and links each proof row to its history when the caller
+     supplies Links (the signed-in dashboard does; a share page does not). */}}
+{{define "tree"}}
+{{- $links := .Links}}
+{{- with .Page}}
+  {{- if .Conflicts}}
+  <section class="rgs-gap" data-status="warning">
+    <span aria-hidden="true">⚠</span>
+    <span>{{len .Conflicts}} merge conflict(s): two hosts carry the same name and proof, and the later bundle won.</span>
+  </section>
+  {{- end}}
+  {{- if .HasAny}}
+  <section class="rgs-tax">
+    <style>{{.FilterCSS}}</style>
+    {{- if .Rollup}}
+    <h2>Environment &times; system roll-up</h2>
+    <div class="rg-tablewrap">
+      <table class="rg-table">
+        <thead><tr><th>Environment</th><th>System</th><th>Restored</th><th>Observed</th><th>Accepted</th><th>Unreviewed</th><th>Expired/lapsed</th></tr></thead>
+        <tbody>
+          {{- range .Rollup}}
+          <tr><td>{{.Env}}</td><td>{{.System}}</td><td>{{.Restored}}</td><td>{{.Observed}}</td><td>{{.Accepted}}</td><td>{{.Unreviewed}}</td><td>{{.Expired}}</td></tr>
+          {{- end}}
+        </tbody>
+      </table>
+    </div>
+    {{- end}}
+
+    <h2>Recovery taxonomy: layer &rarr; category &rarr; proof</h2>
+    <div class="rgs-filterbar">
+      {{- range .LayerChips}}
+      <label class="rgs-chip-toggle"><input type="checkbox" id="f-layer-{{.ID}}" checked> {{.Label}}</label>
+      {{- end}}
+      {{- range .StateChips}}
+      <label class="rgs-chip-toggle"><input type="checkbox" id="f-state-{{.ID}}" checked> {{.Label}}</label>
+      {{- end}}
+      {{- range .EnvChips}}
+      <label class="rgs-chip-toggle"><input type="checkbox" id="f-env-{{.ID}}" checked> env: {{.Label}}</label>
+      {{- end}}
+      {{- range .SystemChips}}
+      <label class="rgs-chip-toggle"><input type="checkbox" id="f-system-{{.ID}}" checked> system: {{.Label}}</label>
+      {{- end}}
+      {{- range .HostChips}}
+      <label class="rgs-chip-toggle"><input type="checkbox" id="f-host-{{.ID}}" checked> host: {{.Label}}</label>
+      {{- end}}
+    </div>
+
+    {{- range .Layers}}
+    <details class="rgs-taxlayer" data-layer="{{.LayerID}}"{{if .Open}} open{{end}}>
+      <summary>{{.Header}}</summary>
+      {{- $showCat := .ShowCategoryHeaders}}
+      {{- range .Categories}}
+      {{- if $showCat}}
+      <h4 class="rgs-taxcat">{{.Category}}</h4>
+      {{- end}}
+      {{- range .Rows}}
+      {{- $href := proofHref $links .Source .Proof}}
+      <div class="rgs-taxrow" data-state="{{.State}}" data-bucket="{{.Bucket}}" data-envslug="{{.EnvSlug}}" data-systemslug="{{.SystemSlug}}" data-hostslug="{{.HostSlug}}">
+        <span class="rgs-taxproof">{{if $href}}<a href="{{$href}}"><code>{{.Proof}}</code></a>{{else}}<code>{{.Proof}}</code>{{end}}<span class="rgs-taxsub">{{.Artifact}}</span></span>
+        <span class="rgs-taxhost">{{.Host}}</span>
+        <span class="rgs-taxstate" data-bucket="{{.Bucket}}">{{.State}}</span>
+        <span class="rgs-taxlevel">{{.Level}}</span>
+        <span class="rgs-taxwhy">{{.Why}}</span>
+      </div>
+      {{- end}}
+      {{- end}}
+    </details>
+    {{- end}}
+  </section>
+  {{- else}}
+  <p class="rgs-muted">No proofs in this fleet.</p>
+  {{- end}}
+{{- end}}
+{{end}}

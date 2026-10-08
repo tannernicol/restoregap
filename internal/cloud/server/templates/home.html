@@ -1,0 +1,23 @@
+{{/* SPDX-License-Identifier: MIT */}}
+{{/* SPDX-FileCopyrightText: 2026 Tanner Nicol */}}
+{{define "content"}}
+<h1>Restore Gap Cloud</h1>
+<p class="cl-lede">Restore Gap Cloud is the hosted half of Restore Gap: a small service that receives the signed bundles your hosts already export, keeps them, and answers the three questions one binary structurally cannot answer on its own: how each proof has moved over time, what the whole estate looks like right now, and which host stopped sending.</p>
+<p class="cl-lede">The local tool stays free, MIT, offline and complete.</p>
+<p class="cl-lede">Cloud never unlocks a recovery check you need; it operates the retention, monitoring and sharing around the checks you already run.</p>
+
+<h2>Sign in</h2>
+<form class="cl-form" method="post" action="/login">
+  <div class="ui-kit-field">
+    <label for="email">Email address</label>
+    <input id="email" name="email" type="email" required autocomplete="email" maxlength="254" autofocus>
+  </div>
+  <div><button class="ui-kit-button is-primary" type="submit">Email me a sign-in link</button></div>
+  {{- if .Data.AllowSignup}}
+  <p class="cl-hint">The link works once and expires in 15 minutes. Your first sign-in creates your workspace.</p>
+  {{- else}}
+  <p class="cl-hint">This instance is closed to new workspaces: only addresses that already have an account can sign in.</p>
+  {{- end}}
+</form>
+<p><a href="{{.DocsURL}}">What Cloud does and does not do (docs/CLOUD.md)</a></p>
+{{end}}

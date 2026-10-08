@@ -1,0 +1,9 @@
+{{/* SPDX-License-Identifier: MIT */}}
+{{/* SPDX-FileCopyrightText: 2026 Tanner Nicol */}}
+{{define "content"}}
+<h1>Sign in to Restore Gap Cloud</h1>
+<form class="cl-form" method="post" action="/auth/{{.Data}}">
+  <div><button class="ui-kit-button is-primary" type="submit">Sign in</button></div>
+  <p class="cl-hint">This link works once. If you did not ask to sign in, close this page; nothing happens until you press the button.</p>
+</form>
+{{end}}

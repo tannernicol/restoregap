@@ -1,0 +1,28 @@
+{{/* SPDX-License-Identifier: MIT */}}
+{{/* SPDX-FileCopyrightText: 2026 Tanner Nicol */}}
+{{define "content"}}
+<h1>Hosts</h1>
+{{- if .Data.Rows}}
+<div class="rg-tablewrap">
+  <table class="rg-table">
+    <thead><tr><th>Name</th><th>Host id</th><th>Epoch</th><th>Last seen</th><th>Expected</th><th>Status</th><th>Key</th><th>Bundles</th></tr></thead>
+    <tbody>
+      {{- range .Data.Rows}}
+      <tr>
+        <td class="cl-wrap"><a href="/app/hosts/{{.Host.ID}}">{{.Host.Name}}</a></td>
+        <td class="cl-hex">{{short .Host.HostID 8}}</td>
+        <td class="cl-hex">{{short .Host.Epoch 8}}</td>
+        <td title="{{abs .Host.LastSeenAt}}">{{rel .Host.LastSeenAt}}</td>
+        <td>{{cadence .Host.ExpectedEvery}}</td>
+        <td>{{if .Host.LapsedAt}}<span class="cl-badge" data-kind="lapsed">lapsed</span>{{else}}<span class="cl-badge" data-kind="active">ok</span>{{end}}</td>
+        <td class="cl-hex">{{short .Host.PublicKeyHex 8}}</td>
+        <td>{{.Bundles}}</td>
+      </tr>
+      {{- end}}
+    </tbody>
+  </table>
+</div>
+{{- else}}
+<div class="rg-empty">No host has sent a bundle yet. The first push creates the host and pins its signing key.</div>
+{{- end}}
+{{end}}
