@@ -78,7 +78,9 @@ selected directory is created with mode `0700`. If that write fails, the hook
 evaluates the proposal in memory and logs one degraded-mode notice to stderr:
 an operation with no declared guard still passes so the operator can repair
 storage, while an operation matching a declared guard denies and names the
-write error.
+write error. A compound command with several recognized operations is evaluated
+in memory instead, since an intent file holds one operation, and the ledger
+still records every one.
 
 A real deny from the demo fixture before its first drill:
 
@@ -160,7 +162,9 @@ relationship from any local evaluator.
 `PreToolUse` example. It reads the event once, translates supported tool calls to
 an intent, and maps every failing gate result to hook exit 2. It uses Bash 4+,
 `jq` and GNU `realpath -m`; this particular shell adapter is not a portable shell
-parser. The installed Go hook needs no Bash, jq, or realpath. Gemini maps
+parser. The installed Go hook needs no Bash, jq, or realpath, and is the stronger
+implementation: it understands quoting, compound commands and wrapped commands
+(see below). Gemini maps
 `run_shell_command`, `write_file`, and `replace` to the same intent shapes.
 
 Register the script with an absolute path appropriate to your installation:
@@ -178,29 +182,143 @@ Register the script with an absolute path appropriate to your installation:
 ```
 
 Recognized file-edit tools go directly to the evaluator, including paths covered
-by policy globs. Supported shell shapes are deliberately limited:
+by policy globs.
+
+### What the shell hook understands
+
+The installed Go hook (`restoregap agent hook`) reads a Bash command the way a
+shell would split it, without running or expanding anything, and evaluates every
+simple command it finds in one preflight. It is stronger than the example shell
+hook above, which looks only at the first word of the first line. The example
+is kept as a small portable reference; use the Go hook when you can.
+
+**Splitting.** Single and double quotes, backslash escapes and `#` comments are
+honored, so `rm "my file.db"` is one path and `echo "rm -rf /"` is not a delete.
+`&&`, `||`, `;`, `|`, `&`, newlines and subshell parentheses separate commands,
+so `echo ok && rm -rf ~/Backups/x` evaluates the `rm`. `$(...)` and backtick
+substitutions are parsed as additional commands, because they can hide a delete.
+`$VAR` and `${VAR}` stay as typed. Leading `VAR=value` assignments and `if`/`then`/`do`
+keywords are skipped. A leading `~` in a path means your home directory.
+
+Here-documents (`<<EOF`, `<<-EOF`, `<<'EOF'`) are stdin text: the body up to the
+closing line is skipped, so `git commit -m "$(cat <<'EOF' … EOF)" && rm guarded`
+still evaluates the `rm`, and an `rm -rf /` written inside a body is not an
+operation. Command substitutions in an unquoted body do run, so they are
+evaluated. The rest of the line holding the `<<` is parsed as usual
+(`cat <<EOF | tee x` is a write to `x`).
+
+**Working directory.** `cd` and `pushd` carry through `&&`, `||`, `;` and
+newlines, so `cd /guarded && rm -rf *` resolves against `/guarded`, and
+`cd sub && cd .. && rm x` against the starting directory. A relative `cd`
+joins the directory so far. `cd` alone, `cd ~`, `cd -`, `popd`, and a `cd` to
+anything containing a variable or glob reset to the hook's own directory,
+because the real one is not known. A `cd` does not carry out of a pipeline,
+a background `&` or a `( … )` subshell; `$(…)` bodies and `bash -c` strings
+start in the directory the line has reached.
+
+**Unwrapped before classifying.** `sudo`, `doas`, `env`, `nice`, `nohup`, `time`,
+`timeout`, `command`, `exec`, `builtin`, `stdbuf`, and `bash|sh|zsh|dash|ksh -c STRING`
+(including `-lc`, `-ec`) are removed and the command inside is classified; they
+do not appear in the command text a guard matches. `ssh [options] host CMD`,
+`docker exec` (also `docker container exec`, `podman exec`, `docker compose exec`,
+`docker-compose exec`) and `kubectl exec POD -- CMD` are unwrapped too, but
+keep their wrapper as a prefix (see below).
+
+**Shapes.**
 
 | Shape | Intent |
 |---|---|
-| `rm`, `shred` | `delete_file` |
-| `mv` | `move_file` |
-| `truncate`, leading redirection, `dd … of=` | `modify_file` |
-| forceful `git push`, `git branch -D`, `terraform destroy`, `dropdb` | `run_command` |
+| `rm`, `shred`, `unlink`, `rmdir`; `find ROOT … -delete` or `-exec rm …` (on `ROOT`) | `delete_file` |
+| `mv SRC… DST`, `mv -t DIR SRC…` | `move_file` |
+| `truncate`, `dd … of=`, redirection (`> f`, `>> f`, `: > f`, `cmd > f`), `tee [-a] FILE…`, `chmod`/`chown`/`chgrp` operands | `modify_file` |
+| `cp`, `install`, `rsync` — the destination only; a destination containing `:` is another host and becomes `run_command` | `modify_file` |
+| `git push` with `--force`, `-f`, `--force-with-lease`, `--force-if-includes` or a `+ref`; `git branch -D`; `git reset --hard`; `git clean` with `-f`/`-x`/`-d`; `git stash drop\|clear`; `git checkout .`, `git restore .` | `run_command` |
+| `terraform destroy`, `terraform apply -destroy`, `tofu destroy`, `pulumi destroy`, `dropdb` | `run_command` |
+| `psql`, `mysql`, `mariadb`, `sqlite3` whose `-c`/`-e`/`--command` argument or trailing SQL contains `DROP`, `TRUNCATE` or `DELETE FROM`; `redis-cli flushall\|flushdb` | `run_command` |
+| `docker`/`podman`: `rm`, `container rm\|prune`, `volume rm\|prune`, `system prune`, `compose down`, `stack rm`; `docker-compose down` | `run_command` |
+| `kubectl delete`, `helm uninstall\|delete`, `systemctl disable\|mask` (not `stop`) | `run_command` |
+| `zfs destroy`, `zpool destroy`, `btrfs subvolume delete`, `lvremove`, `vgremove`, `wipefs`, `mkfs*`, `sgdisk --zap*`, `parted … rm\|mklabel` | `run_command` |
+| `restic forget\|prune`, `borg prune\|delete\|compact`, `rclone delete\|purge\|sync\|move`, `aws s3 rm\|rb`, `aws s3 sync … --delete`, `gsutil rm\|rb` | `run_command` |
+| `crontab -r`, `launchctl bootout\|remove`, `gh repo delete`, `gh release delete`, `xargs rm` | `run_command` |
 
-By default, unmatched commands pass through either hook without evaluation. Quoting, shell
-expansion, compound commands, aliases and interpreter code exceed its simple word
-parser. Use your agent's sandbox and deny rules, or a tool integration supplying
-structured operations, for those cases. A `terraform destroy` command match is
-not Terraform-plan or provider-resource analysis.
+`git`, `terraform`, `tofu`, `pulumi` and `dropdb` operations are anchored to the
+working repository's root (or the working directory outside a repository), so a
+path guard on that repository matches them. Every other `run_command` matches
+only `commands:` globs. Close lookalikes are not operations: `docker ps`,
+`git push` without force, `systemctl stop`, `rclone ls`, `psql -c "select 1"`.
+
+**Remote and container operations.** Anything that runs through `ssh`,
+`docker exec` or `kubectl exec` happens somewhere else, so it is always a
+`run_command` with no paths: a path on another host is never compared with a
+local path guard. The command text keeps the wrapper as a prefix, with `sudo`
+and similar removed:
+
+| Typed | Matched as |
+|---|---|
+| `ssh -p 2222 -i key nas sudo docker rm restoregap-cloud` | `ssh nas docker rm restoregap-cloud` |
+| `ssh nas "docker volume rm v && rm -rf /data"` | `ssh nas docker volume rm v` and `ssh nas rm -rf /data` |
+| `docker exec -u 0 restoregap-cloud rm /data/cloud.db` | `docker exec restoregap-cloud rm /data/cloud.db` |
+| `docker compose exec web sh -c "rm x"` | `docker compose exec web rm x` |
+| `kubectl exec mypod -- rm /data/x` | `kubectl exec mypod rm /data/x` |
+
+Guard these with `commands:` globs such as `ssh nas docker rm restoregap-cloud*`
+or `*docker volume rm *restoregap*`. A `user@` prefix on the ssh host is dropped.
+A remote string is re-parsed, so each command in it is evaluated separately.
+Every wrapped command is evaluated, including harmless ones such as
+`ssh nas uptime`, which pass as "no declared guard matched" unless a guard
+matches the command text.
+
+**Compound commands.** All recognized operations in one tool call are evaluated
+together in one preflight and recorded together in the ledger. If any is
+blocked, the whole call is denied, and the reason ends with
+`(N operations evaluated)`.
+
+**Unrecognized and unparseable.** By default, a command with nothing recognized
+passes with `not evaluated: unrecognized operation`. Recognized pieces of a
+compound command are evaluated and the rest are ignored. A command the parser
+cannot follow (unbalanced quotes, an unterminated heredoc, `<(...)` process
+substitution, more than 64 KiB, or nesting deeper than four levels) is allowed
+with `not evaluated: could not parse command (<reason>)`, noted once on stderr
+per hook run.
+
+**Strict mode** (`RESTOREGAP_REQUIRE_COVERAGE=1`) denies an unparseable command,
+and denies a command with nothing recognized with
+`not evaluated: unrecognized operation`. In a compound command, the recognized
+pieces are evaluated first (a real block wins), and the call is then denied with
+`not evaluated: unrecognized operation in compound command` if any other piece
+is unrecognized. Builtins and read-only tools do not count as unrecognized
+pieces: `cd`, `pushd`, `popd`, `echo`, `printf`, `true`, `false`, `test`, `[`,
+`[[`, `export`, `unset`, `set`, `read`, `type`, `which`, `command -v`, `pwd`,
+`exit`, `return`, `source`, `.`; `ls`, `cat`, `head`, `tail`, `less`, `more`,
+`wc`, `sort`, `uniq`, `cut`, `tr`, `grep`, `egrep`, `fgrep`, `rg`, `awk`, `diff`,
+`stat`, `file`, `du`, `df`, `date`, `uname`, `hostname`, `whoami`, `id`, `sleep`;
+`sed` without `-i`; `find` without `-delete`, `-exec` or `-fprint`; `env` with no
+command; and `git` `status`, `log`, `diff`, `show`, `rev-parse`, `fetch`,
+`ls-files`, `grep`, `blame`, `describe`, `branch` and `tag` without a delete
+flag, `remote -v`, `stash list`. So `cd /tmp && rm x` is evaluated as the `rm`
+alone, while `cd /tmp && mystery-tool && rm x` is denied. A line made only of
+such commands (`ls -la`) still has nothing recognized and is denied. `tee`,
+`cp` and `mv` are never benign. Strict mode also applies per-resource coverage
+to every recognized operation, so a wrapped command needs a `commands:` guard to
+be covered, and an `rm` still needs a guard that covers its path.
+
+**Out of scope.** The hook does not see interpreter code (`python -c`,
+`node -e`), scripts run by path (`./cleanup.sh`, `bash cleanup.sh`; `source` is not
+followed), aliases or shell functions, `find -exec` with anything but
+`rm`/`shred`/`unlink`/`rmdir`, SQL piped on standard input, or a heredoc fed to
+an interpreter (`bash <<EOF`) — the body is skipped. It does not expand variables
+or globs, so `rm $DIR/x` is the literal path `$DIR/x`, and a `cd` into a
+variable resets the tracked directory. A `terraform destroy` command match is not Terraform-plan
+or provider-resource analysis. Use your agent's sandbox and deny rules, or a
+tool integration supplying structured operations, for those cases.
 
 `RESTOREGAP_CONTEXT` and `RESTOREGAP_LEDGER` select the policy and local ledger.
 Set `RESTOREGAP_REQUIRE_COVERAGE=1` to enable strict coverage for the hook's
-recognized inputs. In strict mode, an operation the narrow parser cannot
-recognize is blocked with `not evaluated: unrecognized operation`; malformed
-events also block rather than silently skipping the gate. Leave it unset to
-retain the hooks' permissive unmatched-command behavior.
+recognized inputs; malformed events also block rather than silently skipping
+the gate. Leave it unset to retain the hooks' permissive unmatched-command
+behavior.
 
-Run the fixture from the repository root:
+Run the example shell hook's fixture from the repository root:
 
 ```sh
 bash docs/examples/preflight-hook.test.sh
