@@ -41,47 +41,84 @@ func Verify(path string) (VerifyResult, error) {
 // trusted Ed25519 public key. An empty expectedKey preserves the historical
 // integrity-only API for full bundles.
 func VerifyWithExpectedKey(path, expectedKey string) (VerifyResult, error) {
-	members, err := readTarGz(path)
+	archive, err := os.ReadFile(path) //nolint:gosec // caller-provided bundle path, same trust level as any other CLI arg
 	if err != nil {
 		return VerifyResult{}, fmt.Errorf("bundle verify: %s: %w", path, err)
+	}
+	_, result, err := verifyArchive(archive, expectedKey, path)
+	return result, err
+}
+
+// VerifyBytes is Verify over an in-memory archive — what a service holding a
+// request body needs, without a temp file per request. It runs the exact
+// same checks as Verify (one implementation, see verifyArchive).
+func VerifyBytes(archive []byte) (VerifyResult, error) {
+	return VerifyBytesWithExpectedKey(archive, "")
+}
+
+// VerifyBytesWithExpectedKey is VerifyWithExpectedKey over an in-memory
+// archive: with a non-empty expectedKey the detached signer must match it.
+func VerifyBytesWithExpectedKey(archive []byte, expectedKey string) (VerifyResult, error) {
+	_, result, err := verifyArchive(archive, expectedKey, "")
+	return result, err
+}
+
+// scoped renders the "<prefix>: <label>: " error lead-in the path-based
+// functions have always produced, or "<prefix>: " when there is no path to
+// name (the in-memory entry points).
+func scoped(prefix, label string) string {
+	if label == "" {
+		return prefix + ": "
+	}
+	return prefix + ": " + label + ": "
+}
+
+// verifyArchive is the single verification implementation behind Verify,
+// VerifyBytes and the Load* functions. label is the path to name in error
+// text ("" for in-memory callers). It also returns the decoded tar members
+// so LoadVerified* can reuse them instead of decompressing twice.
+func verifyArchive(archive []byte, expectedKey, label string) (map[string][]byte, VerifyResult, error) {
+	members, err := readTarGzBytes(archive)
+	if err != nil {
+		return nil, VerifyResult{}, fmt.Errorf("%s%w", scoped("bundle verify", label), err)
 	}
 
 	manifestBytes, ok := members[manifestName]
 	if !ok {
-		return VerifyResult{OK: false, Reason: "missing " + manifestName}, nil
+		return members, VerifyResult{OK: false, Reason: "missing " + manifestName}, nil
 	}
 	sigBytes, ok := members[signatureName]
 	if !ok {
-		return VerifyResult{OK: false, Reason: "missing " + signatureName}, nil
+		return members, VerifyResult{OK: false, Reason: "missing " + signatureName}, nil
 	}
 
 	signatureOK, reason, err := verifyFullBundleSignature(manifestBytes, sigBytes, expectedKey)
 	if err != nil {
-		return VerifyResult{}, err
+		return nil, VerifyResult{}, err
 	}
 	if !signatureOK {
-		return VerifyResult{OK: false, Reason: reason}, nil
+		return members, VerifyResult{OK: false, Reason: reason}, nil
 	}
 
 	var manifest Manifest
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
-		return VerifyResult{OK: false, Reason: fmt.Sprintf("unreadable %s: %v", manifestName, err)}, nil
+		return members, VerifyResult{OK: false, Reason: fmt.Sprintf("unreadable %s: %v", manifestName, err)}, nil
 	}
 
 	if reason, ok := verifyContentDigests(manifest, members); !ok {
-		return VerifyResult{OK: false, Manifest: manifest, Reason: reason}, nil
+		return members, VerifyResult{OK: false, Manifest: manifest, Reason: reason}, nil
 	}
 
 	entries, reason, ok := decodeAndVerifyLedgerSlice(manifest, members)
 	if !ok {
-		return VerifyResult{OK: false, Manifest: manifest, Reason: reason}, nil
+		return members, VerifyResult{OK: false, Manifest: manifest, Reason: reason}, nil
 	}
 	if len(entries) != manifest.LedgerSlice.EntryCount {
-		return VerifyResult{OK: false, Manifest: manifest, Reason: fmt.Sprintf(
+		return members, VerifyResult{OK: false, Manifest: manifest, Reason: fmt.Sprintf(
 			"ledger slice entry count mismatch: manifest claims %d, slice has %d", manifest.LedgerSlice.EntryCount, len(entries))}, nil
 	}
 
-	return VerifyResult{OK: true, Manifest: manifest}, nil
+	return members, VerifyResult{OK: true, Manifest: manifest}, nil
 }
 
 func verifyFullBundleSignature(manifestBytes, sigBytes []byte, expectedKey string) (bool, string, error) {
@@ -187,18 +224,29 @@ func splitLines(data []byte) [][]byte {
 	return lines
 }
 
-// readTarGz decompresses and untars path, returning every member's content
-// keyed by name — bundles are small (policy text, a bounded ledger slice,
-// evidence metadata), so reading them fully into memory is the simple
-// choice, not a streaming concern.
+// readTarGz reads path and delegates to readTarGzBytes.
 func readTarGz(path string) (map[string][]byte, error) {
-	f, err := os.Open(path) //nolint:gosec // caller-provided bundle path, same trust level as any other CLI arg
+	archive, err := os.ReadFile(path) //nolint:gosec // caller-provided bundle path, same trust level as any other CLI arg
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	return readTarGzBytes(archive)
+}
 
-	gz, err := gzip.NewReader(f)
+// readTarGzBytes decompresses and untars an in-memory archive, returning
+// every member's content keyed by name — bundles are small (policy text, a
+// bounded ledger slice, evidence metadata), so reading them fully into
+// memory is the simple choice, not a streaming concern.
+// MaxDecompressedBytes bounds the total decompressed size readTarGzBytes
+// will hold in memory. A bundle is a few context files plus a ledger slice;
+// real ones are kilobytes to low megabytes. The cap exists because a hosted
+// endpoint receives archives from token holders, and a small gzip bomb must
+// fail with an error rather than exhaust the process. Path-based callers
+// inherit it too: an archive this large is not a bundle anyone made.
+const MaxDecompressedBytes = 256 << 20
+
+func readTarGzBytes(archive []byte) (map[string][]byte, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
 		return nil, fmt.Errorf("not a gzip file: %w", err)
 	}
@@ -206,6 +254,7 @@ func readTarGz(path string) (map[string][]byte, error) {
 
 	tr := tar.NewReader(gz)
 	members := map[string][]byte{}
+	var total int64
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -217,9 +266,15 @@ func readTarGz(path string) (map[string][]byte, error) {
 		if hdr.Typeflag != tar.TypeReg {
 			continue
 		}
-		data, err := io.ReadAll(tr)
+		// LimitReader +1 so an over-limit member is detected rather than
+		// silently truncated into a digest mismatch with a confusing reason.
+		data, err := io.ReadAll(io.LimitReader(tr, MaxDecompressedBytes-total+1))
 		if err != nil {
 			return nil, fmt.Errorf("reading tar member %s: %w", hdr.Name, err)
+		}
+		total += int64(len(data))
+		if total > MaxDecompressedBytes {
+			return nil, fmt.Errorf("archive expands past %d bytes; refusing to read it", MaxDecompressedBytes)
 		}
 		members[hdr.Name] = data
 	}
