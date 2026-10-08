@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
+
+# Restore Gap Cloud as a hardened systemd service. State lives in
+# /var/lib/restoregap-cloud (StateDirectory); configuration in
+# /etc/restoregap-cloud.env (root:root 0600). See deploy/README.md.
+[Unit]
+Description=Restore Gap Cloud
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/restoregap-cloud serve --listen 127.0.0.1:8080
+EnvironmentFile=/etc/restoregap-cloud.env
+Environment=RESTOREGAP_CLOUD_DATA=/var/lib/restoregap-cloud
+DynamicUser=yes
+StateDirectory=restoregap-cloud
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+
+# Hardening: the process needs the network, its state directory and nothing else.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

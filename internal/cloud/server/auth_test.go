@@ -299,9 +299,15 @@ func TestSecurityHeadersAndCSPMatchTheInlineScripts(t *testing.T) {
 		t.Fatalf("script-src must be hash-pinned: %s", csp)
 	}
 	for _, bad := range []string{"http://", "https://"} {
-		// The only absolute URL on the page is the docs link; nothing is loaded from elsewhere.
-		for _, m := range regexp.MustCompile(`(?:src|href)="(`+bad+`[^"]*)"`).FindAllStringSubmatch(body, -1) {
-			if m[1] != docsURL {
+		// Nothing is LOADED from elsewhere: no src= points off-host. The only
+		// absolute hrefs are the docs link and the terms/privacy pages on
+		// restoregap.com, which a visitor follows by choice — not a request
+		// the page makes on its own.
+		for _, m := range regexp.MustCompile(`src="(`+bad+`[^"]*)"`).FindAllStringSubmatch(body, -1) {
+			t.Fatalf("page loads external resource %s", m[1])
+		}
+		for _, m := range regexp.MustCompile(`href="(`+bad+`[^"]*)"`).FindAllStringSubmatch(body, -1) {
+			if m[1] != docsURL && !strings.HasPrefix(m[1], "https://restoregap.com/") {
 				t.Fatalf("page references external %s", m[1])
 			}
 		}

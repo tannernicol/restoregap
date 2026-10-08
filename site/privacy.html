@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2026 Tanner Nicol -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Restore Gap Cloud — Privacy</title>
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<style>
+:root{color-scheme:dark;--bg:#0e1013;--text:#dce0e6;--muted:#98a0ab;--border:#2a2f38;--accent:#d6dce3}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 "Space Grotesk","IBM Plex Sans","Segoe UI",system-ui,sans-serif}
+main{max-width:46rem;margin:0 auto;padding:2.5rem 1rem 4rem}
+h1{font-size:1.75rem;line-height:1.2;margin:0 0 .25rem}h2{font-size:1.15rem;margin:2rem 0 .5rem}
+p,li{color:var(--text)}.muted{color:var(--muted)}a{color:var(--accent)}
+nav a{margin-right:1rem}hr{border:0;border-top:1px solid var(--border);margin:2rem 0}
+table{border-collapse:collapse;width:100%;font-size:.95rem}td,th{border-top:1px solid var(--border);padding:.5rem .4rem;text-align:left;vertical-align:top}
+</style>
+</head>
+<body>
+<main>
+<nav><a href="index.html">Restore Gap</a><a href="terms.html">Terms</a><a href="https://github.com/tannernicol/restoregap/blob/main/docs/CLOUD.md">How Cloud works</a></nav>
+<h1>Privacy</h1>
+<p class="muted">Restore Gap Cloud · effective 2026-10-08</p>
+
+<p>The short version: the <code>restoregap</code> binary and this website collect nothing. Restore Gap Cloud stores what you push to it and the minimum needed to sign you in and bill you, and nothing is sold, shared for advertising, or used to train anything.</p>
+
+<h2>The website and the binary</h2>
+<p>restoregap.com is a static page with no analytics, cookies, tracking pixels or third-party scripts. The <code>restoregap</code> binary makes no network requests except the drill commands you declare and <code>restoregap bundle push</code>, which only runs when you run it.</p>
+
+<h2>What Cloud stores</h2>
+<table>
+<tr><th>Data</th><th>Why</th><th>How long</th></tr>
+<tr><td>Your email address</td><td>Sign-in links, alerts, billing notices</td><td>Until you delete your workspace</td></tr>
+<tr><td>Bundles you push: the exact archive bytes, which contain your context files (guards, drills, proof records), a ledger slice, and evidence <em>metadata</em> (paths, sizes, hashes). Never evidence file contents, never anything under a secret-store path.</td><td>Fleet view, proof history, share links, independent verification</td><td>Your plan's retention period, then deleted; or until you delete them</td></tr>
+<tr><td>Host identity from each bundle: host name, host id, epoch, signing public key</td><td>Trust on first use, lapse monitoring</td><td>Until you delete the host or workspace</td></tr>
+<tr><td>Alerts and their delivery status, including the webhook URL and email you configured</td><td>Monitoring</td><td>Until you delete the workspace</td></tr>
+<tr><td>Hashed sign-in tokens, sessions, push tokens and share-link tokens</td><td>Authentication. Only hashes are stored; the plaintext is shown once.</td><td>Until expiry or revocation</td></tr>
+<tr><td>Stripe customer and subscription ids, plan and billing status</td><td>Billing</td><td>Until you delete the workspace; Stripe keeps its own records</td></tr>
+<tr><td>Server logs: request path, status, timing, IP address, sign-in attempts</td><td>Security and debugging</td><td>14 days</td></tr>
+</table>
+<p>We do not read the contents of your bundles except as the service renders them to you, or to investigate a security incident or a support request you made.</p>
+
+<h2>Who else sees data</h2>
+<ul>
+<li><strong>Stripe</strong> processes payments and sees your email and payment details. We never see card numbers.</li>
+<li><strong>Our email provider</strong> delivers sign-in links and alerts to the address you gave.</li>
+<li><strong>Our hosting provider</strong> runs the server and its encrypted disk. The current provider is named in the repository's <code>docs/CLOUD.md</code>.</li>
+<li><strong>People you share with.</strong> A share link shows the merged proof state and, for each bundle, its host name, context file names, evidence file paths and sizes. Give links only to people who may see that.</li>
+</ul>
+<p>We do not sell data, do not share it for advertising, and disclose it to anyone else only when the law requires and we have told you where we can.</p>
+
+<h2>Your rights</h2>
+<p>You can export every bundle (each stored archive is the bytes you pushed), see everything in your workspace from the dashboard, correct your email by signing in with the new one, and delete your workspace by emailing us. Deletion removes all of the above within 30 days except what the law makes us keep, such as invoices. If you are in the EU, UK or a jurisdiction with similar rights, those rights apply as written in its law, and you may complain to your local authority.</p>
+
+<h2>Security</h2>
+<p>Traffic is encrypted in transit. Tokens are stored hashed. The service has no credentials to your machines and cannot request anything a bundle does not contain. Report a vulnerability through the repository's private reporting channel described in <code>SECURITY.md</code>.</p>
+
+<h2>Changes</h2>
+<p>If this policy changes in a way that affects you, we email you at least 30 days before the change applies.</p>
+
+<hr>
+<p class="muted">Operated by Tanner Nicol, Seattle, Washington, USA. Contact: open an issue on <a href="https://github.com/tannernicol/restoregap/issues">GitHub</a>, or use the private channel in SECURITY.md.</p>
+</main>
+</body>
+</html>

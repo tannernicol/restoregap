@@ -189,6 +189,13 @@ restoregap-cloud admin workspace set-plan <workspace-id> solo
 restoregap-cloud admin token create <workspace-id> --name web-1   # prints the token once
 ```
 
+## Terms, privacy, hosting
+
+The operated service runs under the [terms](https://restoregap.com/terms.html)
+and [privacy policy](https://restoregap.com/privacy.html) on restoregap.com.
+Hosting provider for the operated service: not yet chosen (early access);
+this line is updated when it is.
+
 ## What it is not
 
 - Not uptime monitoring, not a backup product, not a storage target for
