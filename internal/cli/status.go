@@ -545,7 +545,7 @@ func newMCPCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Serve MCP over stdio (newline-delimited JSON-RPC)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return mcpserver.Serve(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
+			return mcpserver.Serve(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), mcpserver.WithVersion(Version))
 		},
 	}
 	cmd.AddCommand(serve)

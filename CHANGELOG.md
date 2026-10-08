@@ -6,6 +6,13 @@ each such change is called out here.
 
 ## [Unreleased]
 
+- `restoregap mcp serve` now reports the build version in `serverInfo.version`
+  instead of a hard-coded `0.1.0`.
+- MCP `required_proof`, `explain_decision`, `ledger_query`, `story` and
+  `acknowledge_risk` no longer fail when `ledger_path` is omitted; they use the
+  default ledger (`$RESTOREGAP_LEDGER`, then `$XDG_STATE_HOME/restoregap/ledger.jsonl`,
+  then `~/.local/state/restoregap/ledger.jsonl`). An explicit `ledger_path` still wins.
+
 ## [0.12.0] — 2026-10-08
 
 - CI now also runs format, vet and the race-enabled test suite on macOS, and
