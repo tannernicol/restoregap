@@ -6,6 +6,8 @@ each such change is called out here.
 
 ## [Unreleased]
 
+## [0.12.1] — 2026-10-08
+
 - The agent hook (`restoregap agent hook`) now parses shell commands instead of
   reading the first word of the first line. It honors quoting, splits on
   `&&`, `||`, `;`, `|`, `&` and newlines, follows `$(...)` and backtick
