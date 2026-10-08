@@ -2,32 +2,35 @@
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: 2026 Tanner Nicol
 
-# ui_check.sh — the frontend lane for the restoregap.com landing page.
+# ui_check.sh -- the frontend check for the restoregap.com landing page.
 #
-# CONTRACT (mk/ui.mk): exit 0 pass · exit 75 could-not-run-here · else fail.
-# This repo's lane is invoked as `sh scripts/ui_check.sh`, so the script is
-# POSIX sh — no bashisms.
+# CONTRACT: exit 0 = pass, exit 75 = could not run here (a missing optional
+# tool, not a failure), any other non-zero = fail. Run it as
+# `sh scripts/ui_check.sh`; it is POSIX sh, so no bashisms.
 #
-# Two halves, same as money's ui_check:
-#   1. STRUCTURAL — always runs, no browser needed: the page is one
-#      self-contained file with NO JavaScript (that is a promise the site
-#      makes on its face), so a stray <script> tag is a regression, and so
-#      are a missing h1 and a demo.gif that stopped being referenced.
-#   2. MOBILE — the fleet-shared gate (~/homelab/scripts/mobile-ui-check.py)
-#      at three phone widths: 320x568 (smallest iPhone SE), 390x844 and
-#      430x932. The browser runs in a container, so the page is served on
-#      the Docker bridge address the container CAN reach, from a temp COPY
-#      of site/ (money's trick: the server never touches the working tree).
+# Two halves:
+#   1. STRUCTURAL -- always runs, needs only node and grep, no browser: the
+#      page is one self-contained file with NO JavaScript (a promise the site
+#      makes on its face), so a stray <script> tag is a regression, and so are
+#      a missing h1 and a demo.gif that is no longer referenced.
+#   2. MOBILE -- the maintainer's optional mobile-layout gate, which checks the
+#      page at three phone widths: 320x568 (smallest iPhone SE), 390x844 and
+#      430x932. It needs an external checker script (PLATFORM_SDK points at
+#      the directory holding scripts/mobile-ui-check.py), a Docker bridge
+#      network and a browser container, none of which a normal clone has. When
+#      any of them is missing this half prints a SKIP line and the script
+#      exits 75; the structural half has already run by then. The page is
+#      served from a temporary COPY of site/, on the Docker bridge address the
+#      browser container can reach, so the server never touches the working
+#      tree.
 #
 #      --allow-scroll-x 'pre': the site's own rule is that long code lines
 #      scroll INSIDE their <pre> rather than wrapping mid-token; the flag is
 #      the checker's mechanism for declaring exactly that scroller.
 #
 #      --views '.site-nav a[href^="#"]': the sweep selector matches IN-PAGE
-#      nav anchors only. Sweeping the whole <nav> clicked the external
-#      Walkthrough/GitHub links, navigated off-site, and graded GitHub's 404
-#      page (the repo is private) — tap-target findings about Primer buttons
-#      that have nothing to do with this site.
+#      nav anchors only. Sweeping the whole <nav> would click the external
+#      links, navigate off-site and grade a page this repo does not own.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -60,7 +63,7 @@ fi
 # --- 2. mobile gate ----------------------------------------------------------
 SDK="${PLATFORM_SDK:-$HOME/homelab}"
 CHECKER="$SDK/scripts/mobile-ui-check.py"
-[ -f "$CHECKER" ] || { echo "SKIP mobile: shared checker not found at $CHECKER"; exit "$EX_CANNOT_RUN"; }
+[ -f "$CHECKER" ] || { echo "SKIP mobile: optional checker not found at $CHECKER"; exit "$EX_CANNOT_RUN"; }
 
 bridge=$(ip -4 -o addr show docker0 2>/dev/null | awk '{print $4}' | cut -d/ -f 1 || true)
 if [ -z "$bridge" ]; then
@@ -70,8 +73,7 @@ fi
 command -v python3 >/dev/null 2>&1 || { echo "SKIP mobile: python3 not on PATH"; exit "$EX_CANNOT_RUN"; }
 
 # A FIXED port is a trap: a leftover instance from an earlier run answers the
-# readiness curl and the check silently grades the stale page (money learned
-# this the hard way). Pick a free port and refuse to reuse an occupied one.
+# readiness curl and the check silently grades the stale page. Pick a free port and refuse to reuse an occupied one.
 port=${RG_UI_CHECK_PORT:-0}
 if [ "$port" -eq 0 ]; then
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do

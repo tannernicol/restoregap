@@ -4,6 +4,8 @@
 package discover
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/tannernicol/restoregap/internal/contextspec"
@@ -102,5 +104,60 @@ func TestPathOverlap(t *testing.T) {
 		if got := pathOverlap(c.a, c.b); got != c.want {
 			t.Errorf("pathOverlap(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
 		}
+	}
+}
+
+// TestCoverMatchesAcrossSymlinkedPrefix pins the macOS failure mode: a
+// drill written with a symlinked prefix (/tmp, /var) must still cover a
+// candidate whose Path was canonicalised (/private/tmp, /private/var), and
+// the reverse. The symlink is built by hand so the test fails on Linux too
+// if the canonical form is ever dropped.
+func TestCoverMatchesAcrossSymlinkedPrefix(t *testing.T) {
+	root := canonicalDir(t, t.TempDir())
+	realDir := filepath.Join(root, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Fatal(err)
+	}
+	realFile := filepath.Join(realDir, "app.db")
+	if err := os.WriteFile(realFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linkFile := filepath.Join(link, "app.db")
+
+	// Drill names the symlink spelling; the candidate is canonical.
+	viaLink := newCoverageIndex(contextspec.Context{Drills: []contextspec.Drill{{Proof: "app", Artifact: linkFile}}})
+	if ok, by := viaLink.cover(realFile); !ok || by != "drill:app" {
+		t.Errorf("cover(%q) with a symlink-spelled drill = %v, %q; want true, \"drill:app\"", realFile, ok, by)
+	}
+	// Drill names the canonical spelling; the candidate arrives as the alias.
+	viaReal := newCoverageIndex(contextspec.Context{Drills: []contextspec.Drill{{Proof: "app", Artifact: realFile}}})
+	if ok, by := viaReal.cover(linkFile); !ok || by != "drill:app" {
+		t.Errorf("cover(%q) with a canonical drill = %v, %q; want true, \"drill:app\"", linkFile, ok, by)
+	}
+}
+
+// TestCoverCandidateTriesAlternatePaths pins that a guard glob written in
+// the spelling the operator used still covers a candidate whose primary
+// Path was canonicalised, because dedupe keeps the original spelling in
+// AlternatePaths.
+func TestCoverCandidateTriesAlternatePaths(t *testing.T) {
+	idx := newCoverageIndex(contextspec.Context{Guards: []contextspec.Guard{
+		{ID: "alias-only", Match: contextspec.Matcher{Paths: []string{"/alias/**/*.db"}}},
+	}})
+	cand := Candidate{
+		Kind: KindDatabase, Name: "a.db",
+		Path:           "/canonical/data/a.db",
+		AlternatePaths: []string{"/alias/data/a.db"},
+	}
+	if ok, by := idx.coverCandidate(cand); !ok || by != "guard:alias-only" {
+		t.Fatalf("coverCandidate = %v, %q; want true, \"guard:alias-only\"", ok, by)
+	}
+	cand.AlternatePaths = nil
+	if ok, _ := idx.coverCandidate(cand); ok {
+		t.Fatal("coverCandidate matched with no alternate path naming the alias")
 	}
 }

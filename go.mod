@@ -3,7 +3,7 @@
 
 module github.com/tannernicol/restoregap
 
-go 1.25.10
+go 1.25.14
 
 require (
 	github.com/mattn/go-isatty v0.0.20

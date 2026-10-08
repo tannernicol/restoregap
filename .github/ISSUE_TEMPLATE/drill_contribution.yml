@@ -1,0 +1,37 @@
+name: Drill contribution
+description: Contribute a real drill that proves recovery of something you actually run.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Real drills are the most useful contribution. See `docs/drill-authoring.md`
+        and the `examples/` directory first. Do not include secret values,
+        tokens or private hostnames.
+  - type: input
+    id: subject
+    attributes:
+      label: What it recovers
+      description: The thing being restored, for example a Postgres dump, a restic repository, a Docker volume or a Home Assistant config.
+    validations:
+      required: true
+  - type: textarea
+    id: drills
+    attributes:
+      label: The drills block
+      description: The `drills:` block from your context file.
+      render: yaml
+    validations:
+      required: true
+  - type: textarea
+    id: tested
+    attributes:
+      label: How it was tested
+      description: Versions of the tool being restored and of restoregap, what you ran, and what a passing and a failing run looked like.
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Caveats, platform assumptions, or checks you wanted but could not express.

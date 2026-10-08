@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
 # snapshot-remote-config.sh - pull a tar snapshot of access/config files OFF
 # a remote host on a cadence, so a Restore Gap attestation or recovery drill
 # can check freshness or restore from it. Generic over the remote (NAS, VPS,

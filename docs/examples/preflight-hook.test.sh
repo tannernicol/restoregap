@@ -1,9 +1,22 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
 # preflight-hook.test.sh — end-to-end check of the example PreToolUse hook
 # (docs/examples/preflight-hook.sh): a fresh demo/setup.sh fixture, the hook's
 # shape table, and the gate's verdict before and after a real drill. Prints
 # one line per case and a final N/N; exits non-zero on any mismatch.
 set -euo pipefail
+
+# The example hook is written for the Linux shells it runs under in practice:
+# it uses mapfile (bash 4) and GNU `realpath -m`. A stock macOS box has bash
+# 3.2 and BSD realpath, so this test cannot run there; it says so and exits 0
+# rather than failing a `make verify` that is otherwise green (the Go suite
+# runs on macOS in CI; this hook does not). `brew install bash coreutils` and
+# putting gnubin first on PATH makes it runnable on a Mac.
+if (( BASH_VERSINFO[0] < 4 )) || ! realpath -m / >/dev/null 2>&1; then
+  echo "preflight-hook.test.sh: SKIP — needs bash 4+ and GNU realpath -m (found bash ${BASH_VERSION}, $(command -v realpath || echo 'no realpath'))"
+  exit 0
+fi
 
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
 fixture="$(mktemp -d /tmp/rg-hook-test.XXXXXX)"

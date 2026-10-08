@@ -3,9 +3,8 @@
 
 # Cut a release when a v* tag is pushed.
 #
-# Deliberately does NOT run `make verify`: that target includes the platform
-# gate from a checkout that only exists on the maintainer's machine, so it
-# cannot run here. The checks below are the portable subset.
+# Deliberately does not run the full `make verify`: the release job runs the
+# fast portable subset below, and ci.yml runs the rest on every push and PR.
 #
 # The scrub gate runs BEFORE anything is published. This repo leaked a real
 # ed25519 private key once (2026-08-03) past a scan that only looked for
@@ -19,18 +18,21 @@ on:
 
 permissions:
   contents: write
+  # Keyless cosign signing: the job asks GitHub for an OIDC token that Sigstore
+  # exchanges for a short-lived certificate naming this workflow.
+  id-token: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # goreleaser builds the changelog from history; a shallow clone
           # silently produces an empty one.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           check-latest: false
@@ -74,10 +76,15 @@ jobs:
       # fails after building everything ("syft: executable file not found",
       # v0.10.0 first attempt, 2026-09-18).
       - name: install syft (SBOM generator goreleaser shells out to)
-        uses: anchore/sbom-action/download-syft@v0
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+
+      # .goreleaser.yml signs checksums.txt with keyless cosign; the hosted
+      # runner does not ship cosign, and goreleaser never installs it.
+      - name: install cosign (keyless signer goreleaser shells out to)
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: release
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
           # Pinned to the line that runs on the repo's Go version. goreleaser
           # v2.17+ requires Go >= 1.26.5; raise this and go.mod together.

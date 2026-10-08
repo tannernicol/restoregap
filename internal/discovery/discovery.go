@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
 // Package discovery implements the shared $RESTOREGAP_CONTEXT /
 // restoregap.local.yml / restoregap.yml / user-config-directory lookup order
 // used by every entry point that wants a zero-config context fallback: the

@@ -129,7 +129,7 @@ func annotateCandidates(candidates []Candidate, ctx contextspec.Context, cwd str
 			}
 			continue
 		}
-		ok, by := index.cover(candidates[i].Path)
+		ok, by := index.coverCandidate(candidates[i])
 		candidates[i].Covered = ok
 		candidates[i].CoveredBy = by
 		if ok {
