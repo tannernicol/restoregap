@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
 # Claude Code PreToolUse hook: read the Bash command Claude Code sends on
 # stdin, match the FIRST matching shape below, write a v2 intent YAML, and
 # let `restoregap preflight` decide. Flags anywhere are allowed.

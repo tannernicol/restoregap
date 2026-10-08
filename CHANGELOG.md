@@ -6,6 +6,19 @@ each such change is called out here.
 
 ## [Unreleased]
 
+- CI now also runs format, vet and the race-enabled test suite on macOS, and
+  scans dependencies with `govulncheck` on Linux. Third-party GitHub Actions
+  are pinned to commit SHAs, and Dependabot proposes grouped weekly updates.
+- Release checksums are now signed. Each release signs `checksums.txt`
+  keylessly with cosign from the release workflow and publishes
+  `checksums.txt.sigstore.json` beside it. The README shows how to check it
+  with `cosign verify-blob`. Releases up to v0.11.7 are not signed.
+- `make` gained a portable `verify` target (format, vet, race tests, hook,
+  packaging, license and site checks) plus `test-race`, `fmt-check`, `lint`,
+  `packaging-test` and `site-check`; `make help` lists them.
+- Added issue forms for bug reports and drill contributions, and a pull
+  request template.
+
 ## [0.11.7] — 2026-09-25
 
 - Fixed a regression in 0.11.6: a declared policy path the hook cannot read

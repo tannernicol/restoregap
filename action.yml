@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
 name: restoregap-preflight
 description: >-
   Gate a pull request's diff on Restore Gap's declared recovery guards —

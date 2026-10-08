@@ -1,4 +1,6 @@
 #!/usr/bin/env sh
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
 # install.sh — download the latest Restore Gap release binary for this machine,
 # verify it against the release's checksums.txt, and put it on PATH.
 #

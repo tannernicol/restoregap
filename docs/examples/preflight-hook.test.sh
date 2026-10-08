@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
 # preflight-hook.test.sh — end-to-end check of the example PreToolUse hook
 # (docs/examples/preflight-hook.sh): a fresh demo/setup.sh fixture, the hook's
 # shape table, and the gate's verdict before and after a real drill. Prints

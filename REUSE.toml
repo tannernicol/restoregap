@@ -101,3 +101,27 @@ SPDX-License-Identifier = "MIT"
 path = [".claude-plugin/*.json", "hooks/*.json"]
 SPDX-FileCopyrightText = "2026 Tanner Nicol"
 SPDX-License-Identifier = "MIT"
+
+# GitHub community files. Issue forms, the pull request template and the
+# Dependabot config are read by GitHub as plain files; keeping them free of
+# header comments keeps them identical to what the GitHub docs show.
+[[annotations]]
+path = [
+  ".github/ISSUE_TEMPLATE/bug_report.yml",
+  ".github/ISSUE_TEMPLATE/drill_contribution.yml",
+  ".github/ISSUE_TEMPLATE/config.yml",
+  ".github/PULL_REQUEST_TEMPLATE.md",
+  ".github/dependabot.yml",
+]
+SPDX-FileCopyrightText = "2026 Tanner Nicol"
+SPDX-License-Identifier = "MIT"
+
+# Files without a comment syntax that predate the per-directory patterns above.
+[[annotations]]
+path = [
+  ".platform-protected",
+  "docs/examples/restic.md",
+  "site/demo.gif",
+]
+SPDX-FileCopyrightText = "2026 Tanner Nicol"
+SPDX-License-Identifier = "MIT"

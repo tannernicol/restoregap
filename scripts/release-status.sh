@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
 # release-status — one screen that says whether the newest release is lined up
 # to publish. Every line is a live probe of git, GitHub, and the installed
 # binary; nothing here trusts a note. Exit 0 iff every line is green.
