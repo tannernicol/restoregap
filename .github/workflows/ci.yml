@@ -29,6 +29,14 @@ jobs:
           "$(go env GOPATH)/bin/govulncheck" ./...
       - run: bash docs/examples/preflight-hook.test.sh
       - run: bash scripts/tests/packaging.sh
+      # Every tracked file must carry SPDX license and copyright (REUSE spec).
+      # make verify runs this locally only when the tool is installed, which
+      # is how deploy/README.md shipped uncovered; CI pins the same version
+      # the Makefile names.
+      - name: reuse lint
+        run: |
+          python3 -m pip install --quiet 'reuse[charset-normalizer]==6.2.0'
+          reuse lint
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
