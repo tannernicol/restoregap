@@ -12,7 +12,7 @@
 # "or grab a release binary", so something has to actually build one.
 #
 # TOOLCHAIN PIN: goreleaser is pinned to the v2.5 line (see release.yml),
-# which matches the Go version in go.mod (1.25.x). Newer goreleaser releases
+# which matches the Go version in go.mod (1.26.x). Newer goreleaser releases
 # (v2.17+) require a newer Go than go.mod declares. Raise the goreleaser pin,
 # the workflow and go.mod together, never one.
 version: 2
