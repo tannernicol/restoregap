@@ -72,7 +72,7 @@ sudo. The release also includes SBOM documents and reproducible build settings.
 
 Or choose an archive from the [releases page](https://github.com/tannernicol/restoregap/releases),
 or build from source with `go install github.com/tannernicol/restoregap/cmd/restoregap@latest`
-(Go 1.25+).
+(Go 1.26+).
 
 To verify a release independently of the installer: releases after v0.11.7
 sign `checksums.txt` keylessly with [cosign](https://docs.sigstore.dev/) from

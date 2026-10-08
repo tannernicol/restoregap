@@ -4,7 +4,7 @@
 # Restore Gap Cloud image. Two stages so the runtime image carries one static
 # binary and CA certificates, nothing else: no shell, no package manager, no
 # Go toolchain. State lives under /data (mount a volume there).
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

@@ -12,9 +12,9 @@
 # "or grab a release binary", so something has to actually build one.
 #
 # TOOLCHAIN PIN: goreleaser is pinned to the v2.5 line (see release.yml),
-# which matches the Go version in go.mod (1.25.x). Newer goreleaser releases
-# (v2.17+) require a newer Go than go.mod declares. Raise the goreleaser pin,
-# the workflow and go.mod together, never one.
+# which was chosen when go.mod declared Go 1.25. go.mod is on 1.26.x now, so
+# the v2.17+ line (needs Go >= 1.26.5) would also run; raise the pin in
+# release.yml deliberately, with a release to prove it, not as a side effect.
 version: 2
 project_name: restoregap
 

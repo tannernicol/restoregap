@@ -6,6 +6,11 @@ each such change is called out here.
 
 ## [Unreleased]
 
+- Builds with Go 1.26 (go.mod `go 1.26.9`). Go 1.25 no longer receives
+  security fixes now that 1.27 is out, and govulncheck in CI flagged standard
+  library advisories only fixed in the 1.26 line. The Docker image and README
+  follow.
+
 - Cloud: `restoregap-cloud admin host list` and `admin host set-key` let a
   self-hoster see and rotate a host's pinned signing key from the shell.
 
