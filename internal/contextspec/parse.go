@@ -1,0 +1,835 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
+package contextspec
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"math"
+	"os"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// CurrentVersion is the newest context schema version this binary
+// understands. A document declaring a version above this is refused
+// immediately and unambiguously (docs/SCHEMA.md §Versioning policy) rather
+// than left to fail confusingly on some unrecognized field a future schema
+// happens to add; a document declaring a version below it is a migration
+// candidate (`restoregap migrate`), not a document Parse/Load ever accepts.
+const CurrentVersion = 2
+
+// UnsupportedVersionError is returned by Parse/Load when a document
+// declares a schema version newer than CurrentVersion. Every caller that
+// lets this propagate unwrapped gets main.go's default "one clear line on
+// stderr, exit 2" — the one existing error contract already satisfies the
+// "refuses ... with one clear line and exit 2" rule; this type exists so a
+// caller that wants to react specifically (rather than just fail) can
+// errors.As for it.
+type UnsupportedVersionError struct {
+	Got int
+}
+
+func (e *UnsupportedVersionError) Error() string {
+	return fmt.Sprintf("context: schema version %d is newer than this restoregap binary understands (max %d) — upgrade restoregap, or run `restoregap migrate` on the host that wrote it if this is a downgrade", e.Got, CurrentVersion)
+}
+
+// PeekVersion is peekVersion, exported for internal/migrate: the one thing
+// it needs to know about a document before deciding whether Load can read
+// it yet, or whether it is a migration candidate.
+func PeekVersion(data []byte) int {
+	return peekVersion(data)
+}
+
+// peekVersion reads just the top-level `version:` field, tolerating any
+// other shape entirely (unknown fields, a v1 document's completely
+// different keys) — the one piece of a document Parse must be able to read
+// before it knows whether the rest is even readable. Absent field or
+// unparseable document both yield version 0, err == nil: it is not this
+// helper's job to say the document is invalid, only to say what it is NOT
+// (a version newer than this binary knows).
+func peekVersion(data []byte) int {
+	var v struct {
+		Version int `yaml:"version"`
+	}
+	_ = yaml.Unmarshal(data, &v)
+	return v.Version
+}
+
+// rawContext mirrors the v2 YAML wire shape (docs/ARCHITECTURE.md §5).
+type rawContext struct {
+	Version  int         `yaml:"version"`
+	Coverage rawCoverage `yaml:"coverage"`
+	Guards   []rawGuard  `yaml:"guards"`
+	Facts    []rawFact   `yaml:"facts"`
+	Proofs   []rawProof  `yaml:"proofs"`
+	Drills   []rawDrill  `yaml:"drills"`
+	Scope    *rawScope   `yaml:"scope"`
+}
+
+type rawCoverage struct {
+	Commands []string `yaml:"commands"`
+}
+
+// rawScope mirrors Scope's YAML wire shape, shared by the context-file
+// level scope: block and each guard/proof's own scope: override.
+type rawScope struct {
+	Environment string   `yaml:"environment"`
+	System      string   `yaml:"system"`
+	Host        string   `yaml:"host"`
+	Owner       string   `yaml:"owner"`
+	Tags        []string `yaml:"tags"`
+}
+
+func fromRawScope(rs *rawScope) Scope {
+	if rs == nil {
+		return Scope{}
+	}
+	return Scope{Environment: rs.Environment, System: rs.System, Host: rs.Host, Owner: rs.Owner, Tags: rs.Tags}
+}
+
+type rawDrill struct {
+	Proof          string           `yaml:"proof"`
+	Artifact       string           `yaml:"artifact"`
+	Recover        string           `yaml:"recover"`
+	RecoverySource string           `yaml:"recovery_source"`
+	Validate       []rawDrillCheck  `yaml:"validate"`
+	Budgets        rawDrillBudgets  `yaml:"budgets"`
+	Dependencies   *rawDependencies `yaml:"dependencies"`
+	PinCheck       string           `yaml:"pin_check"`
+}
+
+type rawDependencies struct {
+	Paths    []string `yaml:"paths"`
+	Commands []string `yaml:"commands"`
+	Packages []string `yaml:"packages"`
+}
+
+type rawDrillFreshness struct {
+	Table  string `yaml:"table"`
+	Column string `yaml:"column"`
+}
+
+type rawDrillProbe struct {
+	Type         string `yaml:"type"`
+	Path         string `yaml:"path"`
+	ExpectStatus int    `yaml:"expect_status"`
+	ExpectBody   string `yaml:"expect_body"`
+	Run          string `yaml:"run"`
+}
+
+type rawDrillCheck struct {
+	Type      string             `yaml:"type"`
+	Integrity bool               `yaml:"integrity"`
+	Tables    map[string]string  `yaml:"tables"`
+	Freshness *rawDrillFreshness `yaml:"freshness"`
+	Refs      string             `yaml:"refs"`
+	Files     string             `yaml:"files"`
+	MustExist []string           `yaml:"must_exist"`
+	Run       string             `yaml:"run"`
+
+	// serve
+	ReadyTimeout string          `yaml:"ready_timeout"`
+	Probes       []rawDrillProbe `yaml:"probes"`
+
+	// key_fingerprint
+	Keys       string   `yaml:"keys"`
+	ExpectFrom string   `yaml:"expect_from"`
+	Expect     []string `yaml:"expect"`
+	// MinKeys is a pointer so an explicitly-declared `min_keys: 0` is
+	// distinguishable from the field being omitted entirely — see
+	// DefaultKeyFingerprintMinKeys.
+	MinKeys *int `yaml:"min_keys"`
+}
+
+type rawDrillBudgets struct {
+	RTO string `yaml:"rto"`
+	RPO string `yaml:"rpo"`
+}
+
+type rawMatch struct {
+	Paths          []string `yaml:"paths"`
+	Commands       []string `yaml:"commands"`
+	Packages       []string `yaml:"packages"`
+	Actions        []string `yaml:"actions"`
+	Actors         []string `yaml:"actors"`
+	ContextWindows []string `yaml:"context_windows"`
+}
+
+type rawRequires struct {
+	Proofs []string `yaml:"proofs"`
+	Facts  []string `yaml:"facts"`
+}
+
+type rawGuard struct {
+	ID               string      `yaml:"id"`
+	Kind             string      `yaml:"kind"`
+	Match            rawMatch    `yaml:"match"`
+	RequiredFor      []string    `yaml:"required_for"`
+	Requires         rawRequires `yaml:"requires"`
+	Enforcement      string      `yaml:"enforcement"`
+	MaxProofAgeHours int         `yaml:"max_proof_age_hours"`
+	RecoveryCopy     string      `yaml:"recovery_copy"`
+	AlternatePaths   []string    `yaml:"alternate_paths"`
+	RequireVerified  bool        `yaml:"require_verified"`
+	RequireBound     bool        `yaml:"require_bound"`
+	Layer            string      `yaml:"layer"`
+	Category         string      `yaml:"category"`
+	Scope            *rawScope   `yaml:"scope"`
+}
+
+type rawFact struct {
+	ID         string `yaml:"id"`
+	Statement  string `yaml:"statement"`
+	Provenance string `yaml:"provenance"`
+	ExpiresAt  string `yaml:"expires_at"`
+	MaxAgeDays *int   `yaml:"max_age_days"`
+}
+
+type rawSignature struct {
+	Version   int    `yaml:"version"`
+	PublicKey string `yaml:"public_key"`
+	Signature string `yaml:"signature"`
+}
+
+type rawProof struct {
+	ID           string           `yaml:"id"`
+	Status       string           `yaml:"status"`
+	ObservedAt   string           `yaml:"observed_at"`
+	ExpiresAt    string           `yaml:"expires_at"`
+	SHA256       string           `yaml:"sha256"`
+	EvidenceURL  string           `yaml:"evidence_url"`
+	Signature    *rawSignature    `yaml:"signature"`
+	Verified     bool             `yaml:"verified"`
+	Command      string           `yaml:"command"`
+	Measurements *rawMeasurements `yaml:"measurements"`
+	RecipeDigest string           `yaml:"recipe_digest"`
+	Dependencies *rawDependencies `yaml:"dependencies"`
+	Accepted     *rawAcceptance   `yaml:"accepted"`
+	Layer        string           `yaml:"layer"`
+	Category     string           `yaml:"category"`
+	Scope        *rawScope        `yaml:"scope"`
+	Host         *rawProofHost    `yaml:"host"`
+	Epoch        string           `yaml:"epoch"`
+}
+
+// rawProofHost mirrors ProofHost's YAML wire shape: host: {name: …, id: …}.
+type rawProofHost struct {
+	Name string `yaml:"name"`
+	ID   string `yaml:"id"`
+}
+
+// rawAcceptance mirrors the accepted: block's YAML wire shape. Every field
+// is required once the block is present: an acceptance without a reason or
+// a review date is a rubber stamp, and `restoregap accept` refuses to write
+// one for the same reason parse refuses to load one.
+type rawAcceptance struct {
+	By       string `yaml:"by"`
+	At       string `yaml:"at"`
+	Reason   string `yaml:"reason"`
+	ReviewBy string `yaml:"review_by"`
+}
+
+type rawCheckOutcome struct {
+	Type   string `yaml:"type"`
+	Pass   bool   `yaml:"pass"`
+	Detail string `yaml:"detail"`
+}
+
+type rawMeasurements struct {
+	RTOSeconds float64           `yaml:"rto_seconds"`
+	RPOSeconds *float64          `yaml:"rpo_seconds"`
+	Checks     []rawCheckOutcome `yaml:"checks"`
+}
+
+// Load reads and validates a v2 context document from path.
+func Load(path string) (Context, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Context{}, fmt.Errorf("contextspec: cannot read %s: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	ctx, err := Parse(f)
+	if err != nil {
+		return Context{}, fmt.Errorf("contextspec: %s: %w", path, err)
+	}
+	ctx.Origin = path
+	return ctx, nil
+}
+
+// Parse decodes and validates a v2 context document. A document declaring a
+// version newer than CurrentVersion is refused before its shape is even
+// examined (peekVersion) — a future schema's new fields would otherwise
+// surface as a confusing "field not found" YAML error instead of the plain
+// "upgrade restoregap" one.
+func Parse(r io.Reader) (Context, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return Context{}, fmt.Errorf("context: reading document: %w", err)
+	}
+	if v := peekVersion(data); v > CurrentVersion {
+		return Context{}, &UnsupportedVersionError{Got: v}
+	}
+
+	var raw rawContext
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&raw); err != nil {
+		if err == io.EOF {
+			return Context{}, fmt.Errorf("context: empty document, must declare version: 2")
+		}
+		return Context{}, fmt.Errorf("context: invalid YAML: %w", err)
+	}
+	return fromRaw(raw)
+}
+
+// collectUnique converts each raw entry of one document section and enforces
+// id uniqueness within it. Errors carry the section name and index so a bad
+// entry is locatable in the source document rather than merely described.
+func collectUnique[R, T any](section string, in []R, conv func(R) (T, error), idOf func(T) string) ([]T, error) {
+	seen := map[string]bool{}
+	out := make([]T, 0, len(in))
+	for i, r := range in {
+		v, err := conv(r)
+		if err != nil {
+			return nil, fmt.Errorf("context: %s[%d]: %w", section, i, err)
+		}
+		id := idOf(v)
+		if seen[id] {
+			return nil, fmt.Errorf("context: %s[%d]: duplicate id %q", section, i, id)
+		}
+		seen[id] = true
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// collectDrills is separate from collectUnique: drills are keyed by the proof
+// they exercise rather than by an id of their own, and their errors name that
+// proof because that is what a human recognises them by.
+func collectDrills(in []rawDrill) ([]Drill, error) {
+	seen := map[string]bool{}
+	out := make([]Drill, 0, len(in))
+	for i, rd := range in {
+		d, err := fromRawDrill(rd)
+		if err != nil {
+			return nil, fmt.Errorf("context: drills[%d]: %w", i, err)
+		}
+		if seen[d.Proof] {
+			return nil, fmt.Errorf("context: drills[%d]: duplicate proof %q", i, d.Proof)
+		}
+		seen[d.Proof] = true
+		out = append(out, d)
+	}
+	return out, nil
+}
+
+// fromRawDrill converts one drill's raw YAML shape to its typed form,
+// parsing budget durations and validating each validate[] entry's check
+// type against the closed set the engine knows how to run.
+func fromRawDrill(rd rawDrill) (Drill, error) {
+	if rd.Proof == "" {
+		return Drill{}, fmt.Errorf("proof is required")
+	}
+	if rd.Artifact == "" || rd.Recover == "" {
+		return Drill{}, fmt.Errorf("%s: artifact and recover are required", rd.Proof)
+	}
+	checks := make([]DrillCheck, 0, len(rd.Validate))
+	for i, rc := range rd.Validate {
+		c, err := fromRawDrillCheck(rc)
+		if err != nil {
+			return Drill{}, fmt.Errorf("%s: validate[%d]: %w", rd.Proof, i, err)
+		}
+		checks = append(checks, c)
+	}
+	budgets, err := fromRawDrillBudgets(rd.Budgets)
+	if err != nil {
+		return Drill{}, fmt.Errorf("%s: %w", rd.Proof, err)
+	}
+	dependencies, err := fromRawDependencies(rd.Dependencies)
+	if err != nil {
+		return Drill{}, fmt.Errorf("%s: %w", rd.Proof, err)
+	}
+	return Drill{
+		Proof:          rd.Proof,
+		Artifact:       rd.Artifact,
+		Recover:        rd.Recover,
+		RecoverySource: rd.RecoverySource,
+		Validate:       checks,
+		Budgets:        budgets,
+		Dependencies:   dependencies,
+		PinCheck:       rd.PinCheck,
+	}, nil
+}
+
+func fromRawDependencies(raw *rawDependencies) (Dependencies, error) {
+	if raw == nil {
+		return Dependencies{}, nil
+	}
+	deps := Dependencies{
+		Paths: append([]string(nil), raw.Paths...), Commands: append([]string(nil), raw.Commands...), Packages: append([]string(nil), raw.Packages...),
+	}
+	for kind, values := range map[string][]string{"paths": deps.Paths, "commands": deps.Commands, "packages": deps.Packages} {
+		for i, value := range values {
+			if strings.TrimSpace(value) == "" {
+				return Dependencies{}, fmt.Errorf("dependencies.%s[%d] must not be empty", kind, i)
+			}
+		}
+	}
+	return deps, nil
+}
+
+// drillCheckTypes is the closed set of validate[].type values the drill
+// engine implements. Kept here (not just in internal/drill) so a bad type is
+// a parse-time error, matching how Guard.Kind and Enforcement fail fast
+// rather than surfacing as a confusing runtime failure mid-drill.
+var drillCheckTypes = map[string]bool{
+	"byte_identical":  true,
+	"sqlite":          true,
+	"git":             true,
+	"file_tree":       true,
+	"command":         true,
+	"serve":           true,
+	"key_fingerprint": true,
+}
+
+// DefaultServeReadyTimeout is how long a serve check waits for its first
+// probe to pass when ready_timeout is not declared.
+const DefaultServeReadyTimeout = 30 * time.Second
+
+// DefaultKeyFingerprintMinKeys is how many keys a key_fingerprint check
+// requires in the recovered set when min_keys: is not declared at all.
+const DefaultKeyFingerprintMinKeys = 1
+
+func fromRawDrillCheck(rc rawDrillCheck) (DrillCheck, error) {
+	if !drillCheckTypes[rc.Type] {
+		return DrillCheck{}, fmt.Errorf("type must be byte_identical/sqlite/git/file_tree/command/serve/key_fingerprint, got %q", rc.Type)
+	}
+	var fresh *DrillFreshness
+	if rc.Freshness != nil {
+		if rc.Freshness.Table == "" || rc.Freshness.Column == "" {
+			return DrillCheck{}, fmt.Errorf("freshness requires both table and column")
+		}
+		fresh = &DrillFreshness{Table: rc.Freshness.Table, Column: rc.Freshness.Column}
+	}
+	readyTimeout, probes, err := fromRawServeFields(rc)
+	if err != nil {
+		return DrillCheck{}, err
+	}
+	keys, expectFrom, expect, minKeys, err := fromRawKeyFingerprintFields(rc)
+	if err != nil {
+		return DrillCheck{}, err
+	}
+	return DrillCheck{
+		Type:      rc.Type,
+		Integrity: rc.Integrity,
+		Tables:    rc.Tables,
+		Freshness: fresh,
+		Refs:      rc.Refs,
+		Files:     rc.Files,
+		MustExist: rc.MustExist,
+		Run:       rc.Run,
+
+		ReadyTimeout: readyTimeout,
+		Probes:       probes,
+
+		Keys:       keys,
+		ExpectFrom: expectFrom,
+		Expect:     expect,
+		MinKeys:    minKeys,
+	}, nil
+}
+
+// fromRawKeyFingerprintFields validates and converts the key_fingerprint-
+// only fields. It is a no-op (zero values, no error) for every other check
+// type, matching fromRawServeFields' pattern. keys must be ssh or gpg;
+// min_keys (once defaulted) must not be negative; and the check must
+// declare at least one real assertion — expect_from, expect, or a positive
+// min_keys — because a key_fingerprint check with none of those would pass
+// on any recovered set at all, including an empty one, which is exactly the
+// false comfort this check type exists to prevent.
+func fromRawKeyFingerprintFields(rc rawDrillCheck) (string, string, []string, int, error) {
+	if rc.Type != "key_fingerprint" {
+		return "", "", nil, 0, nil
+	}
+	if rc.Keys != "ssh" && rc.Keys != "gpg" {
+		return "", "", nil, 0, fmt.Errorf("key_fingerprint: keys must be ssh or gpg, got %q", rc.Keys)
+	}
+	minKeys := DefaultKeyFingerprintMinKeys
+	if rc.MinKeys != nil {
+		if *rc.MinKeys < 0 {
+			return "", "", nil, 0, fmt.Errorf("key_fingerprint: min_keys must not be negative")
+		}
+		minKeys = *rc.MinKeys
+	}
+	if rc.ExpectFrom == "" && len(rc.Expect) == 0 && minKeys == 0 {
+		return "", "", nil, 0, fmt.Errorf("key_fingerprint: declares no assertion — set expect_from, expect, or a positive min_keys")
+	}
+	return rc.Keys, rc.ExpectFrom, rc.Expect, minKeys, nil
+}
+
+// fromRawServeFields validates and converts the serve-only fields. It is a
+// no-op (zero values, no error) for every other check type — ready_timeout/
+// probes declared on a non-serve check are simply ignored rather than
+// rejected, matching how e.g. a sqlite check's freshness: is meaningless but
+// harmless on a git check.
+func fromRawServeFields(rc rawDrillCheck) (time.Duration, []DrillProbe, error) {
+	if rc.Type != "serve" {
+		return 0, nil, nil
+	}
+	readyTimeout := DefaultServeReadyTimeout
+	if rc.ReadyTimeout != "" {
+		d, err := time.ParseDuration(rc.ReadyTimeout)
+		if err != nil {
+			return 0, nil, fmt.Errorf("serve: ready_timeout: %w", err)
+		}
+		readyTimeout = d
+	}
+	if len(rc.Probes) == 0 {
+		return 0, nil, fmt.Errorf("serve: at least one probe is required")
+	}
+	probes := make([]DrillProbe, 0, len(rc.Probes))
+	for i, rp := range rc.Probes {
+		p, err := fromRawDrillProbe(rp)
+		if err != nil {
+			return 0, nil, fmt.Errorf("serve: probes[%d]: %w", i, err)
+		}
+		probes = append(probes, p)
+	}
+	return readyTimeout, probes, nil
+}
+
+func fromRawDrillProbe(rp rawDrillProbe) (DrillProbe, error) {
+	switch rp.Type {
+	case "http":
+		if rp.Path == "" {
+			return DrillProbe{}, fmt.Errorf("http probe requires path")
+		}
+		status := rp.ExpectStatus
+		if status == 0 {
+			status = 200
+		}
+		return DrillProbe{Type: "http", Path: rp.Path, ExpectStatus: status, ExpectBody: rp.ExpectBody}, nil
+	case "command":
+		if rp.Run == "" {
+			return DrillProbe{}, fmt.Errorf("command probe requires run")
+		}
+		return DrillProbe{Type: "command", Run: rp.Run}, nil
+	default:
+		return DrillProbe{}, fmt.Errorf("type must be http or command, got %q", rp.Type)
+	}
+}
+
+func fromRawDrillBudgets(rb rawDrillBudgets) (DrillBudgets, error) {
+	var budgets DrillBudgets
+	if rb.RTO != "" {
+		d, err := time.ParseDuration(rb.RTO)
+		if err != nil {
+			return DrillBudgets{}, fmt.Errorf("budgets.rto: %w", err)
+		}
+		budgets.RTO = d
+	}
+	if rb.RPO != "" {
+		d, err := time.ParseDuration(rb.RPO)
+		if err != nil {
+			return DrillBudgets{}, fmt.Errorf("budgets.rpo: %w", err)
+		}
+		budgets.RPO = d
+	}
+	return budgets, nil
+}
+
+func fromRaw(raw rawContext) (Context, error) {
+	if raw.Version != 2 {
+		return Context{}, fmt.Errorf("context: version must be 2, got %d", raw.Version)
+	}
+
+	guards, err := collectUnique("guards", raw.Guards, fromRawGuard, func(g Guard) string { return g.ID })
+	if err != nil {
+		return Context{}, err
+	}
+	facts, err := collectUnique("facts", raw.Facts, fromRawFact, func(f Fact) string { return f.ID })
+	if err != nil {
+		return Context{}, err
+	}
+	proofs, err := collectUnique("proofs", raw.Proofs, fromRawProof, func(p Proof) string { return p.ID })
+	if err != nil {
+		return Context{}, err
+	}
+	drills, err := collectDrills(raw.Drills)
+	if err != nil {
+		return Context{}, err
+	}
+
+	return Context{
+		Version: raw.Version, Coverage: Coverage{Commands: raw.Coverage.Commands}, Guards: guards, Facts: facts, Proofs: proofs, Drills: drills,
+		Scope: fromRawScope(raw.Scope),
+	}, nil
+}
+
+func fromRawGuard(g rawGuard) (Guard, error) {
+	if g.ID == "" {
+		return Guard{}, fmt.Errorf("missing id")
+	}
+	var kind GuardKind
+	switch g.Kind {
+	case "lifeline":
+		kind = GuardKindLifeline
+	case "guard", "":
+		kind = GuardKindGuard
+	default:
+		return Guard{}, fmt.Errorf("%s: kind must be lifeline or guard, got %q", g.ID, g.Kind)
+	}
+	match := Matcher{
+		Paths:          g.Match.Paths,
+		Commands:       g.Match.Commands,
+		Packages:       g.Match.Packages,
+		Actions:        g.Match.Actions,
+		Actors:         g.Match.Actors,
+		ContextWindows: g.Match.ContextWindows,
+	}
+	if match.Empty() {
+		return Guard{}, fmt.Errorf("%s: match must declare at least one of paths/commands/packages/actions/actors/context_windows", g.ID)
+	}
+	var enforcement Enforcement
+	switch g.Enforcement {
+	case "block", "":
+		enforcement = EnforcementBlock
+	case "warn":
+		enforcement = EnforcementWarn
+	default:
+		return Guard{}, fmt.Errorf("%s: enforcement must be block or warn, got %q", g.ID, g.Enforcement)
+	}
+	if g.MaxProofAgeHours < 0 {
+		return Guard{}, fmt.Errorf("%s: max_proof_age_hours must not be negative", g.ID)
+	}
+	if g.Layer != "" && !ValidGuardLayer(g.Layer) {
+		return Guard{}, fmt.Errorf("%s: layer must be one of %s, got %q", g.ID, strings.Join(declarableGuardLayers(), "/"), g.Layer)
+	}
+	return Guard{
+		ID:               g.ID,
+		Kind:             kind,
+		Match:            match,
+		RequiredFor:      g.RequiredFor,
+		Requires:         Requirement{Proofs: g.Requires.Proofs, Facts: g.Requires.Facts},
+		Enforcement:      enforcement,
+		MaxProofAgeHours: g.MaxProofAgeHours,
+		RecoveryCopy:     g.RecoveryCopy,
+		AlternatePaths:   g.AlternatePaths,
+		RequireVerified:  g.RequireVerified,
+		RequireBound:     g.RequireBound,
+		Layer:            g.Layer,
+		Category:         g.Category,
+		Scope:            fromRawScope(g.Scope),
+	}, nil
+}
+
+// declarableLayers renders the vocabulary a bad layer: value's error names
+// for a PROOF — every LayerOrder entry except the computed-only
+// LayerUnfiled fallback and the guard-only LayerCrossCutting.
+func declarableLayers() []string {
+	out := make([]string, 0, len(LayerOrder)-2)
+	for _, l := range LayerOrder {
+		if l == LayerUnfiled || l == LayerCrossCutting {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+// declarableGuardLayers renders the vocabulary a bad layer: value's error
+// names for a GUARD — every LayerOrder entry except the computed-only
+// LayerUnfiled fallback (LayerCrossCutting stays, since a guard may
+// declare it).
+func declarableGuardLayers() []string {
+	out := make([]string, 0, len(LayerOrder)-1)
+	for _, l := range LayerOrder {
+		if l == LayerUnfiled {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+func fromRawFact(rf rawFact) (Fact, error) {
+	if rf.ID == "" {
+		return Fact{}, fmt.Errorf("missing id")
+	}
+	if rf.Statement == "" {
+		return Fact{}, fmt.Errorf("%s: statement is required", rf.ID)
+	}
+	var expires *time.Time
+	if rf.ExpiresAt != "" {
+		t, err := time.Parse(time.RFC3339, rf.ExpiresAt)
+		if err != nil {
+			return Fact{}, fmt.Errorf("%s: expires_at must be RFC3339: %w", rf.ID, err)
+		}
+		expires = &t
+	}
+	return Fact{ID: rf.ID, Statement: rf.Statement, Provenance: rf.Provenance, ExpiresAt: expires, MaxAgeDays: rf.MaxAgeDays}, nil
+}
+
+func fromRawProof(rp rawProof) (Proof, error) {
+	if rp.ID == "" {
+		return Proof{}, fmt.Errorf("missing id")
+	}
+	status, err := parseProofStatus(rp.ID, rp.Status)
+	if err != nil {
+		return Proof{}, err
+	}
+	if rp.ObservedAt == "" {
+		return Proof{}, fmt.Errorf("%s: observed_at is required", rp.ID)
+	}
+	observed, err := time.Parse(time.RFC3339, rp.ObservedAt)
+	if err != nil {
+		return Proof{}, fmt.Errorf("%s: observed_at must be RFC3339: %w", rp.ID, err)
+	}
+	var expires *time.Time
+	if rp.ExpiresAt != "" {
+		t, err := time.Parse(time.RFC3339, rp.ExpiresAt)
+		if err != nil {
+			return Proof{}, fmt.Errorf("%s: expires_at must be RFC3339: %w", rp.ID, err)
+		}
+		expires = &t
+	}
+	sig, err := fromRawSignature(rp.ID, rp.Signature)
+	if err != nil {
+		return Proof{}, err
+	}
+	accepted, err := fromRawAcceptance(rp.ID, rp.Accepted)
+	if err != nil {
+		return Proof{}, err
+	}
+	if rp.Layer != "" && !ValidLayer(rp.Layer) {
+		return Proof{}, fmt.Errorf("%s: layer must be one of %s, got %q", rp.ID, strings.Join(declarableLayers(), "/"), rp.Layer)
+	}
+	var host *ProofHost
+	if rp.Host != nil {
+		host = &ProofHost{Name: rp.Host.Name, ID: rp.Host.ID}
+	}
+	var dependencies *Dependencies
+	if rp.Dependencies != nil {
+		value, err := fromRawDependencies(rp.Dependencies)
+		if err != nil {
+			return Proof{}, fmt.Errorf("%s: %w", rp.ID, err)
+		}
+		dependencies = &value
+	}
+	measurements, err := fromRawMeasurements(rp.Measurements)
+	if err != nil {
+		return Proof{}, fmt.Errorf("%s: %w", rp.ID, err)
+	}
+	return Proof{
+		ID:           rp.ID,
+		Status:       status,
+		ObservedAt:   &observed,
+		ExpiresAt:    expires,
+		SHA256:       rp.SHA256,
+		EvidenceURL:  rp.EvidenceURL,
+		Signature:    sig,
+		Verified:     rp.Verified,
+		Command:      rp.Command,
+		Measurements: measurements,
+		RecipeDigest: rp.RecipeDigest,
+		Dependencies: dependencies,
+		Accepted:     accepted,
+		Layer:        rp.Layer,
+		Category:     rp.Category,
+		Scope:        fromRawScope(rp.Scope),
+		Host:         host,
+		Epoch:        rp.Epoch,
+	}, nil
+}
+
+// parseProofStatus maps a proof's raw status string onto its ProofRecordStatus
+// enum value, rejecting anything outside the five recognized states.
+func parseProofStatus(id, raw string) (ProofRecordStatus, error) {
+	switch raw {
+	case "observed":
+		return ProofRecordObserved, nil
+	case "validated":
+		return ProofRecordValidated, nil
+	case "stale":
+		return ProofRecordStale, nil
+	case "disputed":
+		return ProofRecordDisputed, nil
+	case "unreachable":
+		return ProofRecordUnreachable, nil
+	default:
+		return "", fmt.Errorf("%s: status must be observed/validated/stale/disputed/unreachable, got %q", id, raw)
+	}
+}
+
+// fromRawSignature converts an optional signature: block, requiring both
+// public_key and signature once the block is present. A nil input yields a
+// nil signature.
+func fromRawSignature(id string, rs *rawSignature) (*Signature, error) {
+	if rs == nil {
+		return nil, nil
+	}
+	if rs.PublicKey == "" || rs.Signature == "" {
+		return nil, fmt.Errorf("%s: signature requires both public_key and signature", id)
+	}
+	if rs.Version != 0 && rs.Version != 2 {
+		return nil, fmt.Errorf("%s: unsupported signature version %d", id, rs.Version)
+	}
+	return &Signature{Version: rs.Version, PublicKeyHex: rs.PublicKey, SignatureHex: rs.Signature}, nil
+}
+
+// fromRawAcceptance converts and validates an optional accepted: block.
+// A nil input yields a nil acceptance. All four fields are required once
+// the block exists — by, at, reason, review_by — because an acceptance
+// that names nobody, dates nothing, or explains nothing is exactly the
+// unreviewed gap it pretends to close.
+func fromRawAcceptance(proofID string, ra *rawAcceptance) (*Acceptance, error) {
+	if ra == nil {
+		return nil, nil
+	}
+	if ra.By == "" {
+		return nil, fmt.Errorf("%s: accepted.by is required", proofID)
+	}
+	if ra.Reason == "" {
+		return nil, fmt.Errorf("%s: accepted.reason is required — an acceptance without a reason is a rubber stamp", proofID)
+	}
+	if ra.At == "" {
+		return nil, fmt.Errorf("%s: accepted.at is required", proofID)
+	}
+	at, err := time.Parse(time.RFC3339, ra.At)
+	if err != nil {
+		return nil, fmt.Errorf("%s: accepted.at must be RFC3339: %w", proofID, err)
+	}
+	if ra.ReviewBy == "" {
+		return nil, fmt.Errorf("%s: accepted.review_by is required — an acceptance must come up for review", proofID)
+	}
+	reviewBy, err := time.Parse(time.RFC3339, ra.ReviewBy)
+	if err != nil {
+		return nil, fmt.Errorf("%s: accepted.review_by must be RFC3339: %w", proofID, err)
+	}
+	return &Acceptance{By: ra.By, At: at, Reason: ra.Reason, ReviewBy: reviewBy}, nil
+}
+
+// fromRawMeasurements converts an optional measurements: block. A nil input
+// (the field was absent) yields a nil result, distinguishing "not a drill
+// proof" from a proof that measured nothing.
+func fromRawMeasurements(rm *rawMeasurements) (*Measurements, error) {
+	if rm == nil {
+		return nil, nil
+	}
+	if math.IsNaN(rm.RTOSeconds) || math.IsInf(rm.RTOSeconds, 0) || rm.RTOSeconds < 0 {
+		return nil, fmt.Errorf("measurements.rto_seconds must be finite and non-negative")
+	}
+	if rm.RPOSeconds != nil && (math.IsNaN(*rm.RPOSeconds) || math.IsInf(*rm.RPOSeconds, 0) || *rm.RPOSeconds < 0) {
+		return nil, fmt.Errorf("measurements.rpo_seconds must be finite and non-negative")
+	}
+	checks := make([]CheckOutcome, 0, len(rm.Checks))
+	for _, rc := range rm.Checks {
+		checks = append(checks, CheckOutcome(rc))
+	}
+	return &Measurements{RTOSeconds: rm.RTOSeconds, RPOSeconds: rm.RPOSeconds, Checks: checks}, nil
+}

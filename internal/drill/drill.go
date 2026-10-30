@@ -1,0 +1,500 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
+// Package drill proves a recovery by performing it.
+//
+// Every other signal in this tool is an assertion that someone looked. A drill
+// is the one that cannot be faked: it reconstructs the artifact from its
+// declared recovery source inside a throwaway sandbox and checks the result
+// against typed, measurable outcomes — byte-identity by default, or explicit
+// checks (sqlite table shape and integrity, git repo health, a file tree's
+// shape, an arbitrary invariant command, or booting the artifact as a real
+// service and probing it — see serve.go, the L4 rung) declared by the
+// drill. It also measures how long recovery took (RTO) and how stale the
+// recovered data was (RPO) against any declared budgets. Only a drill
+// produces verified: true, and only that satisfies a guard marked
+// require_verified.
+//
+// It fails closed on purpose. A recovery command that "succeeds" while
+// restoring garbage, a source that has quietly gone missing, a sandbox that
+// cannot be created, and a budget that was declared but nothing measures are
+// all failures — because each of them, believed, would cost you the artifact
+// at the exact moment you needed it.
+package drill
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	commandrunner "github.com/tannernicol/restoregap/internal/command"
+	"github.com/tannernicol/restoregap/internal/contextspec"
+)
+
+// Spec is one declared drill: reconstruct Artifact from RecoverySource by
+// running Recover, and check the result against Validate (or, if empty, the
+// implicit single byte_identical check). Fields mirror contextspec.Drill.
+type Spec struct {
+	Proof          string `yaml:"proof"`
+	Artifact       string `yaml:"artifact"`
+	Recover        string `yaml:"recover"`
+	RecoverySource string `yaml:"recovery_source"`
+	Validate       []contextspec.DrillCheck
+	Budgets        contextspec.DrillBudgets
+	PinCheck       string
+}
+
+// Result is the outcome of running one Spec.
+type Result struct {
+	Proof      string
+	Verified   bool
+	PreHash    string // hash of the live artifact; set only when a byte_identical check ran
+	PostHash   string // hash of what the recovery reconstructed; set only when a byte_identical check ran
+	Detail     string
+	Err        error
+	Checks     []contextspec.CheckOutcome // declared checks, in order, plus any synthetic budget_rto/budget_rpo failures
+	RTOSeconds float64
+	RPOSeconds *float64 // nil when no check measured freshness
+	// SourceUnreachable marks a failure where the recovery SOURCE could not
+	// be reached/read (missing mount, connection refused, permission denied
+	// on the source, timeout) — or the run never got as far as attempting a
+	// recovery — so nothing was proven either way. The CLI records such a
+	// result as proof status "unreachable", distinct from "disputed" (a
+	// recovery that ran and failed verification). It never changes gating:
+	// both fail closed exactly the same.
+	SourceUnreachable bool
+}
+
+// Runner executes drills. Now is injectable so callers can pin drill time for
+// deterministic runs; the zero value measures real elapsed time.
+type Runner struct {
+	Now func() time.Time
+	// Timeout bounds each declared command and its ordinary descendants. It is
+	// deliberately separate from Spec.Budgets.RTO, which measures proof time.
+	Timeout time.Duration
+
+	// SandboxDir is the parent directory throwaway sandboxes are created in.
+	// Empty means the OS temp dir, which on most Linux systems is tmpfs —
+	// that is, RAM. Restoring a multi-gigabyte artifact there quietly spends
+	// memory the machine may need, and a large enough restore can take the
+	// box down during the very exercise meant to prove it survives. Point
+	// this at disk for anything big.
+	SandboxDir string
+}
+
+func (r Runner) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
+}
+
+func hashFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// Run performs one drill. The recover command is handed three variables:
+//
+//	RG_SANDBOX          a private empty directory it may write into freely
+//	RG_TARGET           the path it must write the reconstructed artifact to
+//	RG_RECOVERY_SOURCE  the declared recovery source
+//
+// Writing to RG_TARGET rather than stdout means a command can emit a derived
+// manifest (a restored database queried for table shape, a secret store
+// enumerated by ciphertext hash) instead of raw bytes — which is what makes a
+// drill possible for artifacts that must never be printed. RG_TARGET may be a
+// single file (byte_identical, sqlite) or a directory (git, file_tree, serve
+// — whatever the serve command itself expects); which checks run determines
+// what shape it must take.
+func (r Runner) Run(spec Spec) Result {
+	return r.RunContext(context.Background(), spec)
+}
+
+// RunContext performs one drill while honoring caller cancellation. A canceled
+// or timed-out recovery/check can never return a verified result.
+func (r Runner) RunContext(ctx context.Context, spec Spec) Result {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	res := Result{Proof: spec.Proof}
+	setup, err := r.prepareRun(ctx, spec)
+	if err != nil {
+		res.Err = err
+		res.SourceUnreachable = true // no recovery was attempted; nothing was proven
+		return res
+	}
+	defer setup.cancel()
+	defer func() { _ = os.RemoveAll(setup.sandbox) }()
+
+	checks := setup.checks
+	drillCtx := setup.ctx
+	timeout := setup.timeout
+	target := setup.target
+	res.PreHash = setup.preHash
+
+	// The RTO clock runs from just before recovery starts to just after the
+	// last check finishes — it measures the whole "how long until I know the
+	// data is back and good", not merely the recovery command's exit.
+	start := setup.start
+
+	run := commandrunner.Shell(drillCtx, spec.Recover, commandrunner.Options{Env: setup.commandEnv, Timeout: timeout})
+	if run.Err != nil {
+		res.Err = fmt.Errorf("drill %s: recovery command failed: %w — %s", spec.Proof, run.Err, firstLine(run.Output))
+		// A recovery WAS attempted here, so the default recording is
+		// "disputed" — but when the failure output is a source-reachability
+		// signature (the source mount missing, the connection refused or
+		// timing out, permission denied on the source), the honest report is
+		// that the drill could not even try.
+		res.SourceUnreachable = run.ContextErr != nil || looksLikeUnreachableSource(run.Output)
+		return res
+	}
+	if drillCtx.Err() != nil {
+		res.Err = fmt.Errorf("drill %s: canceled: %w", spec.Proof, drillCtx.Err())
+		res.SourceUnreachable = true
+		return res
+	}
+
+	// A command that exits 0 without producing anything is the most dangerous
+	// shape of all: it looks like a successful recovery. This only applies
+	// when some declared check actually needs RG_TARGET (everything but a
+	// command-only drill, whose invariant script may validate purely through
+	// side effects it inspects itself).
+	if requiresTarget(checks) {
+		if _, err := os.Lstat(target); err != nil {
+			res.Err = fmt.Errorf("drill %s: recovery command exited 0 but wrote nothing to RG_TARGET", spec.Proof)
+			return res
+		}
+	}
+
+	env := checkEnv{
+		Target:         target,
+		Sandbox:        setup.sandbox,
+		RecoverySource: spec.RecoverySource,
+		PreHash:        setup.preHash,
+		Now:            r.now,
+		Artifact:       spec.Artifact,
+		Context:        drillCtx,
+		Timeout:        timeout,
+	}
+
+	outcomes := make([]contextspec.CheckOutcome, 0, len(checks))
+	candidates := make([]*freshnessCandidate, 0, len(checks))
+	allPassed := true
+	for _, c := range checks {
+		cr := runCheckContext(drillCtx, c, env)
+		outcomes = append(outcomes, cr.outcome)
+		if !cr.outcome.Pass {
+			allPassed = false
+		}
+		if cr.postHash != "" {
+			res.PostHash = cr.postHash
+		}
+		candidates = append(candidates, cr.rpo)
+		if drillCtx.Err() != nil {
+			res.Err = fmt.Errorf("drill %s: check canceled: %w", spec.Proof, drillCtx.Err())
+			res.SourceUnreachable = true
+			res.Checks = outcomes
+			res.Detail = summarizeDetail(false, outcomes)
+			return res
+		}
+	}
+
+	res.RTOSeconds = r.now().Sub(start).Seconds()
+	res.RPOSeconds = selectRPO(candidates, spec.Budgets.RPO > 0)
+
+	outcomes, budgetsMet := applyBudgets(spec.Budgets, res.RTOSeconds, res.RPOSeconds, freshnessDeclared(checks), outcomes)
+
+	res.Checks = outcomes
+	res.Verified = allPassed && budgetsMet
+	res.Detail = summarizeDetail(res.Verified, outcomes)
+	return res
+}
+
+type drillSetup struct {
+	ctx        context.Context
+	cancel     context.CancelFunc
+	timeout    time.Duration
+	checks     []contextspec.DrillCheck
+	preHash    string
+	sandbox    string
+	target     string
+	start      time.Time
+	commandEnv []string
+}
+
+// prepareRun performs the checks that must complete before a recovery command
+// is attempted. Every error here means no recovery ran, so callers can report
+// the result as unreachable without duplicating that classification logic.
+func (r Runner) prepareRun(ctx context.Context, spec Spec) (drillSetup, error) {
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = commandrunner.DefaultTimeout
+	}
+	drillCtx, cancel := context.WithTimeout(ctx, timeout)
+	fail := func(err error) (drillSetup, error) {
+		cancel()
+		return drillSetup{}, err
+	}
+
+	if spec.Proof == "" || spec.Artifact == "" || spec.Recover == "" {
+		return fail(fmt.Errorf("drill: proof, artifact and recover are all required"))
+	}
+	if sameLocalObject(spec.Artifact, spec.RecoverySource) {
+		return fail(fmt.Errorf("drill %s: artifact and recovery_source refer to the same local filesystem object", spec.Proof))
+	}
+
+	checks := spec.Validate
+	if len(checks) == 0 {
+		checks = []contextspec.DrillCheck{{Type: "byte_identical"}}
+	}
+	var preHash string
+	if hasCheckType(checks, "byte_identical") {
+		h, err := hashFile(spec.Artifact)
+		if err != nil {
+			return fail(fmt.Errorf("drill %s: cannot read the live artifact %s: %w", spec.Proof, spec.Artifact, err))
+		}
+		preHash = h
+	}
+
+	sandbox, err := os.MkdirTemp(r.SandboxDir, "restoregap-drill-")
+	if err != nil {
+		return fail(fmt.Errorf("drill %s: cannot create sandbox: %w", spec.Proof, err))
+	}
+	target := filepath.Join(sandbox, "recovered")
+	return drillSetup{
+		ctx: drillCtx, cancel: cancel, timeout: timeout, checks: checks,
+		preHash: preHash, sandbox: sandbox, target: target,
+		start: r.now(),
+		commandEnv: append(os.Environ(),
+			"RG_SANDBOX="+sandbox,
+			"RG_TARGET="+target,
+			"RG_RECOVERY_SOURCE="+spec.RecoverySource,
+		),
+	}, nil
+}
+
+// sameLocalObject rejects the one demonstrably unsafe producer setup: using
+// the live artifact itself (including a symlink or hardlink alias) as its
+// recovery source. Opaque remote/source URIs are left to their declared
+// recovery command; a local source directory containing a distinct backup is
+// valid and cannot be rejected from path strings alone.
+func sameLocalObject(artifact, source string) bool {
+	if artifact == "" || source == "" {
+		return false
+	}
+	a, err := os.Stat(artifact)
+	if err != nil {
+		return false
+	}
+	s, err := os.Stat(source)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(a, s)
+}
+
+// applyBudgets evaluates declared RTO/RPO budgets against what was measured
+// and appends a synthetic check outcome for each one that fails — a budget
+// declared but never met must be as visible in the scorecard as a failing
+// check, never a silent pass. Declaring an rpo budget with nothing capable of
+// measuring freshness is itself a hard failure (loud, not silent).
+func applyBudgets(budgets contextspec.DrillBudgets, rtoSeconds float64, rpoSeconds *float64, freshnessAvailable bool, outcomes []contextspec.CheckOutcome) ([]contextspec.CheckOutcome, bool) {
+	met := true
+
+	if budgets.RTO > 0 && rtoSeconds > budgets.RTO.Seconds() {
+		met = false
+		outcomes = append(outcomes, contextspec.CheckOutcome{
+			Type: "budget_rto", Pass: false,
+			Detail: fmt.Sprintf("RTO %s exceeds budget %s", time.Duration(rtoSeconds*float64(time.Second)).Round(time.Millisecond), budgets.RTO),
+		})
+	}
+
+	if budgets.RPO > 0 {
+		switch {
+		case rpoSeconds == nil && !freshnessAvailable:
+			met = false
+			outcomes = append(outcomes, contextspec.CheckOutcome{
+				Type: "budget_rpo", Pass: false,
+				Detail: "rpo budget declared but nothing measures freshness",
+			})
+		case rpoSeconds != nil && *rpoSeconds > budgets.RPO.Seconds():
+			met = false
+			outcomes = append(outcomes, contextspec.CheckOutcome{
+				Type: "budget_rpo", Pass: false,
+				Detail: fmt.Sprintf("RPO %s exceeds budget %s", time.Duration(*rpoSeconds*float64(time.Second)).Round(time.Second), budgets.RPO),
+			})
+		}
+	}
+
+	return outcomes, met
+}
+
+// hasCheckType reports whether any declared check is of the given type.
+func hasCheckType(checks []contextspec.DrillCheck, t string) bool {
+	for _, c := range checks {
+		if c.Type == t {
+			return true
+		}
+	}
+	return false
+}
+
+// requiresTarget reports whether any declared check needs RG_TARGET to exist
+// as a readable file or directory. Only a command-only drill can legitimately
+// leave RG_TARGET unwritten.
+func requiresTarget(checks []contextspec.DrillCheck) bool {
+	for _, c := range checks {
+		if c.Type != "command" {
+			return true
+		}
+	}
+	return false
+}
+
+// freshnessDeclared reports whether any declared check is CAPABLE of
+// measuring RPO: a sqlite check with an explicit freshness block, or a
+// git/file_tree check (whose freshness is auto-derived). It distinguishes "a
+// source exists but its own measurement failed at runtime" — already visible
+// as that check's failure — from "no rpo budget declared here could ever be
+// met", which needs its own loud synthetic failure.
+func freshnessDeclared(checks []contextspec.DrillCheck) bool {
+	for _, c := range checks {
+		switch c.Type {
+		case "sqlite":
+			if c.Freshness != nil {
+				return true
+			}
+		case "git", "file_tree":
+			return true
+		}
+	}
+	return false
+}
+
+// selectRPO applies cross-check RPO precedence: sqlite's explicit freshness
+// declaration always wins; git and file_tree mtime are fallbacks, used only
+// when autoOK (an RPO budget was declared, making the extra measurement
+// worth taking). Within a rank, the first declared check wins.
+func selectRPO(candidates []*freshnessCandidate, autoOK bool) *float64 {
+	var best *freshnessCandidate
+	for _, c := range candidates {
+		if c == nil {
+			continue
+		}
+		if c.rank != freshnessRankSQLite && !autoOK {
+			continue
+		}
+		if best == nil || c.rank < best.rank {
+			best = c
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	seconds := best.seconds
+	return &seconds
+}
+
+// summarizeDetail renders the CLI-facing one-line summary. A verified drill
+// lists every check's detail in declared order; a failed one names the
+// failing checks first so the cause is visible before anything else.
+func summarizeDetail(verified bool, outcomes []contextspec.CheckOutcome) string {
+	if verified {
+		parts := make([]string, 0, len(outcomes))
+		for _, o := range outcomes {
+			parts = append(parts, o.Detail)
+		}
+		return strings.Join(parts, "; ")
+	}
+	var failing, passing []string
+	for _, o := range outcomes {
+		if o.Pass {
+			passing = append(passing, o.Detail)
+		} else {
+			failing = append(failing, fmt.Sprintf("%s: %s", o.Type, o.Detail))
+		}
+	}
+	return strings.Join(append(failing, passing...), "; ")
+}
+
+func truncate(h string) string {
+	if len(h) > 21 {
+		return h[:21]
+	}
+	return h
+}
+
+func firstLine(b []byte) string {
+	s := string(b)
+	for i, c := range s {
+		if c == '\n' {
+			return s[:i]
+		}
+	}
+	if len(s) > 200 {
+		return s[:200]
+	}
+	return s
+}
+
+// unreachableSourceSignatures are the substrings (matched
+// case-insensitively against a failed recovery command's combined output)
+// that mean "the recovery SOURCE could not be reached or read": the source
+// path/mount is missing, the remote refused or timed out, DNS failed, or the
+// process lacked permission to read the source. These are the messages cp,
+// rsync, scp/sftp, rclone, curl, NFS, and the C library emit for exactly
+// those conditions. A recover command that fails for any other reason (a
+// broken script, a bad decrypt key) stays "disputed": a recovery was
+// attempted and the artifact did not come back — the tiebreak rule is that
+// "unreachable" claims nothing more than "the source could not be reached".
+var unreachableSourceSignatures = []string{
+	"no such file or directory", // ENOENT on the source (missing file or mount)
+	"permission denied",         // EACCES on the source
+	"connection refused",        // remote up but rejecting (ECONNREFUSED)
+	"connection timed out",      // network black hole
+	"connection reset",          // link dropped mid-transfer
+	"timed out",                 // generic timeout (rclone/curl/ssh wording)
+	"network is unreachable",    // no route at all
+	"no route to host",
+	"host is down",
+	"could not resolve hostname", // DNS failure (ssh/curl)
+	"name or service not known",  // getaddrinfo failure
+	"temporary failure in name resolution",
+	"mount point",                         // mount(8)/mount.nfs: the source mount is missing or wrong
+	"not mounted",                         // mount(8) wording
+	"transport endpoint is not connected", // NFS after the server vanished
+	"stale file handle",                   // NFS after a server reboot
+}
+
+// looksLikeUnreachableSource reports whether a failed recovery command's
+// output carries one of the source-reachability signatures above. It is a
+// heuristic on free-form command output by necessity — the drill only sees
+// an exit status and bytes — and it deliberately fails toward "disputed"
+// (recovery attempted, outcome unknown-bad) rather than guessing
+// "unreachable", because the two statuses tell the operator different
+// stories and a wrong "unreachable" would dismiss a real verification
+// failure as a network blip.
+func looksLikeUnreachableSource(out []byte) bool {
+	s := strings.ToLower(string(out))
+	for _, sig := range unreachableSourceSignatures {
+		if strings.Contains(s, sig) {
+			return true
+		}
+	}
+	return false
+}

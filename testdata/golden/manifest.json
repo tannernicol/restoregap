@@ -1,0 +1,63 @@
+{
+  "generated_by": "capture.py against the Python restoregap CLI (.work/restore-gap-audit/scanner), 2026-07-16",
+  "cases": [
+    {
+      "name": "intent-block-lifeline-delete",
+      "description": "Local intent deleting a declared OpenClaw credential lifeline with no proofs: BLOCK",
+      "expected_exit": 1,
+      "compare": "out.json semantic content + exitcode.txt"
+    },
+    {
+      "name": "intent-pass-proofs",
+      "description": "OpenClaw runtime update covered by a command guard whose assurance contract has valid proofs: PASS with findings",
+      "expected_exit": 0,
+      "compare": "out.json semantic content + exitcode.txt"
+    },
+    {
+      "name": "intent-warn-gpu-update",
+      "description": "GPU driver package update with a context that declares no update guards: heuristic WARN, exit 0",
+      "expected_exit": 0,
+      "compare": "out.json semantic content + exitcode.txt"
+    },
+    {
+      "name": "intent-warn-fail-on-warn",
+      "description": "Same heuristic WARN intent as intent-warn-gpu-update but with --fail-on-warn: exit 1",
+      "expected_exit": 1,
+      "compare": "out.json semantic content + exitcode.txt"
+    },
+    {
+      "name": "diff-block-admin-route",
+      "description": "Unified diff rewriting a declared Caddy admin route (local-lab example): BLOCK",
+      "expected_exit": 1,
+      "compare": "out.json semantic content + exitcode.txt"
+    },
+    {
+      "name": "diff-warn-no-context",
+      "description": "Same Caddy admin-route diff with NO --context: heuristics only, WARN, exit 0",
+      "expected_exit": 0,
+      "compare": "out.json semantic content + exitcode.txt"
+    },
+    {
+      "name": "diff-pass-benign",
+      "description": "Benign docs-only diff against the local-lab context: PASS with no findings, ledger stays empty",
+      "expected_exit": 0,
+      "compare": "out.json semantic content + exitcode.txt"
+    },
+    {
+      "name": "zero-config-ssh-key-delete",
+      "description": "SSH private key delete intent with NO context file: built-in default policy must BLOCK (protected behavior)",
+      "expected_exit": 1,
+      "compare": "out.json semantic content + exitcode.txt"
+    }
+  ],
+  "ledger_fixture": {
+    "path": "ledger/",
+    "description": "Multi-entry ledger: block + warn + pass preflights, then decision override with --ack, then ledger verify + checkpoint; hash_vectors.json holds recomputed entry-hash vectors"
+  },
+  "purpose": "Semantic reference cases for the Go rewrite of the restoregap CLI. Compare semantic JSON content (verdict, rule_id, decision, risk_class, required_next_step) and exit codes - NOT byte-exact output. See NOTES.md.",
+  "deprecated": {
+    "ledger/": "Override/acknowledgement flow, hash_vectors.json, verify/checkpoint outputs: captured for the dropped byte-exact parity goal. DEPRECATED per 2026-07-16 descope; kept for reference only.",
+    "cases/*/out.md": "Markdown captures from the parity goal; deprecated.",
+    "cases/*/ledger.jsonl": "Per-case ledgers contain nondeterministic uuids/timestamps; deprecated as contract material."
+  }
+}

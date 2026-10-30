@@ -1,0 +1,9 @@
+.git
+ui/node_modules
+restoregap
+dist
+coverage.out
+*.test
+.scrub-denylist
+restoregap-public
+test-results

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Restore Gap">
+  <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="16" cy="17.5" r="8.5"/><path d="M16 9V4.5"/><path d="M16 17.5L21.2 14.5"/>
+  </g>
+</svg>

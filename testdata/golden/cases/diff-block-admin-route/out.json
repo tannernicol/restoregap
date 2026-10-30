@@ -1,0 +1,49 @@
+{
+  "adapter": "local",
+  "findings": [
+    {
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "adapter": "local",
+        "environment": "local",
+        "relevant_attributes": {
+          "line": 1,
+          "matched_line": "admin.home.example {",
+          "path": "Caddyfile"
+        },
+        "resource_address": "Caddyfile",
+        "resource_id": "home-admin",
+        "resource_type": "local_caddy_ingress"
+      },
+      "decision": "block",
+      "decision_id": "dec_local_efce3b6692abd592b2d5f96d",
+      "evidence_refs": [
+        {
+          "evidence_url": "/home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/diff-block-admin-route/diff.patch",
+          "observed_at": "2026-05-14T17:00:00Z",
+          "sha256": "sha256:9a9637569bfd33fde9fc6137727cda4b7ebd6870aab3868abc31acf3f4b38f19",
+          "source": "local-git-diff"
+        },
+        {
+          "evidence_url": "/home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/diff-block-admin-route/restoregap.local.yml",
+          "observed_at": "2026-05-14T17:00:00Z",
+          "sha256": "sha256:aefbf2bf1b492ff66dfb37290b804c7daafa0bd194cc81d030b00dba9836b2b8",
+          "source": "restoregap-local-context"
+        }
+      ],
+      "observed_failure": [
+        "Declared Caddy admin/control route changed without local recovery path proof."
+      ],
+      "proof": "local.caddy.admin_route.rewrite matched Caddyfile:1. Declared recovery/access lifeline proof is missing or unknown.",
+      "proof_status": "missing",
+      "required_next_step": "Restore the removed site declaration, update restoregap.local.yml to the intended route, or record an owner override explaining why this declared route no longer needs to survive.",
+      "risk_class": "cannot_prove_safe",
+      "rule_id": "local.caddy.admin_route.rewrite",
+      "title": "Restore Gap preflight could not prove the declared recovery path survives this change."
+    }
+  ],
+  "summary": "Blocked 1 recovery-critical change(s) (local.caddy.admin_route.rewrite). Supply proof, change the plan, or record an acknowledged risk to proceed.",
+  "verdict": "block"
+}

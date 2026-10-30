@@ -1,0 +1,4 @@
+version: 1
+action: run_command
+command: openclaw update
+description: Update OpenClaw runtime.

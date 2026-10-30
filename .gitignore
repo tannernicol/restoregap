@@ -1,0 +1,17 @@
+/restoregap
+/dist/
+ui/node_modules/
+# ui/dist is COMMITTED: go:embed inlines it into artifact pages (rebuild via npm run build)
+*.test
+coverage.out
+.DS_Store
+.claude/
+
+# pre-publish gate: the identity denylist must never be committed
+.scrub-denylist
+/restoregap-public/
+.gauntlet-steps.log
+/test-results/
+
+# self-host config with secrets (see deploy/cloud.env.example)
+deploy/cloud.env

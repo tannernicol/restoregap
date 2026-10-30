@@ -1,0 +1,7 @@
+{
+  "name": "restoregap",
+  "owner": { "name": "Restore Gap maintainers" },
+  "plugins": [
+    { "name": "restoregap", "source": "./", "description": "Recovery evidence gates for coding agents." }
+  ]
+}

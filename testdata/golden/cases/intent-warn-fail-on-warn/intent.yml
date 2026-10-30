@@ -1,0 +1,5 @@
+version: 1
+action: package_update
+packages:
+  - nvidia-driver
+description: Update the GPU driver stack.

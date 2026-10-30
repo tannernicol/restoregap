@@ -1,0 +1,13 @@
+# run from the scanner checkout root, in this order
+# preflight-block (exit 1)
+restoregap preflight --intent /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-block-lifeline-delete/intent.yml --context /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-block-lifeline-delete/restoregap.local.yml --intent-actor codex --context-window local-shell --ledger /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/ledger/ledger.jsonl --actor agent/claude --as-of 2026-05-14T12:00:00Z --format json
+# preflight-warn (exit 0)
+restoregap preflight --intent /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-warn-gpu-update/intent.yml --context /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-warn-gpu-update/restoregap.local.yml --ledger /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/ledger/ledger.jsonl --actor agent/claude --as-of 2026-05-14T12:00:00Z --format json
+# preflight-pass (exit 0)
+restoregap preflight --intent /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-pass-proofs/intent.yml --context /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-pass-proofs/restoregap.local.yml --intent-actor codex --context-window local-shell --ledger /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/ledger/ledger.jsonl --actor agent/claude --as-of 2026-05-14T12:00:00Z --format json
+# decision-override (exit 0)
+restoregap decision override dec_local_a3e524ad223e7e1fd0b1417b --ledger /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/ledger/ledger.jsonl --reason test-environment --owner tanner --comment 'Golden-fixture override of a synthetic lifeline block.' --expires-at 2027-01-01T00:00:00Z --ack 'I acknowledge this override disables a lifeline block for fixture capture only.' --actor human/tanner
+# ledger-verify (exit 0)
+restoregap ledger verify --ledger /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/ledger/ledger.jsonl
+# ledger-checkpoint (exit 0)
+restoregap ledger checkpoint --ledger /home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/ledger/ledger.jsonl --format json

@@ -1,0 +1,44 @@
+{{/* SPDX-License-Identifier: MIT */}}
+{{/* SPDX-FileCopyrightText: 2026 Tanner Nicol */}}
+{{define "content"}}
+{{- with .Data}}
+<h1>Dashboard</h1>
+{{- if .Banner}}
+<section class="rg-banner" data-verdict="{{.Banner.Level}}">
+  <span class="rg-verdict">{{.Banner.Title}}</span>
+  <span>{{.Banner.Text}}</span>
+  {{- if $.BillingOn}}
+  <span class="rg-next"><a href="/app/billing">Open billing</a></span>
+  {{- end}}
+</section>
+{{- end}}
+{{- if .Lapsed}}
+<section class="rg-banner" data-verdict="warn">
+  <span class="rg-verdict">SILENT</span>
+  <span>{{len .Lapsed}} {{if eq (len .Lapsed) 1}}host has{{else}}hosts have{{end}} stopped sending.</span>
+  {{- range .Lapsed}}
+  <span class="rg-next"><a href="/app/hosts/{{.ID}}">{{.Name}}</a>: last bundle {{rel .LastSeenAt}}, expected {{cadence .ExpectedEvery}}</span>
+  {{- end}}
+</section>
+{{- end}}
+<p class="cl-stats">{{.Stats.Hosts}} {{if eq .Stats.Hosts 1}}host{{else}}hosts{{end}} · {{.Stats.Bundles}} {{if eq .Stats.Bundles 1}}bundle{{else}}bundles{{end}} · {{.Stats.Alerts}} {{if eq .Stats.Alerts 1}}alert{{else}}alerts{{end}} · last bundle {{relp .Stats.LastBundleAt}}</p>
+
+<h2>Fleet</h2>
+{{- if .View.Empty}}
+<div class="rg-empty">
+  {{- if .View.Skipped}}
+  No bundle could be read. The details are in the server log.
+  {{- else}}
+  No bundles yet. Create a push token in <a href="/app/settings">Settings</a>, then run this on a host:
+  {{- end}}
+</div>
+<pre class="rg-code">{{.PushCommand}}</pre>
+<p class="cl-hint">Put the token in RESTOREGAP_PUSH_TOKEN and your signing seed in RESTOREGAP_SIGNING_SEED. The first bundle pins that host's signing key.</p>
+{{- else}}
+  {{- if .View.Skipped}}
+  <p class="cl-flash" role="status">{{.View.Skipped}} {{if eq .View.Skipped 1}}host's latest bundle{{else}}hosts' latest bundles{{end}} could not be read and {{if eq .View.Skipped 1}}is{{else}}are{{end}} left out.</p>
+  {{- end}}
+  {{template "tree" .View}}
+{{- end}}
+{{- end}}
+{{end}}

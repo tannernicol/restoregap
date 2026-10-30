@@ -1,0 +1,33 @@
+{{/* SPDX-License-Identifier: MIT */}}
+{{/* SPDX-FileCopyrightText: 2026 Tanner Nicol */}}
+{{define "content"}}
+{{- with .Data}}
+<h1>Recovery record</h1>
+<p class="cl-lede">A read-only view of the current recovery record for {{.Scope}}. Nothing on this page can be changed, and the signatures below let you check it without trusting this server.</p>
+<p class="cl-stats">as of {{abs .GeneratedAt}}</p>
+
+{{- if .View.Empty}}
+<div class="rg-empty">No bundles have been received yet.</div>
+{{- else}}
+  {{template "tree" .View}}
+
+  <section class="cl-section">
+    <h2>Verify this yourself</h2>
+    <p class="cl-lede">Every row above comes from the latest signed bundle of one host. Each bundle's manifest is signed with an Ed25519 key that Cloud pinned the first time that host pushed. Get the public key from the host's owner by another route, compare it with the key below, then check the signature over the exact manifest bytes. The manifest lists the SHA-256 of every context file and of the ledger slice the bundle was built from; raw context files and the ledger are not published here.</p>
+    {{- range .Contributors}}
+    <div class="cl-verify">
+      <h3>{{.Host.Name}}</h3>
+      <dl class="rg-kv">
+        <dt>Generated</dt><dd title="{{abs .Bundle.GeneratedAt}}">{{abs .Bundle.GeneratedAt}}</dd>
+        <dt>Public key</dt><dd class="cl-hex">{{.Bundle.PublicKeyHex}}</dd>
+        <dt>Signature</dt><dd class="cl-hex">{{.Bundle.SignatureHex}}</dd>
+        <dt>Archive SHA-256</dt><dd class="cl-hex">{{.Bundle.SHA256}}</dd>
+        <dt>Signed files</dt><dd><a href="/s/{{$.Data.Token}}/bundles/{{.Bundle.ID}}/manifest.json">manifest.json and manifest.sig</a></dd>
+      </dl>
+    </div>
+    {{- end}}
+    <p class="cl-hint">Anyone holding the original archive can run <code>restoregap bundle verify --expected-key &lt;public key&gt; &lt;archive.tgz&gt;</code>. The same data as JSON: <a href="/s/{{.Token}}.json">fleet.json</a>.</p>
+  </section>
+{{- end}}
+{{- end}}
+{{end}}

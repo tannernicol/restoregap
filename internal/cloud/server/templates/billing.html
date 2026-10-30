@@ -1,0 +1,45 @@
+{{/* SPDX-License-Identifier: MIT */}}
+{{/* SPDX-FileCopyrightText: 2026 Tanner Nicol */}}
+{{define "content"}}
+{{- with .Data}}
+<h1>Billing</h1>
+<dl class="rg-kv">
+  <dt>Plan</dt><dd>{{.Plan.Name}}</dd>
+  <dt>Status</dt><dd>{{.WS.BillingStatus}}</dd>
+  {{- if and .WS.TrialEndsAt (eq .WS.BillingStatus "trialing")}}
+  <dt>Trial ends</dt><dd title="{{absp .WS.TrialEndsAt}}">{{relp .WS.TrialEndsAt}}</dd>
+  {{- end}}
+  {{- if .PeriodEnd}}
+  <dt>{{if .Cancels}}Ends{{else}}Renews{{end}}</dt><dd title="{{absp .PeriodEnd}}">{{relp .PeriodEnd}}</dd>
+  {{- end}}
+</dl>
+
+<h2>Plans</h2>
+<div class="cl-plans">
+  {{- range .Plans}}
+  <div class="rg-card" data-current="{{.Current}}">
+    <div class="rg-card-head"><span class="rg-card-title">{{.Plan.Name}}</span><span class="cl-price">{{money .Plan.MonthlyUSD}}<small> / month</small></span></div>
+    <div class="rg-card-sub">{{limit .Plan.MaxHosts}} hosts · {{retention .Plan.RetentionDays}} retention</div>
+    <form method="post" action="/app/billing/checkout">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <input type="hidden" name="plan" value="{{.Plan.Key}}">
+      {{- if .Current}}
+      <button class="ui-kit-button" type="button" disabled>Current plan</button>
+      {{- else if .Disabled}}
+      <button class="ui-kit-button" type="button" disabled title="This plan has no Stripe price configured">Unavailable</button>
+      {{- else}}
+      <button class="ui-kit-button is-primary" type="submit">{{.Action}}</button>
+      {{- end}}
+    </form>
+  </div>
+  {{- end}}
+</div>
+{{- if .Live}}
+<form method="post" action="/app/billing/portal">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <button class="ui-kit-button" type="submit">Manage billing</button>
+</form>
+<p class="cl-hint">Payment method, invoices and cancellation are handled by Stripe's customer portal. Cloud stores the Stripe customer and subscription ids and nothing else about payment.</p>
+{{- end}}
+{{- end}}
+{{end}}

@@ -1,0 +1,26 @@
+{{/* SPDX-License-Identifier: MIT */}}
+{{/* SPDX-FileCopyrightText: 2026 Tanner Nicol */}}
+{{define "content"}}
+<h1>Alerts</h1>
+{{- if .Data.Rows}}
+<div class="rg-tablewrap">
+  <table class="rg-table">
+    <thead><tr><th>When</th><th>Kind</th><th>Host</th><th>Message</th><th>Delivery</th></tr></thead>
+    <tbody>
+      {{- range .Data.Rows}}
+      <tr>
+        <td title="{{abs .Alert.CreatedAt}}">{{rel .Alert.CreatedAt}}</td>
+        <td><span class="cl-badge" data-kind="{{.Alert.Kind}}">{{.Alert.Kind}}</span></td>
+        <td class="cl-wrap">{{if .Known}}<a href="/app/hosts/{{.Host.ID}}">{{.Host.Name}}</a>{{else}}(removed){{end}}</td>
+        <td class="cl-wrap">{{.Alert.Message}}</td>
+        <td class="cl-wrap">{{if .Alert.DeliveredAt}}{{if .Alert.DeliveryError}}gave up: {{.Alert.DeliveryError}}{{else}}delivered {{relp .Alert.DeliveredAt}}{{end}}{{else}}pending{{end}}</td>
+      </tr>
+      {{- end}}
+    </tbody>
+  </table>
+</div>
+<p class="cl-hint">The latest 200 alerts. Alerts are facts about bundles arriving or not, and about declared proof state; they are not uptime monitoring.</p>
+{{- else}}
+<div class="rg-empty">No alerts. Alerts appear when a host with an expected cadence goes quiet, comes back, or a proof's state gets worse between bundles.</div>
+{{- end}}
+{{end}}

@@ -1,0 +1,53 @@
+name: Bug report
+description: Something restoregap did that it should not have, or did not do that it should have.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A reproduction I can run beats a long description.
+        Never paste secret values, tokens or private keys. Restore Gap reads
+        metadata only, and a report should too.
+  - type: input
+    id: version
+    attributes:
+      label: restoregap version
+      description: Output of `restoregap --version`.
+      placeholder: restoregap version 0.11.7
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS and architecture
+      description: For example Ubuntu 24.04 amd64, macOS 15 arm64, Debian 12 arm64.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      description: The exact command line, including flags and any relevant environment variables.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Smallest reproduction
+      description: The smallest context file, drill or fixture that shows the problem, and the steps to get from a clean checkout to the failure.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead, with the full output and exit code.
+    validations:
+      required: true

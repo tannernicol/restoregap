@@ -1,0 +1,71 @@
+version: 2
+# Archive-upload guard: let an agent upload originals INTO one archive folder on a
+# remote host, on proof that the local originals are intact, while downloads from
+# that host keep needing the owner's explicit release.
+#
+# Why this shape: the engine has no exclusion matcher and context layers merge
+# tighten-only, so a broad "block every scp to the host" guard can only be narrowed
+# in the file that declares it. Encode direction in the glob instead:
+#   "*scp *host:* *"   host operand followed by another operand  -> download
+#   "*scp * host:*"    host operand last                          -> upload
+# Uploads to any path without a covering guard still fail closed under
+# --require-coverage. Uploads whose normalized form ("ssh host scp -t <path>")
+# touches a private-data path guard stay blocked by that guard.
+scope:
+    environment: prod
+    system: archive-host
+    host: archive
+drills:
+    # macOS note: keep artifact and recovery_source OUT of ~/Downloads, ~/Documents and
+    # ~/Desktop. Those folders are privacy-protected (TCC); a drill started from launchd
+    # blocks in open() waiting for a consent prompt nobody can see.
+    # One drill per archived original: recover the artifact from its independent
+    # second copy into the sandbox and check both pinned digests. Re-drill weekly
+    # (a scheduler) so the proof never lapses; the guard's max_proof_age_hours
+    # should be a little longer than the schedule.
+    - proof: originals-set-a
+      artifact: /srv/originals/set-a.zip
+      recovery_source: /srv/originals/set-a.iso
+      recover: |
+        set -eu
+        cp "$RG_RECOVERY_SOURCE" "$RG_TARGET"
+      pin_check: test -s "$RG_RECOVERY_SOURCE" && test -s /srv/originals/set-a.zip
+      validate:
+        - type: command
+          run: |
+            set -eu
+            test "$(sha256sum "$RG_TARGET" | cut -d' ' -f1)" = "<iso sha256>"
+            test "$(sha256sum /srv/originals/set-a.zip | cut -d' ' -f1)" = "<zip sha256>"
+guards:
+    - id: archive-upload-write
+      kind: guard
+      enforcement: block
+      layer: data-apps
+      category: archive
+      match:
+        commands:
+            - "ssh archive mkdir -p /srv/archive/*"
+            - "ssh archive scp -t /srv/archive/*"
+            - "*scp * archive:/srv/archive/*"
+            - "ssh archive sha256sum /srv/archive/*"
+            - "ssh archive ls -la /srv/archive/*"
+      require_verified: true
+      require_bound: true
+      max_proof_age_hours: 192
+      requires: {proofs: [originals-set-a]}
+    - id: archive-host-download-block
+      kind: guard
+      enforcement: block
+      layer: identity-secrets
+      category: private-data
+      match:
+        commands:
+            - "*scp *archive:* *"
+            - "*rsync *archive:* *"
+            - "*sftp *archive:*"
+      requires: {facts: [archive-owner-release]}
+facts:
+    - id: archive-owner-release
+      statement: Owner release for pulling private data off the archive host. Kept expired on purpose; re-date it for a short window when the owner is present.
+      provenance: owner policy
+      expires_at: "2000-01-01T00:00:00Z"

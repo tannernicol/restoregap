@@ -1,0 +1,34 @@
+# .scrub-denylist.example — copy to .scrub-denylist and fill in locally.
+#
+#   cp .scrub-denylist.example .scrub-denylist
+#
+# .scrub-denylist is GITIGNORED and must stay that way. A committed file
+# listing the names you are trying to keep out of the repo is itself the leak.
+#
+# One term per line. Matching is case-insensitive and fixed-string, so
+# punctuation and hyphens behave literally. Blank lines and #-comments ignored.
+#
+# DECIDE FIRST: are you publishing under your own name? If the repo ships with
+# your name in LICENSE and the copyright line, do NOT put your own first name in
+# this file — it will match the license, the docs, and every fixture that names
+# an owner, and a gate that fires on things you meant to publish is a gate you
+# will start ignoring. List only what must stay private.
+#
+# What belongs here — anything that identifies a real person or machine:
+#   - family names, usernames, handles you are not publishing under
+#   - real domains you own, and any subdomain that appears in configs
+#   - machine hostnames (desktop, NAS, phone, laptop)
+#   - internal service URLs (git host, reverse proxy, dashboards)
+#   - employer name, if it should not appear in a personal OSS repo
+#
+# Generic machine paths (home directories, the NAS mount, CGNAT overlay
+# addresses) are already covered by scrub-check.sh without being listed here —
+# do not duplicate them. This file is scanned like any other, so writing the
+# literal paths here would trip the gate on its own documentation.
+
+# your-surname
+# your-github-handle
+# example.com
+# my-desktop
+# my-nas
+# git.example.com

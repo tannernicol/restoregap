@@ -1,0 +1,96 @@
+{
+  "adapter": "local",
+  "findings": [
+    {
+      "change": {
+        "actions": [
+          "execute"
+        ],
+        "adapter": "local",
+        "environment": "local",
+        "relevant_attributes": {
+          "actor": "codex",
+          "assurance_contract_id": "selfhosted-agent-recovery-assurance",
+          "command": "openclaw update",
+          "commands": [
+            "openclaw*",
+            "hermes*",
+            "openclawd*"
+          ],
+          "context_window": "local-shell",
+          "contradicted_facts": [],
+          "contradicted_proofs": [],
+          "declared_kind": "agent_runtime",
+          "expected_command": null,
+          "expected_host_identity": null,
+          "expected_verifier": null,
+          "intent_action": "run_command",
+          "line": null,
+          "missing_facts": [],
+          "missing_proofs": [],
+          "path": "openclaw",
+          "recovery_artifacts": [
+            "agent-runtime-state-backup",
+            "portable-recovery-kit"
+          ],
+          "require_signed_proof": false,
+          "required_checks": [
+            "independent access path is still available",
+            "recovery kit or state backup is current",
+            "rollback command is documented outside the agent runtime"
+          ],
+          "required_facts": [],
+          "required_knowledge": [
+            "runtime owner and rollback path",
+            "affected services and credentials",
+            "out-of-band access path"
+          ],
+          "required_proofs": [
+            "agent-runtime-state-backup",
+            "portable-recovery-kit"
+          ],
+          "required_recovery_paths": [
+            "local-console",
+            "second-machine"
+          ],
+          "satisfied_facts": [],
+          "satisfied_proofs": [
+            "agent-runtime-state-backup",
+            "portable-recovery-kit"
+          ],
+          "stale_facts": [],
+          "stale_proofs": [],
+          "untrusted_proofs": []
+        },
+        "resource_address": "openclaw",
+        "resource_id": "agent-runtime-control-plane",
+        "resource_type": "local_command_guard_agent_runtime"
+      },
+      "decision": "pass",
+      "decision_id": "dec_local_997a16b2a955b268a6e49b74",
+      "evidence_refs": [
+        {
+          "evidence_url": "/home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-pass-proofs/intent.yml",
+          "observed_at": "2026-05-14T12:00:00Z",
+          "sha256": "sha256:e7bf35e24c849e1d894ffcb6d7f249e5afb4506d40716d28bc19caa9d822102d",
+          "source": "local-action-intent"
+        },
+        {
+          "evidence_url": "/home/user/infra-config/.work/restore-gap-audit/scanner-go/testdata/golden/cases/intent-pass-proofs/restoregap.local.yml",
+          "observed_at": "2026-05-14T12:00:00Z",
+          "sha256": "sha256:27e66d6f3423ce5aee78847106f540572080da15df067b3dd6b40d6eaf3c51e3",
+          "source": "restoregap-local-context"
+        }
+      ],
+      "observed_failure": [],
+      "proof": "Assurance contract `selfhosted-agent-recovery-assurance` is satisfied by reviewed facts `none` and proof `agent-runtime-state-backup, portable-recovery-kit`.",
+      "proof_status": "present",
+      "required_next_step": "Proceed under the caller's normal approval workflow; Restore Gap found the declared recovery assurance facts/proof for this action.",
+      "risk_class": "none",
+      "rule_id": "local.command_guard.runtime_command",
+      "title": "Restore Gap preflight found the declared recovery assurance."
+    }
+  ],
+  "summary": "Verified the recovery path for 1 recovery-critical change(s): declared proof is present, safe to proceed.",
+  "verdict": "pass"
+}

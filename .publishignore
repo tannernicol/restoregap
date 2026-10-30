@@ -1,0 +1,26 @@
+# .publishignore — tracked files that must NOT ride along into the public
+# export. One shell glob per line, matched against paths from `git ls-files`.
+# Blank lines and #-comments ignored. See scripts/publish-export.sh.
+#
+# It is NOT a substitute for scrub-check.sh. Excluding a file from the export
+# does nothing about the same content sitting in an earlier commit — which is
+# why the export is squashed to a single commit with no history.
+
+# Repository plumbing that is not part of the product.
+.gitea/**
+.platform-module-exempt
+.platform-gate
+.platform-kind
+.platform-sdk-ref
+.ui-kit.json
+.platform-allow-livehost-tests
+
+# Internal documents and tooling that are not part of the product.
+docs/COMPLIANCE_MAP.md
+LAUNCH_BAR.md
+scripts/launch-bar.sh
+POST_LAUNCH.md
+docs/launch/*
+docs/plans/*
+scripts/test-assertions-hook-proof.py
+docs/testing/*

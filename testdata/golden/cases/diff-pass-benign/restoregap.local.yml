@@ -1,0 +1,45 @@
+version: 1
+
+admin_routes:
+  - id: home-admin
+    hostnames:
+      - admin.home.example
+    files:
+      - Caddyfile
+
+remote_access:
+  sshd_config_paths:
+    - sshd_config
+
+recovery_kit:
+  artifacts:
+    - runbooks/dns-rollback.md
+
+lifeline_artifacts:
+  - id: portable-recovery-kit
+    kind: recovery_kit
+    path_patterns:
+      - recovery-usb/**
+      - runbooks/**
+    required_for:
+      - cold-metal-recovery
+      - agent-control-recovery
+    recovery_copy: customer-owned encrypted recovery bundle
+    alternate_paths:
+      - local-console
+
+update_guards:
+  - id: graphics-boot-stack
+    kind: graphics_stack
+    packages:
+      - nvidia*
+      - akmod*
+      - kmod*
+      - mesa*
+      - kernel*
+    required_recovery_paths:
+      - local-console
+      - previous-kernel-boot-entry
+      - text-mode-boot
+    recovery_artifacts:
+      - portable-recovery-kit

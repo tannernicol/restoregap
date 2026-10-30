@@ -1,0 +1,116 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tanner Nicol
+
+# Release build for the restoregap CLI.
+#
+# WHY THIS FILE EXISTS (added 2026-08-12):
+# The launch checklist recorded release tooling as done. It was not — there was
+# no goreleaser config, no workflow, and no tags, while internal/cli/root.go
+# declared "Version is stamped at build time via -ldflags" with nothing doing
+# the stamping. Cutting a tag would have produced no binaries and a CLI still
+# reporting 0.0.0-dev, discovered during launch week. The README promises
+# "or grab a release binary", so something has to actually build one.
+#
+# TOOLCHAIN PIN: goreleaser is pinned to the v2.5 line (see release.yml),
+# which was chosen when go.mod declared Go 1.25. go.mod is on 1.26.x now, so
+# the v2.17+ line (needs Go >= 1.26.5) would also run; raise the pin in
+# release.yml deliberately, with a release to prove it, not as a side effect.
+version: 2
+project_name: restoregap
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: restoregap
+    main: ./cmd/restoregap
+    binary: restoregap
+    env:
+      - CGO_ENABLED=0
+    # Self-hosters run Linux boxes and drive them from a Mac. Windows is
+    # omitted until someone asks; an untested target in the release table is a
+    # support burden, not a feature.
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      # This is the whole point of the file: without -X the binary ships as
+      # 0.0.0-dev no matter what tag built it.
+      - -s -w -X github.com/tannernicol/restoregap/internal/cli.Version={{.Version}}
+    # Reproducible builds: with -trimpath (no absolute paths), -s -w (no
+    # symbol table/buildinfo variance) and a pinned modtimestamp, two builds of
+    # the same commit produce byte-identical archives — the checksums and the
+    # SBOMs below then mean something stable, and anyone can rebuild a release
+    # binary and check it against checksums.txt themselves.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+# SBOM per archive, in the two formats consumers actually feed tools: SPDX-json
+# (license/REUSE-side tooling) and CycloneDX (dependency/supply-chain scanners).
+# goreleaser shells out to `syft` — it must already be on PATH on the release
+# runner; goreleaser never installs it (no tool is fetched during a build). If
+# syft is absent the release FAILS rather than silently shipping archives with
+# no SBOM.
+sboms:
+  - id: archive-spdx
+    artifacts: archive
+    cmd: syft
+    args: ["$artifact", "--output", "spdx-json=$document"]
+    documents: ["${artifact}.spdx.json"]
+  - id: archive-cyclonedx
+    artifacts: archive
+    cmd: syft
+    args: ["$artifact", "--output", "cyclonedx-json=$document"]
+    documents: ["${artifact}.cdx.json"]
+
+checksum:
+  name_template: checksums.txt
+
+# Release signing: keyless cosign over checksums.txt. Releases run on
+# GitHub-hosted runners (see .github/workflows/release.yml), so the signing
+# identity is the release workflow itself, as proven by the run's OIDC token
+# (the workflow has `id-token: write` and installs cosign before goreleaser).
+# No long-lived key exists to leak. Signing checksums.txt rather than each
+# archive means one signature covers every artifact it names, SBOMs included.
+# Each signature is recorded in the public Sigstore transparency log. The
+# bundle holds the signature and the certificate; verification steps are in
+# the README. Requires cosign on PATH (same no-fetch rule as syft above).
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    output: true
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - --yes
+      - --bundle
+      - "${signature}"
+      - "${artifact}"
+
+snapshot:
+  # Local proof builds are labelled so a snapshot can never be mistaken for a
+  # real release binary.
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  # Releases are created as drafts: the maintainer reviews the assets and
+  # publishes each one by hand, so a tag never announces itself on its own.
+  draft: true
+  prerelease: auto

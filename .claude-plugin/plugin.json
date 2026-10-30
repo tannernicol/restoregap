@@ -1,0 +1,6 @@
+{
+  "name": "restoregap",
+  "description": "Gate coding-agent changes on declared recovery evidence.",
+  "hooks": "./hooks/restoregap.json",
+  "mcpServers": "./hooks/restoregap-mcp.json"
+}

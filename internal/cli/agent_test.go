@@ -1,0 +1,906 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Tanner Nicol
+
+package cli
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+)
+
+func agentTestEnv(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+	for k, v := range map[string]string{"XDG_CONFIG_HOME": filepath.Join(dir, "config"), "XDG_STATE_HOME": filepath.Join(dir, "state"), "RESTOREGAP_POLICY_DIRS": filepath.Join(dir, "policy"), "RESTOREGAP_CONTEXT": filepath.Join(dir, "context.yml"), "RESTOREGAP_LEDGER": filepath.Join(dir, "ledger.jsonl"), "RESTOREGAP_REQUIRE_COVERAGE": ""} {
+		t.Setenv(k, v)
+	}
+	return dir
+}
+
+func TestAgentHookAllowNamesWhyItAllowed(t *testing.T) {
+	dir := agentTestEnv(t)
+	t.Chdir(dir)
+	policy := fmt.Sprintf("version: 2\nguards:\n  - id: file\n    kind: lifeline\n    match: {paths: [%q]}\n", filepath.Join(dir, "guarded"))
+	if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := checkHook(t, "claude", hookEvent("Bash", "command", "rm "+filepath.Join(dir, "unguarded.txt"), dir), "allow", "no declared guard matched")
+	if !strings.Contains(out, "no declared guard matched") {
+		t.Errorf("an allow with no matched guard must say so, got: %s", out)
+	}
+	if strings.Contains(out, "recovery gate passed:") {
+		t.Errorf("an unmatched allow must not claim a proof, got: %s", out)
+	}
+}
+
+func TestAgentHookDegradedRuntimeDirAllowsUnguardedAndDeniesGuarded(t *testing.T) {
+	dir := agentTestEnv(t)
+	t.Chdir(dir)
+	runtime := filepath.Join(dir, "runtime")
+	if err := os.Mkdir(runtime, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(runtime, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(runtime, 0o700) })
+	t.Setenv("RESTOREGAP_RUNTIME_DIR", runtime)
+	policy := fmt.Sprintf("version: 2\nguards:\n  - id: lifeline\n    kind: lifeline\n    match: {paths: [%q]}\n", filepath.Join(dir, "guarded"))
+	if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, stderr := runAgentWithStderr(t, hookEvent("Bash", "command", "rm "+filepath.Join(dir, "benign"), dir), "hook", "claude")
+	assertHookOutput(t, output, "claude", "allow", "degraded mode: cannot write hook intent")
+	if !strings.Contains(stderr, "degraded hook mode") {
+		t.Fatalf("stderr = %q, want degraded-mode note", stderr)
+	}
+	output, _ = runAgentWithStderr(t, hookEvent("Bash", "command", "rm "+filepath.Join(dir, "guarded"), dir), "hook", "claude")
+	assertHookOutput(t, output, "claude", "deny", "cannot write hook intent")
+	if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte("version: 2\ncoverage:\n  commands: [\"ssh nas *\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, _ = runAgentWithStderr(t, hookEvent("Bash", "command", "ssh -p 2222 ops@nas reboot -r now", dir), "hook", "claude")
+	assertHookOutput(t, output, "claude", "deny", "recovery gate blocked")
+	t.Setenv("RESTOREGAP_REQUIRE_COVERAGE", "1")
+	output, _ = runAgentWithStderr(t, hookEvent("Bash", "command", "rm "+filepath.Join(dir, "benign"), dir), "hook", "claude")
+	assertHookOutput(t, output, "claude", "deny", "recovery gate blocked")
+}
+
+func runAgent(t *testing.T, input string, args ...string) string {
+	t.Helper()
+	out, _ := runAgentWithStderr(t, input, args...)
+	return out
+}
+
+func runAgentWithStderr(t *testing.T, input string, args ...string) (string, string) {
+	t.Helper()
+	cmd := newAgentCmd()
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.SetIn(strings.NewReader(input))
+	cmd.SetOut(&out)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs(args)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("agent %v: %v\nstdout: %s\nstderr: %s", args, err, out.String(), stderr.String())
+	}
+	return out.String(), stderr.String()
+}
+
+func hookEvent(tool, key, value, cwd string) string {
+	b, _ := json.Marshal(map[string]any{"tool_name": tool, "tool_input": map[string]string{key: value}, "cwd": cwd})
+	return string(b)
+}
+
+func checkHook(t *testing.T, vendor, event, want, contains string) string {
+	t.Helper()
+	return assertHookOutput(t, runAgent(t, event, "hook", vendor), vendor, want, contains)
+}
+
+func assertHookOutput(t *testing.T, output, vendor, want, contains string) string {
+	t.Helper()
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(output), &wire); err != nil {
+		t.Fatal(err, output)
+	}
+	var decision, reason string
+	switch vendor {
+	case "claude":
+		var specific map[string]string
+		if err := json.Unmarshal(wire["hookSpecificOutput"], &specific); err != nil {
+			t.Fatal(err)
+		}
+		if specific["hookEventName"] != "PreToolUse" {
+			t.Fatal(output)
+		}
+		decision, reason = specific["permissionDecision"], specific["permissionDecisionReason"]
+	case "cursor":
+		var fields map[string]string
+		if err := json.Unmarshal([]byte(output), &fields); err != nil {
+			t.Fatal(err)
+		}
+		if len(fields) != 3 || fields["user_message"] != fields["agent_message"] {
+			t.Fatalf("Cursor messages disagree or unexpected fields: %s", output)
+		}
+		decision, reason = fields["permission"], fields["agent_message"]
+	default:
+		if err := json.Unmarshal(wire["decision"], &decision); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(wire["reason"], &reason); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := wire["hookSpecificOutput"]; ok {
+			t.Fatal("Claude shape in Gemini response")
+		}
+	}
+	if decision != want {
+		t.Fatalf("%s decision = %q, want %q", vendor, decision, want)
+	}
+	if !strings.Contains(reason, contains) {
+		t.Fatalf("%s reason = %q, want substring %q", vendor, reason, contains)
+	}
+	return reason
+}
+
+// Mirrors the 21 cases in docs/examples/preflight-hook.test.sh, including a
+// real drill between the denied and allowed calls. Each invocation executes
+// the agent hook claude command tree and requires successful (exit 0) JSON.
+func TestAgentHookClaudeShellReference21Cases(t *testing.T) {
+	t.Run("direct", testAgentHookClaudeShellReference)
+	t.Run("symlinked temp root", func(t *testing.T) {
+		root := t.TempDir()
+		realRoot := filepath.Join(root, "real")
+		alias := filepath.Join(root, "alias")
+		if err := os.Mkdir(realRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(realRoot, alias); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("TMPDIR", alias)
+		t.Run("flow", testAgentHookClaudeShellReference)
+	})
+}
+
+func testAgentHookClaudeShellReference(t *testing.T) {
+	t.Helper()
+	dir := agentTestEnv(t)
+	repo, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	setup := exec.Command("bash", filepath.Join(repo, "demo/setup.sh"), dir)
+	if out, err := setup.CombinedOutput(); err != nil {
+		t.Fatalf("fixture: %v %s", err, out)
+	}
+	t.Chdir(dir)
+	if err := os.WriteFile("README.md", []byte("unguarded"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	propose := newDrillProposeCmd()
+	var proposed bytes.Buffer
+	propose.SetOut(&proposed)
+	propose.SetArgs([]string{"proj/app.db", "--source", "backup/app.db"})
+	if err := propose.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	contextPath := filepath.Join(dir, "context.yml")
+	if err := os.WriteFile(contextPath, proposed.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	type testCase struct {
+		name, event, want, contains string
+		strict, glob                bool
+	}
+	cases := []testCase{}
+	for _, command := range []string{"rm proj/app.db", "rm -rf proj", "mv proj/app.db /tmp/rg-hook-test-dst", "mv README.md proj/app.db", "truncate -s0 proj/app.db", "dd if=/dev/zero of=proj/app.db bs=1 count=1", "shred proj/app.db"} {
+		cases = append(cases, testCase{name: command, event: hookEvent("Bash", "command", command, dir), want: "deny", contains: "Required proof:"})
+	}
+	cases = append(cases,
+		testCase{name: "file edit", event: hookEvent("Edit", "file_path", "proj/app.db", dir), want: "deny", contains: "restoregap drill --context"},
+		testCase{name: "malformed event", event: "{not-json", want: "deny", contains: "malformed event"},
+		testCase{name: "wildcard new file", event: hookEvent("Write", "file_path", "proj/new.db", dir), want: "deny", glob: true},
+		testCase{name: "strict unknown file", event: hookEvent("Edit", "file_path", "README.md", dir), want: "deny", strict: true},
+		testCase{name: "default unknown command", event: hookEvent("Bash", "command", "ls -la", dir), want: "allow"},
+		testCase{name: "strict unknown command", event: hookEvent("Bash", "command", "ls -la", dir), want: "deny", strict: true, contains: "not evaluated: unrecognized operation"},
+		testCase{name: "strict missing command", event: `{"tool_name":"Bash","tool_input":{}}`, want: "deny", strict: true, contains: "not evaluated: unrecognized operation"},
+		testCase{name: "strict unsupported tool", event: `{"tool_name":"OtherTool","tool_input":{}}`, want: "deny", strict: true, contains: "not evaluated: unrecognized operation"},
+		testCase{name: "strict malformed command", event: hookEvent("Bash", "command", "rm", dir), want: "deny", strict: true, contains: "not evaluated: unrecognized operation"},
+		testCase{name: "unguarded deletion", event: hookEvent("Bash", "command", "rm README.md", dir), want: "allow"},
+		testCase{name: "unmatched ls", event: hookEvent("Bash", "command", "ls -la", dir), want: "allow"},
+		testCase{name: "unguarded force push", event: hookEvent("Bash", "command", "git push --force origin main", dir), want: "allow"})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.strict {
+				t.Setenv("RESTOREGAP_REQUIRE_COVERAGE", "1")
+			}
+			if tc.glob {
+				path := filepath.Join(dir, "glob.yml")
+				if err := os.WriteFile(path, []byte(fmt.Sprintf("version: 2\nguards:\n  - id: wildcard\n    kind: lifeline\n    match: {paths: [%q]}\n", filepath.Join(dir, "proj/**"))), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("RESTOREGAP_CONTEXT", path)
+			}
+			checkHook(t, "claude", tc.event, tc.want, tc.contains)
+		})
+	}
+	drill := newDrillCmd()
+	var drillOut bytes.Buffer
+	drill.SetOut(&drillOut)
+	drill.SetErr(&drillOut)
+	drill.SetArgs([]string{"--context", contextPath})
+	if err := drill.Execute(); err != nil {
+		t.Fatalf("drill: %v %s", err, drillOut.String())
+	}
+	t.Run("deletion after real drill", func(t *testing.T) {
+		checkHook(t, "claude", hookEvent("Bash", "command", "rm proj/app.db", dir), "allow", "")
+	})
+	t.Run("strict edit after real drill", func(t *testing.T) {
+		t.Setenv("RESTOREGAP_REQUIRE_COVERAGE", "1")
+		checkHook(t, "claude", hookEvent("Edit", "file_path", "proj/app.db", dir), "allow", "")
+	})
+}
+
+func TestAgentHookGeminiAndBrokenGate(t *testing.T) {
+	dir := agentTestEnv(t)
+	policy := fmt.Sprintf("version: 2\nguards:\n  - id: file\n    kind: lifeline\n    match: {paths: [%q]}\n", filepath.Join(dir, "guarded"))
+	if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{"write_file", "replace"} {
+		checkHook(t, "gemini", hookEvent(tool, "file_path", "guarded", dir), "deny", "")
+	}
+	checkHook(t, "gemini", hookEvent("run_shell_command", "command", "rm guarded", dir), "deny", "")
+	checkHook(t, "gemini", hookEvent("run_shell_command", "command", "ls", dir), "allow", "")
+	t.Setenv("RESTOREGAP_REQUIRE_COVERAGE", "1")
+	checkHook(t, "gemini", hookEvent("other", "unused", "", dir), "deny", "unrecognized operation")
+	for _, vendor := range []string{"claude", "gemini"} {
+		for _, event := range []string{`null`, `{}`, `{"tool_name":"Edit","tool_input":{}}`, `{"tool_name":"Bash","tool_input":{"command":5}}`, `{"tool_name":"Bash","tool_input":{}} {}`} {
+			checkHook(t, vendor, event, "deny", "malformed event")
+		}
+		t.Run(vendor+" broken", func(t *testing.T) {
+			t.Setenv("RESTOREGAP_CONTEXT", filepath.Join(dir, "missing.yml"))
+			checkHook(t, vendor, hookEvent("Edit", "file_path", "guarded", dir), "deny", "recovery gate unavailable: load_context:")
+		})
+		t.Run(vendor+" ledger broken", func(t *testing.T) {
+			t.Setenv("RESTOREGAP_LEDGER", dir)
+			checkHook(t, vendor, hookEvent("Edit", "file_path", "guarded", dir), "deny", "recovery gate unavailable:")
+		})
+	}
+}
+
+func TestAgentHookShellShapes(t *testing.T) {
+	t.Chdir(agentTestEnv(t))
+	for _, command := range []string{"> file", ": > file", "git push -f origin main", "git push --force-with-lease origin main", "git branch -D old", "terraform destroy", "dropdb db"} {
+		in, err := translateAgentEvent(agentEvent{Tool: "Bash", Input: map[string]json.RawMessage{"command": json.RawMessage(fmt.Sprintf("%q", command))}}, "claude")
+		if err != nil || in.Action == "" || len(in.Paths) != 1 {
+			t.Fatalf("%s: %+v %v", command, in, err)
+		}
+	}
+}
+
+func TestAgentInstall(t *testing.T) {
+	for _, vendor := range []string{"claude", "gemini"} {
+		for _, scope := range []string{"user", "project"} {
+			t.Run(vendor+"/"+scope, func(t *testing.T) {
+				dir := agentTestEnv(t)
+				t.Chdir(dir)
+				base := filepath.Join(dir, "home")
+				if scope == "project" {
+					base = dir
+				}
+				path := filepath.Join(base, "."+vendor, "settings.json")
+				args := []string{"install", vendor, "--scope", scope}
+				dry := runAgent(t, "", append(args, "--dry-run")...)
+				if !strings.Contains(dry, path+": ") || strings.Contains(dry, "@@") {
+					t.Fatal(dry)
+				}
+				if _, err := os.Stat(filepath.Dir(path)); !os.IsNotExist(err) {
+					t.Fatalf("dry run created settings directory: %v", err)
+				}
+				applied := runAgent(t, "", args...)
+				if dry != applied {
+					t.Fatal("dry-run and applied diff disagree")
+				}
+				before, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if again := runAgent(t, "", args...); again != "" {
+					t.Fatal("not idempotent", again)
+				}
+				after, _ := os.ReadFile(path)
+				if !bytes.Equal(before, after) {
+					t.Fatal("repeat install changed bytes")
+				}
+				var obj map[string]any
+				if err := json.Unmarshal(before, &obj); err != nil {
+					t.Fatal(err)
+				}
+				exe, _ := os.Executable()
+				servers := obj["mcpServers"].(map[string]any)
+				server := servers["restoregap"].(map[string]any)
+				if server["command"] != exe {
+					t.Fatal(server)
+				}
+				event, matcher := "PreToolUse", "Bash|Edit|Write|MultiEdit|NotebookEdit"
+				if vendor == "gemini" {
+					event, matcher = "BeforeTool", "run_shell_command|write_file|replace"
+				}
+				entry := obj["hooks"].(map[string]any)[event].([]any)[0].(map[string]any)
+				if entry["matcher"] != matcher || entry["hooks"].([]any)[0].(map[string]any)["command"] != shellQuote(exe)+" agent hook "+vendor {
+					t.Fatal(entry)
+				}
+				if vendor == "claude" {
+					registry := filepath.Join(dir, "home", ".claude.json")
+					if scope == "project" {
+						registry = filepath.Join(dir, ".mcp.json")
+					}
+					data, err := os.ReadFile(registry)
+					if err != nil {
+						t.Fatal(err)
+					}
+					assertMCPRegistry(t, data)
+				}
+			})
+		}
+	}
+}
+
+func TestAgentInstallPreservesAndRejects(t *testing.T) {
+	dir := agentTestEnv(t)
+	path := filepath.Join(dir, "settings.json")
+	server := map[string]any{"command": "/a path/restoregap", "args": []string{"mcp", "serve"}}
+	original := `{"large":9007199254740993,"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"other"}]}]},"mcpServers":{"other":{"command":"keep"},"restoregap":{"env":{"KEEP":"yes"}}}}`
+	if err := os.WriteFile(path, []byte(original), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	c, err := planAgentSettings(path, "claude", "'path' agent hook claude", server, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var merged struct {
+		Large      json.Number
+		Hooks      map[string][]struct{ Hooks []struct{ Command string } }
+		MCPServers map[string]struct {
+			Command string
+			Env     map[string]string
+		}
+	}
+	if err := json.Unmarshal(c.after, &merged); err != nil {
+		t.Fatal(err)
+	}
+	if merged.Large.String() != "9007199254740993" {
+		t.Fatalf("large = %q", merged.Large)
+	}
+	if got := merged.MCPServers["restoregap"].Env["KEEP"]; got != "yes" {
+		t.Fatalf("restoregap env KEEP = %q", got)
+	}
+	if got := merged.MCPServers["other"].Command; got != "keep" {
+		t.Fatalf("other MCP command = %q", got)
+	}
+	entries := merged.Hooks["PreToolUse"]
+	if len(entries) != 2 || len(entries[0].Hooks) != 1 || entries[0].Hooks[0].Command != "other" {
+		t.Fatalf("preserved hooks = %+v", entries)
+	}
+	if err := writeAgentSettings(c); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(path)
+	if info.Mode().Perm() != 0o640 {
+		t.Fatal(info.Mode())
+	}
+	for _, bad := range []string{`null`, `{`, `{} {}`, `{"hooks":[]}`, `{"hooks":{"PreToolUse":{}}}`, `{"mcpServers":[]}`} {
+		if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := planAgentSettings(path, "claude", "command", server, true); err == nil {
+			t.Fatalf("accepted invalid settings %s", bad)
+		}
+		data, _ := os.ReadFile(path)
+		if string(data) != bad {
+			t.Fatal("damaged invalid input")
+		}
+	}
+}
+
+func TestAgentHookSymlinkAndEventCWD(t *testing.T) {
+	dir := agentTestEnv(t)
+	if err := os.Mkdir(filepath.Join(dir, "real"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "real"), filepath.Join(dir, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	policy := fmt.Sprintf("version: 2\nguards:\n  - id: file\n    kind: lifeline\n    match: {paths: [%q]}\n", filepath.Join(dir, "real/**"))
+	if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkHook(t, "claude", hookEvent("Write", "file_path", "alias/new.db", dir), "deny", "")
+}
+
+func assertMCPRegistry(t *testing.T, data []byte) {
+	t.Helper()
+	var registry struct {
+		Servers map[string]struct {
+			Command string
+			Args    []string
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &registry); err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := registry.Servers["restoregap"]
+	if server.Command != exe || !slices.Equal(server.Args, []string{"mcp", "serve"}) {
+		t.Fatalf("registry restoregap = %+v, want command %q and args [mcp serve]", server, exe)
+	}
+}
+
+func TestAgentHookGuardSymlinkLeafEscape(t *testing.T) {
+	dir := agentTestEnv(t)
+	if err := os.MkdirAll(filepath.Join(dir, "proj"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "other"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(dir, "other", "app.db")
+	if err := os.WriteFile(real, []byte("guarded"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	leaf := filepath.Join(dir, "proj", "app.db")
+	if err := os.Symlink(real, leaf); err != nil {
+		t.Fatal(err)
+	}
+	policy := fmt.Sprintf("version: 2\nguards:\n  - id: file\n    kind: lifeline\n    match: {paths: [%q]}\n", filepath.Join(dir, "proj/*.db"))
+	if err := os.WriteFile(os.Getenv("RESTOREGAP_CONTEXT"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkHook(t, "claude", hookEvent("Write", "file_path", leaf, dir), "deny", "")
+}
+
+func TestAgentHookGuardSymlinkedSubdirEscape(t *testing.T) {
+	dir := agentTestEnv(t)
+	if err := os.MkdirAll(filepath.Join(dir, "proj"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "elsewhere"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(dir, "proj", "sub")
+	if err := os.Symlink(filepath.Join(dir, "elsewhere"), sub); err != nil {
+		t.Fatal(err)
+	}
+	policy := fmt.Sprintf("version: 2\nguards:\n  - id: file\n    kind: lifeline\n    match: {paths: [%q]}\n", filepath.Join(dir, "proj/**"))
+	if err := os.WriteFile(os.Getenv("RESTOREGAP_CONTEXT"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkHook(t, "claude", hookEvent("Write", "file_path", filepath.Join(sub, "secret.db"), dir), "deny", "")
+}
+
+// A compound or wrapped command must be judged by every piece it would run:
+// `echo ok && rm guarded` and `ssh nas docker rm vol` both reached a shell the
+// old first-word parser never looked into. Remote operations can only match
+// `commands:` globs, so the guard here is written the way an operator would.
+func TestAgentHookCompoundAndWrappedCommands(t *testing.T) {
+	dir := agentTestEnv(t)
+	t.Chdir(dir)
+	guarded := filepath.Join(dir, "guarded")
+	policy := fmt.Sprintf(`version: 2
+guards:
+  - id: cloud
+    kind: lifeline
+    match: {commands: ["ssh nas docker rm restoregap-cloud*", "*docker volume rm *restoregap*"]}
+    requires: {proofs: [cloud-recovery]}
+    enforcement: block
+  - id: file
+    kind: lifeline
+    match: {paths: [%q, %q]}
+    requires: {proofs: [file-recovery]}
+    enforcement: block
+`, guarded, filepath.Join(dir, "home", "Backups", "**"))
+	writeContext := func(extra string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy+extra), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bash := func(command string) string { return hookEvent("Bash", "command", command, dir) }
+	writeContext("")
+
+	t.Run("remote command denied before proof, allowed after", func(t *testing.T) {
+		t.Cleanup(func() { writeContext("") })
+		checkHook(t, "claude", bash("ssh nas docker rm restoregap-cloud"), "deny", "Required proof: cloud-recovery")
+		checkHook(t, "claude", bash("ssh -p 2222 -i key nas sudo docker rm restoregap-cloud"), "deny", "Required proof: cloud-recovery")
+		writeContext(fmt.Sprintf("proofs:\n  - id: cloud-recovery\n    status: validated\n    observed_at: %q\n", time.Now().UTC().Format(time.RFC3339)))
+		checkHook(t, "claude", bash("ssh nas docker rm restoregap-cloud"), "allow", "recovery gate passed:")
+	})
+	t.Run("unrelated remote command passes with no guard", func(t *testing.T) {
+		reason := checkHook(t, "claude", bash("ssh nas uptime"), "allow", "no declared guard matched")
+		if strings.Contains(reason, "recovery gate passed") {
+			t.Errorf("an unmatched allow must not claim a proof: %s", reason)
+		}
+	})
+	t.Run("one guarded piece of a remote string denies the whole call", func(t *testing.T) {
+		reason := checkHook(t, "claude", bash(`ssh nas "docker volume rm restoregap-cloud_data && rm -rf /data"`), "deny", "Required proof: cloud-recovery")
+		if !strings.Contains(reason, "(2 operations evaluated)") {
+			t.Errorf("deny should say how many operations were evaluated: %s", reason)
+		}
+	})
+	t.Run("remote path never matches a local path guard", func(t *testing.T) {
+		checkHook(t, "claude", bash("ssh nas rm "+guarded), "allow", "no declared guard matched")
+		checkHook(t, "claude", bash("docker exec ctr rm "+guarded), "allow", "no declared guard matched")
+	})
+	t.Run("guarded delete behind && denied", func(t *testing.T) {
+		checkHook(t, "claude", bash("echo hi && rm "+guarded), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash(`bash -lc "cd /tmp && rm `+guarded+`"`), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash("echo $(rm "+guarded+")"), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash(`rm "`+guarded+`"`), "deny", "Required proof: file-recovery")
+	})
+	t.Run("heredoc does not disable the gate", func(t *testing.T) {
+		commit := "git commit -m \"$(cat <<'EOF'\nFix it (it's fine)\n\nrm -rf " + guarded + "\nEOF\n)\""
+		checkHook(t, "claude", bash(commit), "allow", "not evaluated: unrecognized operation")
+		checkHook(t, "claude", bash(commit+" && rm "+guarded), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash("cat <<EOF | tee "+guarded+"\nbody\nEOF"), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash("cat <<EOF\n$(rm "+guarded+")\nEOF"), "deny", "Required proof: file-recovery")
+		// An unterminated heredoc is the one thing still not parsed.
+		checkHook(t, "claude", bash("cat <<EOF\nrm "+guarded), "allow", "not evaluated: could not parse command (unterminated heredoc)")
+	})
+	t.Run("cd moves what relative paths mean", func(t *testing.T) {
+		checkHook(t, "claude", bash("cd /somewhere/else && rm guarded"), "allow", "no declared guard matched")
+		checkHook(t, "claude", bash("cd sub && cd .. && rm guarded"), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash("cd sub; rm ../guarded"), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash("cd "+dir+"/other && rm ../guarded"), "deny", "Required proof: file-recovery")
+		// A pipe or subshell does not carry the cd out.
+		checkHook(t, "claude", bash("(cd /somewhere/else; true); rm guarded"), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash("cd /somewhere/else | cat; rm guarded"), "deny", "Required proof: file-recovery")
+	})
+	t.Run("tilde means home", func(t *testing.T) {
+		checkHook(t, "claude", bash("echo ok && rm -rf ~/Backups/x"), "deny", "Required proof: file-recovery")
+		checkHook(t, "claude", bash("cd ~/Backups && rm x"), "deny", "Required proof: file-recovery")
+	})
+	t.Run("ledger records every evaluated operation", func(t *testing.T) {
+		checkHook(t, "claude", bash("ls | xargs rm"), "allow", "no declared guard matched")
+		ledger, err := os.ReadFile(os.Getenv("RESTOREGAP_LEDGER"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{`"command":"xargs rm"`, `"command":"ssh nas docker volume rm restoregap-cloud_data"`, `"command":"ssh nas rm -rf /data"`} {
+			if !strings.Contains(string(ledger), want) {
+				t.Errorf("ledger missing %s", want)
+			}
+		}
+	})
+	t.Run("unparseable command is not evaluated", func(t *testing.T) {
+		unparseable := bash("diff <(ls a) b && rm " + guarded)
+		checkHook(t, "claude", unparseable, "allow", "not evaluated: could not parse command (process substitution)")
+		t.Setenv("RESTOREGAP_REQUIRE_COVERAGE", "1")
+		checkHook(t, "claude", unparseable, "deny", "not evaluated: could not parse command (process substitution)")
+	})
+	t.Run("strict mode refuses a line it only partly understood", func(t *testing.T) {
+		t.Setenv("RESTOREGAP_REQUIRE_COVERAGE", "1")
+		checkHook(t, "claude", bash("mystery | xargs rm"), "deny", "")
+		// With every recognized piece covered and passing, the unrecognized
+		// sibling is what is left, and it is named.
+		all := filepath.Join(dir, "strict.yml")
+		strict := "version: 2\nguards:\n  - id: any\n    kind: lifeline\n    match: {commands: [\"*\"]}\n    requires: {proofs: [any-recovery]}\n    enforcement: block\n  - id: any-path\n    kind: lifeline\n    match: {paths: [\"/**\"]}\n    requires: {proofs: [any-recovery]}\n    enforcement: block\nproofs:\n  - id: any-recovery\n    status: validated\n    observed_at: " + fmt.Sprintf("%q", time.Now().UTC().Format(time.RFC3339)) + "\n"
+		if err := os.WriteFile(all, []byte(strict), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("RESTOREGAP_CONTEXT", all)
+		checkHook(t, "claude", bash("mystery | xargs rm"), "deny", "not evaluated: unrecognized operation in compound command")
+		checkHook(t, "claude", bash("xargs rm"), "allow", "recovery gate passed")
+		// Builtins and read-only tools are not mystery pieces.
+		checkHook(t, "claude", bash("ls | xargs rm"), "allow", "recovery gate passed")
+		checkHook(t, "claude", bash("cd /tmp && rm x"), "allow", "recovery gate passed")
+		checkHook(t, "claude", bash("cd /tmp && git status && echo done && rm x"), "allow", "recovery gate passed")
+		checkHook(t, "claude", bash("cd /tmp && mystery && rm x"), "deny", "not evaluated: unrecognized operation in compound command")
+		// Nothing recognized stays the old answer, benign or not.
+		checkHook(t, "claude", bash("cd /tmp && ls"), "deny", "not evaluated: unrecognized operation")
+	})
+}
+
+func TestAgentHookScopedCommandCoverageUsesNormalizedSSH(t *testing.T) {
+	dir := agentTestEnv(t)
+	t.Chdir(dir)
+	policy := `version: 2
+coverage:
+  commands: ["ssh nas *"]
+guards:
+  - id: nas-host
+    kind: lifeline
+    match: {commands: ["ssh nas *"], actions: [run_command]}
+    requires: {proofs: [nas-recovery]}
+proofs:
+  - id: nas-recovery
+    status: validated
+    observed_at: "2026-05-14T00:00:00Z"
+`
+	if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := hookEvent("Bash", "command", "ssh -p 2222 ops@nas 'reboot -r now'", dir)
+	checkHook(t, "claude", wrapped, "allow", "recovery gate passed:")
+	if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte("version: 2\ncoverage:\n  commands: [\"ssh nas *\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkHook(t, "claude", wrapped, "deny", "strict coverage")
+}
+
+func TestAgentHookScopesRemoteRedirectsIndependently(t *testing.T) {
+	dir := agentTestEnv(t)
+	t.Chdir(dir)
+	policy := func(pattern string) string {
+		return fmt.Sprintf("version: 2\ncoverage:\n  commands: [\"ssh nas *\"]\nguards:\n  - id: nas-host\n    kind: lifeline\n    match: {commands: [%q], actions: [run_command]}\n    requires: {proofs: [nas-recovery]}\n    enforcement: block\nproofs:\n  - id: nas-recovery\n    status: validated\n    observed_at: %q\n", pattern, "2026-05-14T00:00:00Z")
+	}
+	writePolicy := func(pattern string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy(pattern)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writePolicy("ssh nas *")
+	checkHook(t, "claude", hookEvent("Bash", "command", `ssh nas "cat report"`, dir), "allow", "recovery gate passed:")
+	checkHook(t, "claude", hookEvent("Bash", "command", `ssh nas "cat report > /var/tmp/report.copy"`, dir), "allow", "recovery gate passed:")
+	checkHook(t, "claude", hookEvent("Bash", "command", `ssh nas "cat report 2> /var/log/report.err"`, dir), "allow", "recovery gate passed:")
+
+	writePolicy("ssh nas cat *")
+	checkHook(t, "claude", hookEvent("Bash", "command", `ssh nas "cat report"`, dir), "allow", "recovery gate passed:")
+	checkHook(t, "claude", hookEvent("Bash", "command", `ssh nas "cat report > /var/tmp/report.copy"`, dir), "deny", "strict coverage")
+	checkHook(t, "claude", hookEvent("Bash", "command", `ssh nas "cat report 2> /var/log/report.err"`, dir), "deny", "strict coverage")
+}
+
+func TestAgentHookFailsClosedForUnsupportedSSHOptions(t *testing.T) {
+	dir := agentTestEnv(t)
+	t.Chdir(dir)
+	policy := `version: 2
+coverage:
+  commands: ["ssh nas", "ssh nas *"]
+guards:
+  - id: nas-read-only
+    kind: lifeline
+    match: {commands: ["ssh nas cat *"], actions: [run_command]}
+    requires: {proofs: [nas-recovery]}
+    enforcement: block
+proofs:
+  - id: nas-recovery
+    status: validated
+    observed_at: "2026-05-14T00:00:00Z"
+`
+	if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkHook(t, "claude", hookEvent("Bash", "command", `ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes nas cat report`, dir), "allow", "recovery gate passed:")
+	checkHook(t, "claude", hookEvent("Bash", "command", `ssh nas`, dir), "deny", "strict coverage")
+	checkHook(t, "claude", hookEvent("Bash", "command", `ssh -o BatchMode=yes nas`, dir), "deny", "strict coverage")
+	checkHook(t, "claude", hookEvent("Bash", "command", `ssh nas -oProxyCommand=ignored cat report`, dir), "deny", "strict coverage")
+	for _, command := range []string{
+		`ssh -o 'ProxyCommand=sh -c touch /tmp/nope' nas cat report`,
+		`ssh -oRemoteCommand='touch /tmp/nope' nas cat report`,
+		`ssh -o LocalCommand=touch -o PermitLocalCommand=yes nas cat report`,
+		`ssh -F/tmp/custom_ssh_config nas cat report`,
+		`ssh -L 8080:localhost:80 nas cat report`,
+		`ssh -E /tmp/ssh.log nas cat report`,
+		`ssh -o UserKnownHostsFile=/tmp/known_hosts nas cat report`,
+	} {
+		checkHook(t, "claude", hookEvent("Bash", "command", command, dir), "deny", "strict coverage")
+	}
+}
+
+func TestAgentHookParseFailureHonorsScopedCoverage(t *testing.T) {
+	dir := agentTestEnv(t)
+	t.Chdir(dir)
+	t.Setenv("RESTOREGAP_REQUIRE_COVERAGE", "")
+	command := "ssh nas cat <<EOF\nbody\n"
+	event := hookEvent("Bash", "command", command, dir)
+	contextPath := filepath.Join(dir, "scoped.yml")
+	if err := os.WriteFile(contextPath, []byte("version: 2\ncoverage:\n  commands: [\"ssh nas *\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RESTOREGAP_CONTEXT", contextPath)
+	checkHook(t, "claude", event, "deny", "command-scoped coverage requires a complete parse")
+
+	// With no context declaring a command scope, retain the legacy permissive
+	// parse-failure behavior for existing unscoped installations.
+	t.Setenv("RESTOREGAP_CONTEXT", "")
+	checkHook(t, "claude", event, "allow", "not evaluated: could not parse command")
+
+	malformedPath := filepath.Join(dir, "malformed.yml")
+	if err := os.WriteFile(malformedPath, []byte("version: 2\ncoverage: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RESTOREGAP_CONTEXT", malformedPath)
+	checkHook(t, "claude", event, "deny", "recovery gate unavailable: cannot inspect command coverage")
+}
+
+// scp and sftp to a covered host, and ssh to a covered address spelled the
+// way ssh resolves it but the policy does not name it, used to pass as
+// "not evaluated: unrecognized operation" and as an uncovered host. Each is
+// now evaluated as the equivalent ssh command, and by its own text in every
+// spelling, so both host coverage and transfer globs apply.
+func TestAgentHookCoversScpSftpAndHostSpellings(t *testing.T) {
+	dir := agentTestEnv(t)
+	t.Chdir(dir)
+	base := `version: 2
+coverage:
+  commands: ["ssh nas", "ssh nas *", "ssh 192.0.2.9", "ssh 192.0.2.9 *"]
+guards:
+  - id: nas-read
+    kind: lifeline
+    match: {commands: ["ssh nas cat *", "ssh 192.0.2.9 cat *"], actions: [run_command]}
+    requires: {proofs: [nas-recovery]}
+    enforcement: block
+proofs:
+  - id: nas-recovery
+    status: validated
+    observed_at: "2026-05-14T00:00:00Z"
+`
+	transfer := `  - id: nas-transfer
+    kind: lifeline
+    match: {commands: ["*scp *nas:*", "*sftp *nas*"]}
+    requires: {proofs: [nas-transfer-release]}
+    enforcement: block
+`
+	writePolicy := func(guards string) {
+		t.Helper()
+		policy := strings.Replace(base, "proofs:\n  - id: nas-recovery", guards+"proofs:\n  - id: nas-recovery", 1)
+		if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bash := func(command string) string { return hookEvent("Bash", "command", command, dir) }
+	writePolicy("")
+
+	t.Run("scp and sftp to a covered host fall under its coverage", func(t *testing.T) {
+		for _, command := range []string{
+			`scp report nas:/srv/report`,
+			`scp -P 2222 -i key -o ConnectTimeout=5 -rp dir ops@nas:/srv/`,
+			`scp nas:/srv/report ./report.copy`,
+			`scp report scp://ops@nas:2222/srv/report`,
+			`scp report 192.0.2.9:/srv/report`,
+			`scp report 192.0.521:/srv/report`,
+			`scp report NAS:/srv/report`,
+			`sftp nas`,
+			`sftp -b cmds.txt nas`,
+			`sftp ops@nas:/share`,
+		} {
+			checkHook(t, "claude", bash(command), "deny", "strict coverage")
+		}
+	})
+	t.Run("transfer globs on scp and sftp text fire in every spelling", func(t *testing.T) {
+		writePolicy(transfer)
+		t.Cleanup(func() { writePolicy("") })
+		for _, command := range []string{
+			`scp report nas:/srv/report`,
+			`scp report NAS:/srv/report`,
+			`scp nas:/srv/report .`,
+			`sftp nas`,
+			`sftp NAS`,
+		} {
+			checkHook(t, "claude", bash(command), "deny", "Required proof: nas-transfer-release")
+		}
+	})
+	t.Run("an unreadable scp host fails closed under scoped coverage", func(t *testing.T) {
+		for _, command := range []string{`scp report $NAS_HOST:/srv/x`, `sftp $H`, `scp report`} {
+			checkHook(t, "claude", bash(command), "deny", "destination could not be determined); command-scoped coverage requires a complete parse")
+		}
+	})
+	t.Run("ssh spellings that resolve to a covered address are covered", func(t *testing.T) {
+		for _, command := range []string{
+			`ssh 192.0.521 touch x`,
+			`ssh 0300.00.02.011 touch x`,
+			`ssh 3221225993 touch x`,
+			`ssh 7516193289 touch x`,
+			`ssh 192.0.002.009 touch x`,
+			`ssh NAS touch x`,
+			`ssh ops@NAS. touch x`,
+			`ssh NAS`,
+		} {
+			checkHook(t, "claude", bash(command), "deny", "strict coverage")
+		}
+		// A read the policy allows stays allowed in any spelling.
+		checkHook(t, "claude", bash(`ssh 192.0.521 cat /srv/report`), "allow", "recovery gate passed:")
+		checkHook(t, "claude", bash(`ssh NAS cat /srv/report`), "allow", "recovery gate passed:")
+	})
+	t.Run("negative controls still pass", func(t *testing.T) {
+		checkHook(t, "claude", bash(`ssh nas cat /srv/report`), "allow", "recovery gate passed:")
+		checkHook(t, "claude", bash(`ssh 192.0.2.9 cat /srv/report`), "allow", "recovery gate passed:")
+		checkHook(t, "claude", bash(`ssh pc uptime`), "allow", "no declared guard matched")
+		checkHook(t, "claude", bash(`ssh 192.0.2.20 touch x`), "allow", "no declared guard matched")
+		checkHook(t, "claude", bash(`cp report report.copy`), "allow", "no declared guard matched")
+		// scp and sftp used to be unrecognized; now evaluated, a local copy or a
+		// transfer to an uncovered host still passes.
+		checkHook(t, "claude", bash(`scp report report.copy`), "allow", "no declared guard matched")
+		checkHook(t, "claude", bash(`scp report pc:/tmp/report`), "allow", "no declared guard matched")
+		checkHook(t, "claude", bash(`sftp pc`), "allow", "no declared guard matched")
+	})
+}
+
+// rsync to a covered host only had its text checked: `rsync x NAS:/y` and
+// `rsync x 7516193289:/y` missed `*rsync *nas:*` and every host was outside
+// `ssh nas *` coverage. Each remote operand is now also the server rsync runs
+// there, in every spelling, and the typed text still matches as before.
+func TestAgentHookCoversRsyncRemoteOperands(t *testing.T) {
+	dir := agentTestEnv(t)
+	t.Chdir(dir)
+	base := `version: 2
+coverage:
+  commands: ["ssh nas", "ssh nas *", "ssh 192.0.2.9", "ssh 192.0.2.9 *"]
+guards:
+  - id: nas-read
+    kind: lifeline
+    match: {commands: ["ssh nas cat *", "ssh 192.0.2.9 cat *"], actions: [run_command]}
+    requires: {proofs: [nas-recovery]}
+    enforcement: block
+proofs:
+  - id: nas-recovery
+    status: validated
+    observed_at: "2026-05-14T00:00:00Z"
+`
+	transfer := `  - id: nas-transfer
+    kind: lifeline
+    match: {commands: ["*rsync *nas:*"]}
+    requires: {proofs: [nas-transfer-release]}
+    enforcement: block
+`
+	writePolicy := func(guards string) {
+		t.Helper()
+		policy := strings.Replace(base, "proofs:\n  - id: nas-recovery", guards+"proofs:\n  - id: nas-recovery", 1)
+		if err := os.WriteFile(filepath.Join(dir, "context.yml"), []byte(policy), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bash := func(command string) string { return hookEvent("Bash", "command", command, dir) }
+	writePolicy("")
+
+	t.Run("rsync to a covered host falls under its coverage", func(t *testing.T) {
+		for _, command := range []string{
+			`rsync -a src/ nas:/srv/`,
+			`rsync -a nas:/srv/x ./y`,
+			`rsync nas:/srv/`,
+			`rsync -a -e "ssh -p 2222" src ops@nas:/srv/`,
+			`rsync -a src nas::backup`,
+			`rsync -a src rsync://nas/backup`,
+			`rsync -a src NAS:/srv/`,
+			`rsync -a src 7516193289:/srv/`,
+			`rsync -a src 0300.00.02.011:/srv/`,
+			`rsync -a src 192.0.521::backup`,
+			`ssh ssh://nas touch x`,
+			`ssh ssh://ops@NAS:2222 touch x`,
+		} {
+			checkHook(t, "claude", bash(command), "deny", "strict coverage")
+		}
+	})
+	t.Run("rsync text globs match as typed and in every spelling", func(t *testing.T) {
+		writePolicy(transfer)
+		t.Cleanup(func() { writePolicy("") })
+		for _, command := range []string{`rsync -a src nas:/srv/`, `rsync -a src NAS:/srv/`, `rsync -a nas:/srv/x .`} {
+			checkHook(t, "claude", bash(command), "deny", "Required proof: nas-transfer-release")
+		}
+	})
+	t.Run("an unreadable rsync host or remote shell fails closed under scoped coverage", func(t *testing.T) {
+		checkHook(t, "claude", bash(`rsync -a src $NAS_HOST:/srv/`), "deny", "rsync destination could not be determined); command-scoped coverage requires a complete parse")
+		checkHook(t, "claude", bash(`rsync -a -e rsh src nas:/srv/`), "deny", "rsync remote shell is not ssh); command-scoped coverage requires a complete parse")
+	})
+	t.Run("negative controls still pass", func(t *testing.T) {
+		checkHook(t, "claude", bash(`rsync -a src/ dst/`), "allow", "no declared guard matched")
+		checkHook(t, "claude", bash(`rsync -a -e rsh src/ dst/`), "allow", "no declared guard matched")
+		checkHook(t, "claude", bash(`rsync -a src/ pc:/tmp/dst/`), "allow", "no declared guard matched")
+		checkHook(t, "claude", bash(`ssh ssh://pc uptime`), "allow", "no declared guard matched")
+		checkHook(t, "claude", bash(`ssh nas cat /srv/report`), "allow", "recovery gate passed:")
+	})
+}

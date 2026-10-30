@@ -1,0 +1,7 @@
+--- a/notes/todo.md
++++ b/notes/todo.md
+@@ -1,2 +1,3 @@
+ # Todo
+-- write docs
++- write docs
++- tidy examples

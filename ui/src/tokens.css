@@ -1,0 +1,116 @@
+@import "../vendor/homelab-ui.css";
+@import "../vendor/components.css";
+
+/* SPDX-License-Identifier: MIT */
+/* SPDX-FileCopyrightText: 2026 Tanner Nicol */
+
+/* restoregap design tokens. Dark is the default theme; light exists for
+   print and evidence recipients. The explicit [data-theme] attribute (set by
+   the toggle, persisted as localStorage "rg-theme") always wins over the OS
+   preference. Calm by contract: nothing in this system flashes, shimmers,
+   autoplays, or moves beyond ≤150ms hover/focus transitions. */
+
+:root {
+  /* type */
+  --rg-font: var(--ui-font-sans);
+  --rg-mono: var(--ui-font-mono);
+  --rg-text-xs: 0.75rem;
+  --rg-text-sm: 0.8125rem;
+  --rg-text-md: 0.9375rem;
+  --rg-text-lg: 1.125rem;
+  --rg-text-xl: 1.5rem;
+  --rg-leading: 1.55;
+
+  /* space & shape */
+  --rg-sp-1: 0.25rem;
+  --rg-sp-2: 0.5rem;
+  --rg-sp-3: 0.75rem;
+  --rg-sp-4: 1rem;
+  --rg-sp-6: 1.5rem;
+  --rg-sp-8: 2rem;
+  --rg-radius: 8px;
+  --rg-radius-sm: 5px;
+
+  /* dark theme (default) */
+  --rg-bg: var(--ui-bg);
+  --rg-surface: var(--ui-surface);
+  --rg-surface-2: var(--ui-surface-2);
+  --rg-border: var(--ui-border);
+  --rg-border-strong: var(--ui-muted);
+  --rg-text: var(--ui-text);
+  --rg-text-muted: var(--ui-muted);
+  --rg-text-faint: var(--ui-muted-2);
+  --rg-accent: var(--ui-accent);
+  --rg-accent-contrast: var(--ui-bg);
+  --rg-focus: var(--ui-accent);
+
+  /* verdicts */
+  --rg-block: var(--ui-danger);
+  --rg-block-bg: var(--ui-surface-2);
+  --rg-warn: var(--ui-warning);
+  --rg-warn-bg: var(--ui-surface-2);
+  --rg-pass: var(--ui-success);
+  --rg-pass-bg: var(--ui-surface-2);
+
+  /* severity */
+  --rg-critical: var(--ui-danger);
+  --rg-high: var(--ui-warning);
+  --rg-medium: var(--ui-warning);
+  --rg-low: var(--ui-accent);
+  --rg-info: var(--ui-muted);
+
+  /* proof status pills (vendor-limits style) */
+  --rg-pill-none: var(--ui-muted-2);
+  --rg-pill-partial: var(--ui-warning);
+  --rg-pill-cited: var(--ui-success);
+  --rg-pill-inferred: var(--ui-muted);
+
+  color-scheme: dark;
+}
+
+/* Dark is the unconditional default — the OS preference does NOT flip the
+   theme (durable design rule: dark always). Light exists only via the
+   explicit toggle (data-theme="light") and for print. */
+:root[data-theme="light"] {
+  --rg-bg: #ffffff;
+  --rg-surface: #f6f8fa;
+  --rg-surface-2: #eef1f5;
+  --rg-border: #d0d7de;
+  --rg-border-strong: #adb8c4;
+  --rg-text: #1f2328;
+  --rg-text-muted: #59636e;
+  --rg-text-faint: #818b98;
+  --rg-accent: #0969da;
+  --rg-accent-contrast: #ffffff;
+  --rg-focus: #0969da;
+  --rg-block: #d1242f;
+  --rg-block-bg: #ffe5e7;
+  --rg-warn: #9a6700;
+  --rg-warn-bg: #fff3d1;
+  --rg-pass: #1a7f37;
+  --rg-pass-bg: #dcffe4;
+  --rg-critical: #d1242f;
+  --rg-high: #bc4c00;
+  --rg-medium: #9a6700;
+  --rg-low: #0969da;
+  --rg-info: #59636e;
+  --rg-pill-none: #818b98;
+  --rg-pill-partial: #9a6700;
+  --rg-pill-cited: #1a7f37;
+  --rg-pill-inferred: #6639ba;
+  color-scheme: light;
+}
+
+@media print {
+  :root {
+    --rg-bg: #ffffff;
+    --rg-surface: #ffffff;
+    --rg-surface-2: #f2f4f7;
+    --rg-border: #c9d1d9;
+    --rg-border-strong: #8c959f;
+    --rg-text: #111418;
+    --rg-text-muted: #4b5563;
+    --rg-text-faint: #6b7280;
+    color-scheme: light;
+  }
+}
